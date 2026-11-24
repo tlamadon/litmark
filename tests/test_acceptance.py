@@ -36,7 +36,13 @@ def encrypted_pdf() -> bytes:
 
 
 def run_until_idle(services: Services, timeout: float = 20.0) -> None:
-    """Drive the event loop until every queued agent run has settled."""
+    """Drive the event loop until every queued agent run has settled.
+
+    Background jobs are waited for as well. An import's summary is queued by
+    the extraction job *after* it has marked the paper extracted, so a caller
+    that has just seen "extracted" may be here before that run exists; with
+    only the runs to go by, this returned at once and the summary was missed.
+    """
     import asyncio
     import time
 
@@ -44,7 +50,8 @@ def run_until_idle(services: Services, timeout: float = 20.0) -> None:
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
             pending = services.db.query(
-                "SELECT id FROM runs WHERE status IN ('queued', 'running')"
+                "SELECT id FROM jobs WHERE status IN ('queued', 'running') "
+                "UNION ALL SELECT id FROM runs WHERE status IN ('queued', 'running')"
             )
             if not pending:
                 return
