@@ -29,6 +29,7 @@ from ..references import (
     ReferenceStore,
     find_page,
     locate_quote,
+    paper_ids_in_markdown,
     source_ids_in_markdown,
 )
 from ..workspace import Workspace, note_title, revision_of, utcnow
@@ -44,6 +45,10 @@ EXCERPT_AFTER = 240
 # Who made an edit, as recorded with it: this application's own agent, the user
 # in the editor, or `mcp:<client>` for a session elsewhere.
 AGENT = "agent"
+USER = "user"
+# Tools whose edits belong to the run that made them, when one of this
+# application's own runs did: the adapters pass the run's ID to these.
+RUN_TOOLS = frozenset({"write_note", "patch_note", "append_note", "delete_note", "write_summary"})
 
 
 def _excerpts(text: str, terms: list[str], *, also: str = "") -> dict[str, Any] | None:
@@ -140,6 +145,10 @@ class ProjectTools:
                     "title": document.display_title,
                     "authors": document.authors,
                     "year": document.year,
+                    # How the paper is spoken of, and the link that names it.
+                    "cite_as": document.label,
+                    "link": f"[{document.label or document.display_title}](paper:{document.document_id})",
+                    "details_confirmed": document.details_by is not None,
                     "tags": document.tags,
                     "original_filename": document.original_filename,
                     "page_count": document.page_count,
@@ -183,6 +192,42 @@ class ProjectTools:
                 {"document_id": d.document_id, "title": d.display_title, "tags": d.tags}
                 for d in (self.documents.get(i) for i in dict.fromkeys(document_ids))
             ],
+        }
+
+    def set_document_details(
+        self,
+        document_id: str,
+        title: str | None = None,
+        authors: list[str] | str | None = None,
+        year: int | None = None,
+        origin: str | None = None,
+    ) -> dict[str, Any]:
+        """Say what a paper is, where the PDF's own metadata is missing or wrong."""
+        if title is None and authors is None and year is None:
+            return {
+                "ok": False,
+                "error": "invalid_arguments",
+                "message": "Give at least one of title, authors, year.",
+            }
+        document, changed = self.documents.set_details(
+            document_id, title=title, authors=authors, year=year, by=origin or AGENT
+        )
+        if changed and origin:
+            self.record_document_change(
+                document_id,
+                origin=origin,
+                summary=f"Set details: {document.label or document.display_title}",
+            )
+        if self.on_documents_changed is not None:
+            self.on_documents_changed([document_id])
+        return {
+            "ok": True,
+            "changed": changed,
+            "document_id": document_id,
+            "title": document.display_title,
+            "authors": document.authors,
+            "year": document.year,
+            "cite_as": document.label,
         }
 
     def list_notes(self) -> dict[str, Any]:
@@ -479,9 +524,10 @@ class ProjectTools:
                 "ok": False,
                 "error": "unregistered_references",
                 "message": (
-                    "These source links are not in the reference registry: "
-                    f"{', '.join(sorted(unknown))}. Call resolve_source first and use "
-                    "the reference IDs it returns."
+                    "These links are to nothing that exists: "
+                    f"{', '.join(sorted(unknown))}. A source: link needs a reference "
+                    "ID from resolve_source; a paper: link needs a document ID from "
+                    "list_documents."
                 ),
             }
 
@@ -616,6 +662,55 @@ class ProjectTools:
                 break
         return result
 
+    def delete_note(
+        self,
+        note_id: str,
+        expected_revision: str | None = None,
+        run_id: str | None = None,
+        origin: str = AGENT,
+    ) -> dict[str, Any]:
+        """Remove a note. Its text is kept aside, so the deletion can be undone."""
+        try:
+            return self.remove_note(
+                note_id, expected_revision=expected_revision, run_id=run_id, origin=origin
+            )
+        except RevisionConflict as exc:
+            return {
+                "ok": False,
+                "error": "revision_conflict",
+                "message": (
+                    "The note changed since you read it, and was not deleted. "
+                    "Read it again first."
+                ),
+                "actual_revision": exc.details.get("actual_revision"),
+            }
+        except WorkspaceError as exc:
+            return {"ok": False, "error": exc.code, "message": exc.message}
+
+    def remove_note(
+        self,
+        note_id: str,
+        *,
+        expected_revision: str | None = None,
+        run_id: str | None = None,
+        origin: str = AGENT,
+    ) -> dict[str, Any]:
+        """Delete a note and put the deletion on the record; refusals are raised."""
+        note = self.workspace.read_note(note_id)
+        self.workspace.delete_note(note_id, expected_revision=expected_revision)
+        self._record_change(
+            target_kind="note",
+            target_id=note_id,
+            run_id=run_id,
+            base_revision=note.revision,
+            # No revision: there is no note. Undoing it writes one where there
+            # is none, and is refused if a note of that name has appeared since.
+            new_revision=None,
+            summary="Deleted note",
+            origin=origin,
+        )
+        return {"ok": True, "note_id": note_id, "title": note.title, "deleted": True}
+
     def write_summary(
         self,
         document_id: str,
@@ -631,8 +726,10 @@ class ProjectTools:
                 "ok": False,
                 "error": "unregistered_references",
                 "message": (
-                    "These source links are not registered: "
-                    f"{', '.join(sorted(unknown))}. Call resolve_source first."
+                    "These links are to nothing that exists: "
+                    f"{', '.join(sorted(unknown))}. A source: link needs a reference "
+                    "ID from resolve_source; a paper: link needs a document ID from "
+                    "list_documents."
                 ),
             }
         try:
@@ -739,12 +836,22 @@ class ProjectTools:
         return None
 
     def _unknown_references(self, text: str) -> set[str]:
-        """Referenced IDs must exist before generated content is published."""
+        """Referenced IDs must exist before generated content is published.
+
+        A link to a passage (`source:ref-012`) must be to a registered
+        reference, and a link to a paper (`paper:doc-002`) to a paper in the
+        library: neither kind of ID may be made up.
+        """
+        unknown: set[str] = set()
         cited = source_ids_in_markdown(text)
-        if not cited:
-            return set()
-        registry = self.references.all()
-        return {ref for ref in cited if ref not in registry}
+        if cited:
+            registry = self.references.all()
+            unknown |= {ref for ref in cited if ref not in registry}
+        papers = paper_ids_in_markdown(text)
+        if papers:
+            held = {document.document_id for document in self.documents.list()}
+            unknown |= {f"paper:{paper}" for paper in papers if paper not in held}
+        return unknown
 
 
 # --------------------------------------------------------------- schemas
@@ -754,7 +861,10 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
         "name": "list_documents",
         "description": (
             "List imported documents with IDs, metadata, tags, summaries, and "
-            "availability status. Start here to learn which document IDs exist. Tags "
+            "availability status. Start here to learn which document IDs exist. Each "
+            "comes with `cite_as`, how the paper is spoken of (`Olley & Pakes (1996)`), "
+            "and `link`, the Markdown that names it: use that link wherever a note or "
+            "summary mentions a paper that is in the library. Tags "
             "are the user's own labels for gathering papers (a field, a year's job "
             "market, a candidate); pass `tags` to list only the documents carrying "
             "all of them. The result also lists every tag in use."
@@ -787,6 +897,34 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
                 "remove": {"type": "array", "items": {"type": "string"}},
             },
             "required": ["document_ids"],
+        },
+    },
+    {
+        "name": "set_document_details",
+        "description": (
+            "Record a paper's title, authors and year, from its own title page. The "
+            "PDF's metadata is often missing or wrong (a file path for a title, the "
+            "date the file was made for a year, a publisher for an author), and the "
+            "paper's name in the library — `Olley & Pakes (1996)` — is made from "
+            "these. Give only what the paper itself states; leave out what it does "
+            "not."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "document_id": {"type": "string"},
+                "title": {"type": "string", "description": "The paper's title, as printed."},
+                "authors": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": 'Full names in the paper\'s order: ["G. Steven Olley", "Ariel Pakes"].',
+                },
+                "year": {
+                    "type": "integer",
+                    "description": "The year this version of the paper is dated.",
+                },
+            },
+            "required": ["document_id"],
         },
     },
     {
@@ -962,6 +1100,24 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
                 "summary": {"type": "string", "description": "Short description of the edit."},
             },
             "required": ["note_id", "text"],
+        },
+    },
+    {
+        "name": "delete_note",
+        "description": (
+            "Delete a note. Only when the user asks for it. The text is kept aside "
+            "and the deletion is listed under Recent edits, where it can be undone."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "note_id": {"type": "string"},
+                "expected_revision": {
+                    "type": "string",
+                    "description": "Revision from read_note, to delete only what you read.",
+                },
+            },
+            "required": ["note_id"],
         },
     },
     {

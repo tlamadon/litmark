@@ -105,6 +105,26 @@ export function describeTool(entry: ToolEntry, names: Names): Activity {
       }
     }
 
+    case 'set_document_details': {
+      const said = text(result?.cite_as) || text(result?.title)
+      return {
+        ...base,
+        tone: entry.finished && !entry.isError ? 'ok' : tone,
+        verb: entry.isError ? 'named — refused' : 'named',
+        target: said ? `${names.document(documentId)} — ${said}` : names.document(documentId),
+        open: documentId ? { kind: 'document', documentId, page: 1 } : undefined,
+      }
+    }
+
+    case 'delete_note':
+      return {
+        ...base,
+        tone: entry.finished && !entry.isError ? 'ok' : tone,
+        verb: entry.isError ? 'deleted — refused' : 'deleted',
+        // By the title it had: the note is gone, and with it its name.
+        target: `note “${text(result?.title) || names.note(noteId)}”`,
+      }
+
     case 'list_notes':
       return { ...base, verb: 'listed', target: 'the notes' }
 
@@ -241,6 +261,10 @@ export function describeTool(entry: ToolEntry, names: Names): Activity {
 
 export function describeChange(entry: ChangeEntry, names: Names): Activity {
   const isNote = entry.targetKind === 'note'
+  if (isNote && entry.summary === 'Deleted note') {
+    // Nothing to open: what the line names is no longer there.
+    return { verb: 'deleted', tone: 'ok', target: `note “${names.note(entry.targetId)}”` }
+  }
   return {
     verb: 'saved',
     tone: 'ok',

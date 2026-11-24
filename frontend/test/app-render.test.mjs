@@ -124,7 +124,7 @@ const ROUTES = new Map([
   ['/api/changes', { changes: [{ change_id: 'chg-1', target_kind: 'note', target_id: 'welcome', origin: 'agent', summary: 'Patched note', base_revision: null, new_revision: 'rev-2', undoable: true, undone_at: null, created_at: '2026-01-01T00:00:05Z' }] }],
 ])
 
-function buildDom({ serverToken = 'test-token' } = {}) {
+function buildDom({ serverToken = 'test-token', routes = ROUTES } = {}) {
   const html = readFileSync(join(here, '..', '..', 'src', 'litmark', 'static', 'index.html'), 'utf8')
     .replace('<meta name="litmark-token" content="">', '<meta name="litmark-token" content="test-token">')
     // The bundle is injected manually below, so strip the script tags.
@@ -151,13 +151,25 @@ function buildDom({ serverToken = 'test-token' } = {}) {
       window.refusals = (window.refusals ?? 0) + 1
       return { ok: false, status: 401, text: async () => JSON.stringify({ error: { code: 'unauthorized', message: 'Missing or invalid session credential.' } }) }
     }
-    const body = ROUTES.get(path)
+    window.requests.push(`${init.method ?? 'GET'} ${path}`)
+    if (init.method === 'DELETE' && routes.has(path)) {
+      // Gone from the server: from its own address, and from the list of notes.
+      routes.delete(path)
+      const state = routes.get('/api/state')
+      routes.set('/api/state', {
+        ...state,
+        notes: state.notes.filter((note) => `/api/notes/${note.note_id}` !== path),
+      })
+      return { ok: true, status: 204, text: async () => '' }
+    }
+    const body = routes.get(path)
     if (body === undefined) {
       return { ok: false, status: 404, text: async () => JSON.stringify({ error: { code: 'not_found', message: path } }) }
     }
     return { ok: true, status: 200, text: async () => JSON.stringify(body) }
   }
   window.streams = []
+  window.requests = []
   class FakeEventSource {
     constructor(url) {
       window.streams.push(url)
@@ -268,4 +280,94 @@ test('a page left open across a server restart picks up the new credential', asy
     window.streams.at(-1).includes('token=after-the-restart'),
     `the stream still carries the old credential: ${window.streams.at(-1)}`,
   )
+})
+
+test('papers go by author and year, a link to one opens it, and a note can be deleted', async (t) => {
+  // Two papers whose authors someone has said, and one still known only by its title.
+  const named = (id, label, year, title) => ({
+    ...STATE.documents[0],
+    document_id: id,
+    display_title: title,
+    title,
+    label,
+    year,
+    tags: [],
+  })
+  const state = {
+    ...STATE,
+    documents: [
+      { ...STATE.documents[0], label: null },
+      named('doc-002', 'Olley & Pakes (1992)', 1992, 'The Dynamics of Productivity'),
+      named('doc-003', 'Levinsohn & Petrin (2003)', 2003, 'Estimating Production Functions'),
+    ],
+  }
+  const text = [
+    '# Welcome',
+    '',
+    'This extends [Olley–Pakes (1996)](paper:doc-002), as Levinsohn and Petrin (2003) do.',
+    '',
+    'See also [one that is gone](paper:doc-404).',
+    '',
+  ].join('\n')
+  const routes = new Map(ROUTES)
+  routes.set('/api/state', state)
+  routes.set('/api/notes/welcome', { ...ROUTES.get('/api/notes/welcome'), text })
+  const dom = buildDom({ routes })
+  const { window } = dom
+  t.after(() => window.close())
+  const errors = []
+  window.addEventListener('error', (event) => errors.push(event.error ?? event.message))
+  window.addEventListener('unhandledrejection', (event) => errors.push(event.reason))
+  window.eval(readFileSync(join(here, 'bundle', 'app.mjs'), 'utf8'))
+  await new Promise((resolve) => setTimeout(resolve, 300))
+  const root = window.document.getElementById('app')
+
+  // In the list, a paper is named as it is cited, with its title beneath.
+  const entries = [...root.querySelectorAll('.sidebar .list .entry')].map((entry) => [
+    entry.querySelector('strong')?.textContent,
+    entry.querySelector('.paper-title')?.textContent ?? null,
+  ])
+  assert.deepEqual(entries.slice(0, 3), [
+    ['A Paper', null],
+    ['Olley & Pakes (1992)', 'The Dynamics of Productivity'],
+    ['Levinsohn & Petrin (2003)', 'Estimating Production Functions'],
+  ])
+
+  // A link written into the note names its paper, and says so when the paper
+  // is gone. Words that merely read like a citation are left as words.
+  const links = [...root.querySelectorAll('.cm-paper-link')].map((node) => [
+    node.textContent,
+    node.classList.contains('missing'),
+    node.title,
+  ])
+  assert.deepEqual(links, [
+    ['Olley–Pakes (1996)', false, 'The Dynamics of Productivity — open the paper'],
+    ['one that is gone', true, 'This paper is not in the library (any more)'],
+  ])
+  const line = root.querySelector('.cm-content')?.textContent ?? ''
+  assert.ok(line.includes('as Levinsohn and Petrin (2003) do.'), line)
+
+  // A click on the link opens the paper beside the note.
+  root
+    .querySelector('.cm-paper-link:not(.missing)')
+    .dispatchEvent(new window.MouseEvent('mousedown', { bubbles: true, cancelable: true }))
+  await new Promise((resolve) => setTimeout(resolve, 100))
+  assert.ok(
+    (root.querySelector('aside.source')?.textContent ?? '').includes('The Dynamics of Productivity'),
+    'the paper did not open',
+  )
+
+  // Deleting is asked for, confirmed, and then the note is gone from the list
+  // and from the page.
+  const click = (node) => node.dispatchEvent(new window.MouseEvent('click', { bubbles: true }))
+  click(root.querySelector('[data-action="delete-note"]'))
+  await new Promise((resolve) => setTimeout(resolve, 20))
+  assert.ok(!window.requests.some((request) => request.startsWith('DELETE')), 'deleted unasked')
+  assert.ok((root.querySelector('.entry-confirm')?.textContent ?? '').includes('Recent edits'))
+  click(root.querySelector('[data-action="confirm-delete-note"]'))
+  await new Promise((resolve) => setTimeout(resolve, 200))
+  assert.ok(window.requests.includes('DELETE /api/notes/welcome'), window.requests.join('\n'))
+  assert.equal(root.querySelector('[data-action="delete-note"]'), null, 'the note is still listed')
+  assert.equal(root.querySelector('.cm-content'), null, 'the deleted note is still on the page')
+  assert.deepEqual(errors, [], `runtime errors: ${errors.map((e) => e?.stack ?? e).join('\n')}`)
 })

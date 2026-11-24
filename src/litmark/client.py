@@ -272,6 +272,18 @@ def add_commands(sub: Any) -> None:
     edit = command("edit", "Open a note in $EDITOR and save it back.")
     edit.add_argument("note", metavar="NOTE")
 
+    delete = command("delete", "Delete a note (it can be brought back from Recent edits).")
+    delete.add_argument("note", metavar="NOTE")
+
+    details = command("details", "Say what a paper is: its title, authors and year.")
+    details.add_argument("document", metavar="DOC")
+    details.add_argument("--title")
+    details.add_argument(
+        "--author", action="append", default=[], metavar="NAME",
+        help="A full name. Repeatable, in the paper's order.",
+    )
+    details.add_argument("--year", type=int)
+
     add = command("add", "Send PDFs to the library.")
     add.add_argument("files", nargs="+", type=Path, metavar="PDF")
     tags(add, "A tag to give them.")
@@ -488,6 +500,31 @@ def cmd_edit(server: Server, args: argparse.Namespace) -> int:
     return _finish(args, saved, _show_saved)
 
 
+def cmd_delete(server: Server, args: argparse.Namespace) -> int:
+    def show(payload: dict[str, Any]) -> None:
+        print(f"Deleted note {payload['note_id']}")
+
+    return _finish(args, server.call("delete_note", {"note_id": args.note}), show)
+
+
+def cmd_details(server: Server, args: argparse.Namespace) -> int:
+    arguments: dict[str, Any] = {"document_id": args.document}
+    if args.title:
+        arguments["title"] = args.title
+    if args.author:
+        arguments["authors"] = args.author
+    if args.year:
+        arguments["year"] = args.year
+    if len(arguments) == 1:
+        raise ClientError("Nothing to set: give --title, --author or --year.")
+
+    def show(payload: dict[str, Any]) -> None:
+        name = payload.get("cite_as")
+        print(f"{payload['document_id']}  {name + ' — ' if name else ''}{payload['title']}")
+
+    return _finish(args, server.call("set_document_details", arguments), show)
+
+
 def cmd_add(server: Server, args: argparse.Namespace) -> int:
     failed = 0
     answers: list[dict[str, Any]] = []
@@ -602,6 +639,8 @@ COMMANDS = {
     "append": cmd_append,
     "write": cmd_write,
     "edit": cmd_edit,
+    "delete": cmd_delete,
+    "details": cmd_details,
     "add": cmd_add,
     "tag": cmd_tag,
     "cite": cmd_cite,
@@ -735,8 +774,10 @@ def _show_papers(payload: dict[str, Any]) -> None:
         print("No papers." if not payload["tags_in_use"] else "No papers carry those tags.")
     width = max((len(document["document_id"]) for document in documents), default=0)
     for document in documents:
-        print(f"{document['document_id']:<{width}}  {document['title']}")
-        facts = [document.get("authors"), document.get("year")]
+        # By its authors and year where they are known, as it would be cited.
+        name = document.get("cite_as")
+        print(f"{document['document_id']:<{width}}  {name or document['title']}")
+        facts = [document["title"]] if name else [document.get("year")]
         facts.append(_page_count(document.get("page_count")))
         facts.append(", ".join(document["tags"]))
         if document.get("extraction_status") != "ok":

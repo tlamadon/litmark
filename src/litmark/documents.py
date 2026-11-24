@@ -21,6 +21,8 @@ from .extraction import (
     DocumentExtraction,
     ExtractionError,
     PageExtraction,
+    clean_authors,
+    clean_title,
     extract_pdf,
     normalize_text,
     pdf_metadata,
@@ -30,6 +32,7 @@ from .workspace import Workspace, atomic_write_bytes, atomic_write_text, revisio
 log = logging.getLogger(__name__)
 
 SCHEMA_VERSION = 1
+MAX_TITLE_CHARS = 400
 PDF_MAGIC = b"%PDF-"
 
 # Extraction status
@@ -64,12 +67,35 @@ class Document:
     # Labels the user puts on a paper to gather it with others: a field, a
     # year's job market, a candidate. Kept in metadata.json, so they travel.
     tags: list[str] = field(default_factory=list)
+    # Who said what the title, authors and year are: `user`, `agent`, or
+    # `mcp:<client>`. None while they are only what the PDF file says of itself.
+    details_by: str | None = None
     extraction: dict[str, Any] = field(default_factory=dict)
     summary: dict[str, Any] = field(default_factory=dict)
 
     @property
     def display_title(self) -> str:
         return self.title or Path(self.original_filename).stem or self.document_id
+
+    @property
+    def author_surnames(self) -> list[str]:
+        return [surname for surname in map(surname_of, author_names(self.authors)) if surname]
+
+    @property
+    def label(self) -> str | None:
+        """How the paper is spoken of: ``Olley & Pakes (1996)``.
+
+        Unknown without authors — a year alone names nothing, and a title is
+        already what ``display_title`` gives.
+        """
+        surnames = self.author_surnames
+        if not surnames:
+            return None
+        if len(surnames) > 2:
+            who = f"{surnames[0]} et al."
+        else:
+            who = " & ".join(surnames)
+        return f"{who} ({self.year})" if self.year else who
 
     @property
     def readable(self) -> bool:
@@ -93,6 +119,7 @@ class Document:
             "year": self.year,
             "page_count": self.page_count,
             "tags": self.tags,
+            "details_by": self.details_by,
             "extraction": self.extraction,
             "summary": self.summary,
         }
@@ -101,6 +128,7 @@ class Document:
         payload = self.to_json()
         payload.pop("schema_version", None)
         payload["display_title"] = self.display_title
+        payload["label"] = self.label
         payload["searchable"] = self.searchable
         if summary_text is not None:
             payload["summary_text"] = summary_text
@@ -109,17 +137,24 @@ class Document:
 
     @classmethod
     def from_json(cls, data: dict[str, Any]) -> Document:
+        title, authors = data.get("title"), data.get("authors")
+        if not data.get("details_by"):
+            # Still only what the file says of itself, so cleaned on the way in
+            # as well as at import: a project holds papers imported before a
+            # kind of junk was recognised. What someone set is left as set.
+            title, authors = clean_title(title), clean_authors(authors)
         return cls(
             document_id=data["document_id"],
             sha256=data["sha256"],
             original_filename=data.get("original_filename", "document.pdf"),
             byte_size=int(data.get("byte_size", 0)),
             imported_at=data.get("imported_at", ""),
-            title=data.get("title"),
-            authors=data.get("authors"),
+            title=title,
+            authors=authors,
             year=data.get("year"),
             page_count=data.get("page_count"),
             tags=[str(tag) for tag in data.get("tags") or []],
+            details_by=data.get("details_by") or None,
             extraction=data.get("extraction") or {},
             summary=data.get("summary") or {},
         )
@@ -248,6 +283,58 @@ class DocumentStore:
             document = self.get(document_id)
             document.tags = normalize_tags(tags, known=known)
             return self.save(document)
+
+    def set_details(
+        self,
+        document_id: str,
+        *,
+        title: str | None = None,
+        authors: list[str] | str | None = None,
+        year: int | None = None,
+        by: str,
+    ) -> tuple[Document, bool]:
+        """Say what a paper is: its title, who wrote it, and when.
+
+        What the PDF's own metadata gives is often missing or wrong — the date
+        the file was made rather than the paper's, a word processor's file
+        path for a title. Whatever is passed replaces it; what is left out
+        stays. Returns the paper, and whether anything changed.
+        """
+        with self._lock:
+            document = self.get(document_id)
+            before = (document.title, document.authors, document.year)
+            if title is not None:
+                cleaned = " ".join(str(title).split())
+                if not cleaned or len(cleaned) > MAX_TITLE_CHARS:
+                    raise InvalidInput(
+                        f"A title is between 1 and {MAX_TITLE_CHARS} characters."
+                    )
+                document.title = cleaned
+            if authors is not None:
+                names = author_names(authors) if isinstance(authors, str) else [
+                    " ".join(str(name).split()) for name in authors
+                ]
+                names = [name for name in names if name]
+                if not names or any(len(name) > 120 for name in names) or len(names) > 60:
+                    raise InvalidInput(
+                        "Authors are given as full names, one each: "
+                        '["G. Steven Olley", "Ariel Pakes"].'
+                    )
+                document.authors = " and ".join(names)
+            if year is not None:
+                try:
+                    number = int(year)
+                except (TypeError, ValueError):
+                    raise InvalidInput(f"{year!r} is not a year.") from None
+                if not 1400 <= number <= 2200:
+                    raise InvalidInput(f"{number} is not a year a paper could be from.")
+                document.year = number
+            changed = (document.title, document.authors, document.year) != before
+            if not changed and document.details_by:
+                return document, False
+            # Said by someone now, even where they only confirmed the file.
+            document.details_by = by
+            return self.save(document), changed
 
     def tag(
         self,
@@ -593,6 +680,42 @@ def normalize_tags(tags: list[str], *, known: list[str] | None = None) -> list[s
     if len(seen) > MAX_TAGS_PER_DOCUMENT:
         raise InvalidInput(f"A paper carries at most {MAX_TAGS_PER_DOCUMENT} tags.")
     return sorted(seen.values(), key=tag_sort_key)
+
+
+_AUTHOR_SPLIT_RE = re.compile(r"\s+and\s+|;|&")
+# Lower-case words that belong to the surname that follows: `van der Klaauw`.
+_PARTICLES = {"de", "del", "della", "der", "den", "di", "da", "dos", "du", "la", "le", "van", "von", "ter"}
+
+
+def author_names(raw: str | None) -> list[str]:
+    """The names in an author string, which is free text.
+
+    It may use "and", semicolons or commas — and a comma is ambiguous,
+    separating a list in "Alice Researcher, Bob Coauthor" but one surname-first
+    name in "Researcher, Alice". The parts are split on a comma only when
+    every part looks like a whole name.
+    """
+    parts = [" ".join(part.split()) for part in _AUTHOR_SPLIT_RE.split(raw or "")]
+    parts = [part for part in parts if part]
+    if len(parts) == 1 and "," in parts[0]:
+        chunks = [chunk.strip() for chunk in parts[0].split(",") if chunk.strip()]
+        if len(chunks) > 1 and all(len(chunk.split()) > 1 for chunk in chunks):
+            parts = chunks
+    return parts
+
+
+def surname_of(name: str) -> str:
+    """`Pakes` of "Ariel Pakes" and of "Pakes, Ariel"; `De Loecker` of "Jan De Loecker"."""
+    head = name.split(",")[0] if "," in name else name
+    tokens = head.replace(".", ". ").split()
+    if not tokens:
+        return ""
+    if "," in name:
+        return " ".join(tokens)
+    start = len(tokens) - 1
+    while start > 0 and tokens[start - 1].lower() in _PARTICLES:
+        start -= 1
+    return " ".join(tokens[start:])
 
 
 def _snippet(text: str, start: int, end: int, *, window: int = 110) -> str:

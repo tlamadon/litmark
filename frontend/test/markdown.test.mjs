@@ -37,6 +37,16 @@ test('keeps http and mailto links, with safe rel attributes', () => {
   assert.ok(html.includes('target="_blank"'), html)
 })
 
+test('renders a paper: link as a click target carrying the document id', () => {
+  const html = renderMarkdown('This extends [Olley & Pakes (1996)](paper:doc-002).')
+  assert.ok(html.includes('data-paper="doc-002"'), html)
+  assert.ok(html.includes('>Olley &amp; Pakes (1996)</a>'), html)
+  assert.ok(!html.includes('href='), html)
+  // Nothing but an ID is taken for one.
+  const odd = renderMarkdown('[bad](paper:../../x) [worse](paper:"onmouseover=)')
+  assert.ok(!odd.includes('data-paper'), odd)
+})
+
 test('renders a source: citation as a click target carrying its reference id', () => {
   const html = renderMarkdown('See [Assumption 2, p. 12](source:ref-001) for the claim.')
   assert.ok(html.includes('data-source-ref="ref-001"'), html)

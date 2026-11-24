@@ -5,7 +5,7 @@
  * Here the input can include agent output, so the text is HTML-escaped first
  * and only a fixed set of constructs is re-introduced. Link destinations are
  * restricted to `http(s)`, `mailto:`, and the application's own `source:`
- * scheme, so no `javascript:` URL can survive.
+ * and `paper:` schemes, so no `javascript:` URL can survive.
  */
 
 import katex from 'katex'
@@ -79,6 +79,12 @@ function inline(text: string): string {
         const id = href.slice('source:'.length)
         if (!/^[A-Za-z0-9][A-Za-z0-9-]*$/.test(id)) return match
         return `<a class="source-link" role="button" tabindex="0" data-source-ref="${id}" title="${id}">${label || id}</a>`
+      }
+      if (href.startsWith('paper:')) {
+        // A paper of the library, named in passing: a click opens it.
+        const id = href.slice('paper:'.length)
+        if (!/^[A-Za-z0-9][A-Za-z0-9-]*$/.test(id)) return match
+        return `<a class="paper-link" role="button" tabindex="0" data-paper="${id}" title="Open this paper">${label || id}</a>`
       }
       if (!ALLOWED_SCHEME.test(decodeEntities(href))) return match
       return `<a href="${href}" target="_blank" rel="noopener noreferrer">${label || href}</a>`

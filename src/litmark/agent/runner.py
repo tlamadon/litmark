@@ -468,6 +468,9 @@ class AgentRunner:
             title=document.display_title,
             quality=document.extraction.get("quality"),
             warnings=document.extraction.get("warnings") or [],
+            authors=document.authors,
+            year=document.year,
+            details_confirmed=document.details_by is not None,
         )
         self._documents.set_summary_status(document_id, QUEUED)
         result = self.submit(

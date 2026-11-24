@@ -574,27 +574,46 @@ _PLACEHOLDER_AUTHORS = {
 }
 
 
-def _clean_authors(raw: str) -> str | None:
+# An organisation in the author field is whoever produced the file — a
+# publisher, a working-paper series, the institution whose software it was.
+_ORGANISATION_RE = re.compile(
+    r"\b(center|centre|university|institute|department|bureau|office|bank|press|"
+    r"publishing|publishers?|association|society|journal|studies|research|library|"
+    r"inc|ltd|llc|elsevier|springer|wiley|jstor|nber)\b",
+    re.IGNORECASE,
+)
+
+
+def clean_authors(raw: str | None) -> str | None:
     """Reject the placeholder authors PDF producers write by default.
 
-    Same reasoning as ``_clean_title``, and it matters most in the generated
+    Same reasoning as ``clean_title``, and it matters most in the generated
     bibliography: an entry crediting "anonymous" is worse than one that plainly
     says the author is unknown.
     """
-    authors = " ".join(raw.split())
+    authors = " ".join((raw or "").split())
     if not authors or authors.lower() in _PLACEHOLDER_AUTHORS:
+        return None
+    if _ORGANISATION_RE.search(authors):
         return None
     return authors
 
 
-def _clean_title(raw: str) -> str | None:
+# What a word processor left behind as a title: where the file was on the
+# author's disk (`K:\\MEMOS\\DISCUSS\\92-2\\CES92-2.FNL`, `/home/x/paper.dvi`), or
+# the bare name of the file it was made from (`CES92-2.FNL`).
+_PATH_TITLE_RE = re.compile(r"\\|^[A-Za-z]:[\\/]|^/\S*/\S*$")
+_FILE_TITLE_RE = re.compile(r"^\S+\.[A-Za-z][A-Za-z0-9]{1,3}$")
+
+
+def clean_title(raw: str | None) -> str | None:
     """Reject the placeholder titles that PDF producers write by default.
 
     ``/Title`` is frequently "untitled", a converter artefact, or the source
     filename. Treating those as the real title is worse than treating the
     title as unknown, because it hides the heading on the first page.
     """
-    title = raw.strip()
+    title = (raw or "").strip()
     # "Microsoft Word - paper_final.doc" and similar converter artefacts.
     title = re.sub(r"^(Microsoft Word|Microsoft PowerPoint)\s*-\s*", "", title)
     title = re.sub(r"\.(docx?|pdf|tex|pptx?|rtf)$", "", title, flags=re.IGNORECASE)
@@ -603,6 +622,8 @@ def _clean_title(raw: str) -> str | None:
         return None
     # A bare filename tells the reader nothing the filename field does not.
     if re.fullmatch(r"[\w.\-]+", title) and "_" in title:
+        return None
+    if _PATH_TITLE_RE.search(title) or _FILE_TITLE_RE.fullmatch(title):
         return None
     return title
 
@@ -626,8 +647,8 @@ def pdf_metadata(path: Path) -> dict[str, Any]:
         except Exception:  # noqa: BLE001 - encrypted files refuse page access
             info["page_count"] = None
         meta = reader.metadata or {}
-        info["title"] = _clean_title(str(meta.get("/Title") or ""))
-        info["authors"] = _clean_authors(str(meta.get("/Author") or ""))
+        info["title"] = clean_title(str(meta.get("/Title") or ""))
+        info["authors"] = clean_authors(str(meta.get("/Author") or ""))
         raw_date = str(meta.get("/CreationDate") or "")
         match = re.search(r"(19|20)\d{2}", raw_date)
         if match:

@@ -662,6 +662,62 @@ button.tag:hover {
   padding: 0.1rem 0.5rem 0.2rem;
 }
 
+/* A paper named by its authors and year carries its title beneath. */
+.entry .paper-title {
+  display: block;
+  font-size: 0.86rem;
+  line-height: 1.3;
+}
+
+.entry-confirm {
+  margin: 0;
+  padding: 0.1rem 0.5rem 0.3rem;
+}
+
+.details-form {
+  display: grid;
+  gap: 0.3rem;
+  padding: 0.2rem 0.5rem 0.3rem;
+  font-size: 0.82rem;
+}
+
+.details-form label {
+  display: grid;
+  gap: 0.1rem;
+  color: var(--muted-strong);
+}
+
+.details-form input {
+  width: 100%;
+  font: inherit;
+  padding: 0.2rem 0.4rem;
+  border: 1px solid var(--rule);
+  border-radius: 5px;
+  background: var(--bg);
+  color: var(--ink);
+}
+
+.details-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+}
+
+.details-actions button[type='submit'] {
+  border: 1px solid var(--rule);
+  border-radius: 6px;
+  padding: 0.15rem 0.6rem;
+  background: var(--accent-soft);
+}
+
+/* A paper of the library, named in a reply. */
+.prose a.paper-link {
+  color: var(--accent);
+  border-bottom: 1px solid var(--accent);
+  cursor: pointer;
+  text-decoration: none;
+}
+
 .results .result {
   display: block;
   width: 100%;

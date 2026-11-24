@@ -18,6 +18,7 @@ import {
 } from './api'
 import { ago } from './chat/ConversationMenu'
 import { describeOrigin } from './chat/describe'
+import { nameOf } from './papers'
 import { filterByTags, TagFilter, TagInput, UNTAGGED } from './Tags'
 
 export interface SidebarProps {
@@ -31,6 +32,13 @@ export interface SidebarProps {
   onOpenSummary: (documentId: string) => void
   onOpenDocument: (documentId: string) => void
   onNewNote: () => void
+  /** Delete a note. What it held is kept, and listed under Recent edits to undo. */
+  onDeleteNote: (noteId: string) => Promise<void>
+  /** Say what a paper is: its title, authors and year. Rejects with the reason. */
+  onSetDetails: (
+    documentId: string,
+    details: { title?: string; authors?: string; year?: number },
+  ) => Promise<void>
   /** Import PDFs; `tags` are given to each, so they arrive in the collection on screen. */
   onImport: (files: File[], tags: string[]) => void
   onSetTags: (documentId: string, tags: string[]) => void
@@ -55,6 +63,9 @@ export function Sidebar(props: SidebarProps) {
   const [selected, setSelected] = useState<string[]>([])
   const [editingTags, setEditingTags] = useState<string | null>(null)
   const [taggingShown, setTaggingShown] = useState(false)
+  const [editingDetails, setEditingDetails] = useState<string | null>(null)
+  // The note asked to be deleted, until that is confirmed or called off.
+  const [deleting, setDeleting] = useState<string | null>(null)
 
   const untagged = useMemo(
     () => props.documents.filter((document) => document.tags.length === 0).length,
@@ -263,7 +274,9 @@ export function Sidebar(props: SidebarProps) {
                 onClick={() => props.onOpenSummary(document.document_id)}
                 title={document.original_filename}
               >
-                <strong>{document.display_title}</strong>
+                {/* By its authors and year where they are known, as it is cited. */}
+                <strong>{nameOf(document)}</strong>
+                {document.label && <span class="paper-title">{document.display_title}</span>}
                 <SummaryPreview document={document} />
                 <IngestionStatus document={document} />
               </button>
@@ -314,6 +327,13 @@ export function Sidebar(props: SidebarProps) {
                   onDone={() => setEditingTags(null)}
                 />
               )}
+              {editingDetails === document.document_id && (
+                <DetailsForm
+                  document={document}
+                  onSave={(details) => props.onSetDetails(document.document_id, details)}
+                  onDone={() => setEditingDetails(null)}
+                />
+              )}
               <div class="entry-actions">
                 <button
                   type="button"
@@ -322,6 +342,16 @@ export function Sidebar(props: SidebarProps) {
                 >
                   Read PDF
                 </button>
+                {editingDetails !== document.document_id && (
+                  <button
+                    type="button"
+                    class="link"
+                    title="Set the title, authors and year this paper goes by"
+                    onClick={() => setEditingDetails(document.document_id)}
+                  >
+                    Details
+                  </button>
+                )}
                 {editingTags !== document.document_id && (
                   <button
                     type="button"
@@ -374,6 +404,36 @@ export function Sidebar(props: SidebarProps) {
                 <strong>{note.title}</strong>
                 <span class="muted">{note.note_id}.md</span>
               </button>
+              {deleting === note.note_id ? (
+                <div class="conv-confirm entry-confirm">
+                  <span>Delete this note? It can be brought back from Recent edits.</span>
+                  <button
+                    type="button"
+                    class="danger"
+                    data-action="confirm-delete-note"
+                    onClick={() => {
+                      setDeleting(null)
+                      void props.onDeleteNote(note.note_id)
+                    }}
+                  >
+                    Delete
+                  </button>
+                  <button type="button" onClick={() => setDeleting(null)}>
+                    Cancel
+                  </button>
+                </div>
+              ) : (
+                <div class="entry-actions">
+                  <button
+                    type="button"
+                    class="link"
+                    data-action="delete-note"
+                    onClick={() => setDeleting(note.note_id)}
+                  >
+                    Delete
+                  </button>
+                </div>
+              )}
             </li>
           ))}
         </ul>
@@ -386,11 +446,16 @@ export function Sidebar(props: SidebarProps) {
           {props.changes.map((change) => {
             const origin = describeOrigin(change.origin)
             const isNote = change.target_kind === 'note'
+            const note = isNote
+              ? props.notes.find((item) => item.note_id === change.target_id)
+              : undefined
             const name = isNote
-              ? (props.notes.find((note) => note.note_id === change.target_id)?.title ??
-                change.target_id)
-              : (props.documents.find((document) => document.document_id === change.target_id)
-                  ?.display_title ?? change.target_id)
+              ? (note?.title ?? change.target_id)
+              : (nameOf(
+                  props.documents.find((document) => document.document_id === change.target_id),
+                ) ?? change.target_id)
+            // A note that was deleted is named, and there is nothing to open.
+            const gone = isNote && !note
             const open = (): void => {
               if (isNote) props.onOpenNote(change.target_id)
               else if (change.target_kind === 'summary') props.onOpenSummary(change.target_id)
@@ -403,9 +468,13 @@ export function Sidebar(props: SidebarProps) {
                     {origin.label}
                   </strong>{' '}
                   ·{' '}
-                  <button type="button" class="link" onClick={open}>
-                    {change.target_kind === 'summary' ? `summary of ${name}` : name}
-                  </button>
+                  {gone ? (
+                    <span>{name}</span>
+                  ) : (
+                    <button type="button" class="link" onClick={open}>
+                      {change.target_kind === 'summary' ? `summary of ${name}` : name}
+                    </button>
+                  )}
                   <br />
                   <span class="muted">
                     {[change.summary, ago(change.created_at)].filter(Boolean).join(' · ')}
@@ -424,6 +493,85 @@ export function Sidebar(props: SidebarProps) {
         </ul>
       </details>
     </nav>
+  )
+}
+
+/** The title, authors and year a paper goes by, for when the PDF got them wrong. */
+function DetailsForm(props: {
+  document: DocumentRecord
+  onSave: (details: { title?: string; authors?: string; year?: number }) => Promise<void>
+  onDone: () => void
+}) {
+  const { document } = props
+  const [title, setTitle] = useState(document.title ?? '')
+  const [authors, setAuthors] = useState(document.authors ?? '')
+  const [year, setYear] = useState(document.year ? String(document.year) : '')
+  const [problem, setProblem] = useState<string | null>(null)
+  const [busy, setBusy] = useState(false)
+
+  const save = async (event: Event): Promise<void> => {
+    event.preventDefault()
+    const details: { title?: string; authors?: string; year?: number } = {}
+    // Only what was filled in is said; an empty field leaves what is recorded.
+    if (title.trim()) details.title = title.trim()
+    if (authors.trim()) details.authors = authors.trim()
+    if (year.trim()) details.year = Number(year)
+    if (Object.keys(details).length === 0) {
+      props.onDone()
+      return
+    }
+    setBusy(true)
+    try {
+      await props.onSave(details)
+      props.onDone()
+    } catch (error) {
+      setProblem(error instanceof Error ? error.message : 'That could not be saved.')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <form class="details-form" onSubmit={(event) => void save(event)}>
+      <label>
+        Authors
+        <input
+          type="text"
+          value={authors}
+          placeholder="G. Steven Olley and Ariel Pakes"
+          autoFocus
+          onInput={(event) => setAuthors((event.target as HTMLInputElement).value)}
+        />
+      </label>
+      <label>
+        Year
+        <input
+          type="text"
+          inputMode="numeric"
+          value={year}
+          placeholder="1996"
+          onInput={(event) => setYear((event.target as HTMLInputElement).value)}
+        />
+      </label>
+      <label>
+        Title
+        <input
+          type="text"
+          value={title}
+          placeholder={document.display_title}
+          onInput={(event) => setTitle((event.target as HTMLInputElement).value)}
+        />
+      </label>
+      {problem && <p class="conv-problem">{problem}</p>}
+      <div class="details-actions">
+        <button type="submit" disabled={busy}>
+          Save
+        </button>
+        <button type="button" class="link" onClick={props.onDone}>
+          Cancel
+        </button>
+      </div>
+    </form>
   )
 }
 

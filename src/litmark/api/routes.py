@@ -16,7 +16,7 @@ from fastapi.responses import JSONResponse, PlainTextResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
 from ..agent.base import RunContext
-from ..agent.tools import dispatch
+from ..agent.tools import USER, dispatch
 from ..documents import QUEUED, normalize_tags
 from ..errors import InvalidInput, NotFound, RevisionConflict
 from ..events import format_sse
@@ -91,6 +91,14 @@ class ResolveRequest(BaseModel):
     prefix: str | None = None
     suffix: str | None = None
     allow_page_only: bool = False
+
+
+class DetailsSet(BaseModel):
+    """Whatever is given replaces what is recorded; what is left out stays."""
+
+    title: str | None = None
+    authors: str | None = None
+    year: int | None = None
 
 
 class UndoRequest(BaseModel):
@@ -194,8 +202,10 @@ def build_router() -> APIRouter:
     async def delete_note(
         request: Request, note_id: str, expected_revision: str | None = None
     ) -> Response:
-        services_of(request).workspace.delete_note(
-            note_id, expected_revision=expected_revision
+        # Recorded like any other edit, with the text kept aside: a deletion
+        # is listed under Recent edits and can be undone from there.
+        services_of(request).tools.remove_note(
+            note_id, expected_revision=expected_revision, origin=USER
         )
         return Response(status_code=204)
 
@@ -275,6 +285,18 @@ def build_router() -> APIRouter:
     async def set_tags(request: Request, document_id: str, body: TagsSet) -> dict[str, Any]:
         services = services_of(request)
         document = services.documents.set_tags(document_id, body.tags)
+        services.announce_documents([document_id])
+        return document.api_json(summary_text=services.documents.summary_text(document_id))
+
+    @router.put("/documents/{document_id}/details")
+    async def set_details(
+        request: Request, document_id: str, body: DetailsSet
+    ) -> dict[str, Any]:
+        """What the paper is — title, authors, year — as the user says it."""
+        services = services_of(request)
+        document, _ = services.documents.set_details(
+            document_id, title=body.title, authors=body.authors, year=body.year, by=USER
+        )
         services.announce_documents([document_id])
         return document.api_json(summary_text=services.documents.summary_text(document_id))
 

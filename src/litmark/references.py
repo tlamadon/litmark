@@ -29,6 +29,7 @@ MISSING_SOURCE = "missing_source"
 
 _REF_ID_RE = re.compile(r"^ref-[0-9a-z][0-9a-z-]{0,30}$")
 _SOURCE_LINK_RE = re.compile(r"\]\(source:([A-Za-z0-9][A-Za-z0-9\-]*)\)")
+_PAPER_LINK_RE = re.compile(r"\]\(paper:([A-Za-z0-9][A-Za-z0-9\-]*)\)")
 
 
 @dataclass
@@ -410,6 +411,15 @@ def source_ids_in_markdown(text: str) -> set[str]:
     Links inside code are ignored: they are documentation, not citations.
     """
     return set(_SOURCE_LINK_RE.findall(strip_code(text)))
+
+
+def paper_ids_in_markdown(text: str) -> set[str]:
+    """Document IDs named by ``paper:`` links: a mention of a paper in the library.
+
+    Where a ``source:`` link cites a passage, this one points at the paper as
+    a whole — `[Olley & Pakes (1996)](paper:doc-002)`.
+    """
+    return set(_PAPER_LINK_RE.findall(strip_code(text)))
 
 
 def citations_by_reference(

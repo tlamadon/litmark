@@ -371,3 +371,30 @@ def test_asking_a_server_loads_nothing_of_one():
         check=True,
     )
     assert loaded.stdout.strip() == "[]"
+
+
+# ------------------------------------------------- deleting, and naming papers
+
+
+def test_a_note_is_deleted_and_the_deletion_is_on_the_record(server, services, run):
+    run("append", "scratch", "Not worth keeping.")
+    code, out, _ = run("delete", "scratch")
+    assert code == 0 and out == "Deleted note scratch\n"
+    assert not (services.workspace.root / "notes" / "scratch.md").exists()
+    assert origins(services)[-1] == ("mcp:cli", "Deleted note")
+    code, _, err = run("delete", "scratch")
+    assert code == 1 and "scratch" in err
+
+
+def test_a_paper_is_listed_by_its_authors_and_year_once_they_are_said(server, run, pdf):
+    run("add", pdf, "--no-summary")
+    code, out, _ = run(
+        "details", "doc-001", "--author", "Alice Researcher", "--author", "Bob Coauthor", "--year", "2019"
+    )
+    assert code == 0
+    assert out == "doc-001  Researcher & Coauthor (2019) — Mobility Restrictions and Wage Growth\n"
+    code, out, _ = run("papers")
+    assert "doc-001  Researcher & Coauthor (2019)\n" in out
+    assert "Mobility Restrictions and Wage Growth · 2 pages" in out
+    code, _, err = run("details", "doc-001")
+    assert code == 1 and "--title" in err

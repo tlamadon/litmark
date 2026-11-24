@@ -24,6 +24,7 @@ import {
 import { Chat } from './chat/Chat'
 import type { OpenTarget } from './chat/describe'
 import { MarkdownEditor, type RevealResult } from './editor/MarkdownEditor'
+import { nameOf, papersOf } from './papers'
 import { EventStream, type ServerEvent } from './events'
 import { PdfViewer, type PdfMark, type PdfSelection } from './pdf/PdfViewer'
 import { Sidebar } from './Sidebar'
@@ -137,6 +138,8 @@ export function App() {
   const pendingReveal = useRef<string | null>(null)
   // The note just created, which opens ready to be written in.
   const startEditing = useRef<string | null>(null)
+  // Notes deleted from this window, whose open editor may still try to save.
+  const deletedNotes = useRef<Set<string>>(new Set())
   const docKey = keyOf(target)
   const docKeyRef = useRef(docKey)
   docKeyRef.current = docKey
@@ -295,6 +298,11 @@ export function App() {
         setInsertNotice(
           error instanceof ApiError ? error.body.message : 'That could not be opened.',
         )
+        // Gone — deleted here, or from somewhere else: nothing to wait for.
+        if (error instanceof ApiError && error.status === 404 && docKeyRef.current === key) {
+          setTarget({ kind: 'empty' })
+          void refreshState()
+        }
       }
     })()
   }, [target, placeBuffer])
@@ -336,12 +344,21 @@ export function App() {
 
   const reloadBuffer = useCallback(async (): Promise<void> => {
     const key = keyOf(target)
-    if (target.kind === 'note') {
-      const note = await api.readNote(target.noteId)
-      placeBuffer(key, note.text, note.revision)
-    } else if (target.kind === 'summary') {
-      const summary = await api.summary(target.documentId)
-      placeBuffer(key, summary.text ?? '', summary.revision)
+    try {
+      if (target.kind === 'note') {
+        const note = await api.readNote(target.noteId)
+        placeBuffer(key, note.text, note.revision)
+      } else if (target.kind === 'summary') {
+        const summary = await api.summary(target.documentId)
+        placeBuffer(key, summary.text ?? '', summary.revision)
+      }
+    } catch (error) {
+      if (!(error instanceof ApiError && error.status === 404)) throw error
+      // The note on screen was deleted from somewhere else.
+      if (docKeyRef.current === key) {
+        setTarget({ kind: 'empty' })
+        setInsertNotice('The note that was open has been deleted.')
+      }
     }
   }, [target, placeBuffer])
 
@@ -387,6 +404,8 @@ export function App() {
   const save = useCallback(
     async (text: string, expectedRevision: string | null) => {
       if (target.kind === 'note') {
+        // The last keystrokes in a note that was then deleted have nowhere to go.
+        if (deletedNotes.current.has(target.noteId)) return { revision: expectedRevision ?? '' }
         const note = await api.saveNote(target.noteId, text, expectedRevision)
         placeBuffer(keyOf(target), note.text, note.revision)
         // A save that lands after the note was left says nothing about the
@@ -473,8 +492,29 @@ export function App() {
     [pdfSelection],
   )
 
+  const deleteNote = useCallback(
+    async (noteId: string): Promise<void> => {
+      try {
+        deletedNotes.current.add(noteId)
+        await api.deleteNote(noteId)
+      } catch (error) {
+        deletedNotes.current.delete(noteId)
+        setInsertNotice(
+          error instanceof ApiError ? error.body.message : 'The note could not be deleted.',
+        )
+        return
+      }
+      if (docKeyRef.current === `note:${noteId}`) setTarget({ kind: 'empty' })
+      await refreshState()
+      setChanges((await api.changes()).changes)
+    },
+    [refreshState],
+  )
+
   const createNote = useCallback(async (): Promise<void> => {
     const note = await api.createNote('Untitled note')
+    // A new note may take the name of one deleted before.
+    deletedNotes.current.delete(note.note_id)
     await refreshState()
     startEditing.current = `note:${note.note_id}`
     setTarget({ kind: 'note', noteId: note.note_id })
@@ -684,6 +724,9 @@ export function App() {
     async (change: Pick<ChangeRecord, 'change_id'>): Promise<void> => {
       try {
         await api.undo(change.change_id)
+        // Undoing a deletion brings a note back into the list.
+        deletedNotes.current.clear()
+        await refreshState()
         await reloadBuffer()
         setChanges((await api.changes()).changes)
       } catch (error) {
@@ -694,7 +737,7 @@ export function App() {
         )
       }
     },
-    [reloadBuffer],
+    [reloadBuffer, refreshState],
   )
 
   // ---------------------------------------------------------------- render
@@ -752,12 +795,15 @@ export function App() {
   const notesById = new Map<string, NoteSummary>(
     state.notes.map((note) => [note.note_id, note]),
   )
+  // What a `paper:` link in the text on screen may name.
+  const papers = papersOf(state.documents)
+
   const currentTitle =
     target.kind === 'note'
       ? (notesById.get(target.noteId)?.title ?? target.noteId)
       : target.kind === 'summary'
         ? `Summary — ${
-            state.documents.find((d) => d.document_id === target.documentId)?.display_title ??
+            nameOf(state.documents.find((d) => d.document_id === target.documentId)) ??
             target.documentId
           }`
         : 'Nothing open'
@@ -842,6 +888,11 @@ export function App() {
             }}
             onOpenDocument={openDocumentById}
             onNewNote={() => void createNote()}
+            onDeleteNote={deleteNote}
+            onSetDetails={async (documentId, details) => {
+              await api.setDetails(documentId, details)
+              await refreshState()
+            }}
             tags={state.tags}
             onImport={(files, tags) => void importFiles(files, tags)}
             onSetTags={(documentId, tags) => void changeTags(() => api.setTags(documentId, tags))}
@@ -875,6 +926,8 @@ export function App() {
                 revision={buffer.revision}
                 save={save}
                 onOpenSource={(id) => void openSource(id)}
+                papers={papers}
+                onOpenPaper={(id) => showDocument(id, 1)}
                 onSelectionChange={setSelection}
                 onDirtyChange={setDirty}
                 activeReference={highlight?.reference_id ?? null}

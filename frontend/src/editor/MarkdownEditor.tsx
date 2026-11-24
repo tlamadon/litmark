@@ -21,11 +21,13 @@ import {
 import { useEffect, useRef, useState } from 'preact/hooks'
 
 import { ApiError } from '../api'
+import type { KnownPaper } from '../papers'
 import {
   citationsOf,
   livePreview,
   readingMode,
   setActiveReference,
+  setKnownPapers,
   setReadingMode,
   setRevealedCitation,
   setSourceMode,
@@ -54,6 +56,9 @@ export interface MarkdownEditorProps {
   placeholder?: string
   save: (text: string, expectedRevision: string | null) => Promise<{ revision: string }>
   onOpenSource?: (referenceId: string) => void
+  /** The papers of the library, so a `paper:` link can say what it names. */
+  papers?: readonly KnownPaper[]
+  onOpenPaper?: (documentId: string) => void
   onSelectionChange?: (selection: string) => void
   onDirtyChange?: (dirty: boolean) => void
   registerInsert?: (insert: (markdown: string) => void) => void
@@ -183,6 +188,7 @@ export function MarkdownEditor(props: MarkdownEditorProps) {
       markdown({ base: markdownLanguage, codeLanguages: [] }),
       livePreview({
         onOpenSource: (id) => latest.current.onOpenSource?.(id),
+        onOpenPaper: (id) => latest.current.onOpenPaper?.(id),
         onOpenLink: (href) => window.open(href, '_blank', 'noopener,noreferrer'),
         reading,
       }),
@@ -192,7 +198,11 @@ export function MarkdownEditor(props: MarkdownEditorProps) {
         dblclick: (event, target) => {
           if (!target.state.field(readingMode, false)) return false
           // On a link, the two clicks were two openings of the link.
-          if ((event.target as HTMLElement | null)?.closest?.('.cm-source-link, .cm-link')) {
+          if (
+            (event.target as HTMLElement | null)?.closest?.(
+              '.cm-source-link, .cm-link, .cm-paper-link',
+            )
+          ) {
             return false
           }
           const at = target.posAtCoords({ x: event.clientX, y: event.clientY })
@@ -343,6 +353,10 @@ export function MarkdownEditor(props: MarkdownEditorProps) {
   useEffect(() => {
     view.current?.dispatch({ effects: setActiveReference.of(props.activeReference ?? null) })
   }, [props.activeReference, props.docKey])
+
+  useEffect(() => {
+    view.current?.dispatch({ effects: setKnownPapers.of(props.papers ?? []) })
+  }, [props.papers, props.docKey])
 
   // Reload a clean buffer when the file changed on disk; keep a dirty one.
   useEffect(() => {

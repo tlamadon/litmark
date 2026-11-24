@@ -214,7 +214,9 @@ litmark edit reading-log          # in $EDITOR
 | `notes`, `note NOTE` | the notes; one of them |
 | `append NOTE [TEXT]` | add to the end of a note, from the arguments or standard input |
 | `write NOTE`, `edit NOTE` | replace a note from standard input or `--file`; or open it in `$EDITOR` |
+| `delete NOTE` | delete a note; it can be brought back from *Recent edits* |
 | `add PDF…` | send papers in (`--tag`, `--no-summary`) and wait for their text |
+| `details DOC --author NAME… --year Y --title T` | say what a paper is, where the PDF got it wrong |
 | `tag DOC… --add T --remove T` | change tags |
 | `cite DOC PAGE "QUOTE"` | register a quotation, and print the link that cites it |
 | `tools`, `call TOOL key=value…` | everything the server can be asked, and a way to ask for any of it |
@@ -431,6 +433,57 @@ by itself, with the cursor after what was inserted.
 
 Editing is live preview over the real Markdown: syntax is revealed around the
 cursor and hidden elsewhere, and **Source** shows the whole text raw.
+
+**Delete**, under a note in the sidebar, removes it once you confirm. The text
+is kept aside and the deletion is listed under *Recent edits*, where **Undo**
+brings the note back — unless a note of that name has been written since,
+which is not written over. The agent and sessions elsewhere can delete a note
+too (`delete_note`, `litmark delete`), on the same record and with the same
+undo.
+
+## Papers, by author and year
+
+A paper is listed the way it is cited — **Olley & Pakes (1996)** — with its
+title beneath, once its authors are known. That name is made from the paper's
+authors and year, and those are seldom right in the PDF itself: the title field
+holds a word processor's file path (`K:\MEMOS\DISCUSS\92-2\CES92-2.FNL`), the
+author is a publisher or a working-paper series, the year is when the file was
+made. So:
+
+- **Junk is not shown as a title.** A file path, a bare file name or an
+  organisation in the PDF's metadata is treated as unknown — at import, and
+  for papers already in the project.
+- **Whoever reads the title page says what the paper is.** The agent does when
+  it writes a paper's summary; a session elsewhere can
+  (`set_document_details`); and so can you, with **Details** under the paper,
+  or `litmark details doc-002 --author "G. Steven Olley" --author "Ariel Pakes"
+  --year 1996`. What was said is kept in the paper's `metadata.json`, with who
+  said it, and travels with the project.
+
+Until a paper's authors are known it goes by its title, or failing that its
+file name.
+
+### Naming one paper in another's text
+
+A note or a summary names a paper of the library with a link, written in the
+Markdown like any other:
+
+```markdown
+This extends [Olley & Pakes (1996)](paper:doc-002) by using intermediate inputs.
+```
+
+The words are whatever reads well; `doc-002` is the paper's ID. A click opens
+the paper beside what you are reading. Where a `source:` link cites a passage,
+this one points at the paper as a whole.
+
+You rarely write one by hand. The agent and sessions elsewhere are asked to
+link every paper they mention that the library holds — `list_documents` hands
+them each paper's link ready-made — and they can tell that the working paper
+you imported is the article a text cites by its journal year. To have it done
+to text that is already there, ask: *"link the papers mentioned in this
+note."* Like a citation, a link naming a paper that is not in the library is
+refused when an agent writes it, and one whose paper has since been removed is
+shown greyed out.
 
 ## Citations
 

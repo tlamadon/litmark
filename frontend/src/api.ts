@@ -109,6 +109,10 @@ export interface DocumentRecord {
   sha256: string
   original_filename: string
   display_title: string
+  /** How the paper is spoken of — `Olley & Pakes (1996)` — when its authors are known. */
+  label: string | null
+  /** Who said what the title, authors and year are; null while it is only the PDF's word. */
+  details_by: string | null
   title: string | null
   authors: string | null
   year: number | null
@@ -384,9 +388,11 @@ export const api = {
       method: 'PUT',
       body: JSON.stringify({ text, expected_revision }),
     }),
-  deleteNote: (id: string, revision: string) =>
+  deleteNote: (id: string, revision?: string | null) =>
     request<void>(
-      `/notes/${encodeURIComponent(id)}?expected_revision=${encodeURIComponent(revision)}`,
+      `/notes/${encodeURIComponent(id)}${
+        revision ? `?expected_revision=${encodeURIComponent(revision)}` : ''
+      }`,
       { method: 'DELETE' },
     ),
 
@@ -446,6 +452,14 @@ export const api = {
       `/documents/${encodeURIComponent(id)}/summarize`,
       { method: 'POST' },
     ),
+  setDetails: (
+    id: string,
+    details: { title?: string; authors?: string; year?: number },
+  ) =>
+    request<DocumentRecord>(`/documents/${encodeURIComponent(id)}/details`, {
+      method: 'PUT',
+      body: JSON.stringify(details),
+    }),
   deleteDocument: (id: string) =>
     request<{ deleted: string; references_marked_missing: string[] }>(
       `/documents/${encodeURIComponent(id)}`,

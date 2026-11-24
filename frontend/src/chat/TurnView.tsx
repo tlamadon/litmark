@@ -96,6 +96,9 @@ export function TurnView({ turn, names, ...actions }: TurnViewProps) {
   const edits = turn.entries.filter((entry): entry is ChangeEntry => entry.kind === 'change')
   const live = !isFinished(turn.status)
   const lastSteps = blocks.length - 1
+  // A paper named in a reply opens beside it, like a step that read one.
+  const openPaper = (documentId: string): void =>
+    actions.onOpen({ kind: 'document', documentId, page: 1 })
 
   return (
     <article class={`turn ${turn.status}`} data-run={turn.runId}>
@@ -132,6 +135,7 @@ export function TurnView({ turn, names, ...actions }: TurnViewProps) {
                   text={block.text}
                   unfinished={block.unfinished}
                   onOpenSource={actions.onOpenSource}
+                  onOpenPaper={openPaper}
                 />
               )
             }
@@ -155,7 +159,12 @@ export function TurnView({ turn, names, ...actions }: TurnViewProps) {
           })}
 
           {turn.streaming && (
-            <Prose text={turn.streaming} streaming onOpenSource={actions.onOpenSource} />
+            <Prose
+              text={turn.streaming}
+              streaming
+              onOpenSource={actions.onOpenSource}
+              onOpenPaper={openPaper}
+            />
           )}
           {turn.status === 'running' && !turn.streaming && (
             <div class="turn-working" role="status">
@@ -378,11 +387,13 @@ function Prose({
   streaming = false,
   unfinished = false,
   onOpenSource,
+  onOpenPaper,
 }: {
   text: string
   streaming?: boolean
   unfinished?: boolean
   onOpenSource: (referenceId: string) => void
+  onOpenPaper: (documentId: string) => void
 }) {
   const html = useMemo(() => renderMarkdown(text), [text])
   const classes = ['prose', streaming ? 'streaming' : '', unfinished ? 'unfinished' : '']
@@ -396,6 +407,13 @@ function Prose({
         if (id) {
           event.preventDefault()
           onOpenSource(id)
+          return
+        }
+        const paper = (event.target as HTMLElement).closest<HTMLElement>('[data-paper]')?.dataset
+          .paper
+        if (paper) {
+          event.preventDefault()
+          onOpenPaper(paper)
         }
       }}
       // Markdown is sanitized in renderMarkdown before it reaches the DOM.

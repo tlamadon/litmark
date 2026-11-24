@@ -23,7 +23,7 @@ from .base import (
     Availability,
     RunRequest,
 )
-from .tools import ProjectTools, dispatch, trim_result
+from .tools import RUN_TOOLS, ProjectTools, dispatch, trim_result
 
 # Set by tests: a list of scripted steps per run, consumed in order.
 # Each step is ("text", "...") or ("tool", name, arguments).
@@ -122,7 +122,7 @@ class FakeBackend(AgentBackend):
                 if name == WRITE_SUMMARY_STEP:
                     name = "write_summary"
                     arguments = self._summary_arguments(arguments["document_id"], last_reference)
-                if name in {"write_note", "patch_note", "write_summary"}:
+                if name in RUN_TOOLS:
                     arguments.setdefault("run_id", request.run_id)
                 tool_use_id = f"fake-{request.run_id}-{index}"
                 yield AgentEvent(

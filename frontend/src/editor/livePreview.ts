@@ -32,6 +32,8 @@ import {
 } from '@codemirror/view'
 import katex from 'katex'
 
+import type { KnownPaper } from '../papers'
+
 /** Toggles the Source-mode view, which shows the complete Markdown text. */
 export const setSourceMode = StateEffect.define<boolean>()
 
@@ -82,6 +84,22 @@ export const activeCitation = StateField.define<ActiveCitation>({
   },
 })
 
+/**
+ * The papers in the library, so a `paper:` link can say what it names — or
+ * that the paper it names is no longer there.
+ */
+export const setKnownPapers = StateEffect.define<readonly KnownPaper[]>()
+
+export const knownPapers = StateField.define<readonly KnownPaper[]>({
+  create: () => [],
+  update(value, transaction) {
+    for (const effect of transaction.effects) {
+      if (effect.is(setKnownPapers)) return effect.value
+    }
+    return value
+  },
+})
+
 /** How a citation is shown: of the passage on show, or of some other. */
 type CitationTone = 'active' | 'other'
 
@@ -116,6 +134,11 @@ export interface LivePreviewOptions {
    * on one while editing, and by the toolbar action.
    */
   onOpenSource?: (referenceId: string) => void
+  /**
+   * Invoked for a `paper:` link: on a click while reading, and on
+   * Cmd/Ctrl-click while editing.
+   */
+  onOpenPaper?: (documentId: string) => void
   onOpenLink?: (href: string) => void
   /** Whether the buffer opens for reading rather than editing. */
   reading?: boolean
@@ -183,6 +206,8 @@ class LinkWidget extends WidgetType {
     readonly revealed = false,
     /** Reading: a click follows the link rather than opening it for editing. */
     readonly reading = false,
+    /** For a `paper:` link: the paper's title, or null if it is not in the library. */
+    readonly paper: string | null = null,
   ) {
     super()
   }
@@ -194,29 +219,39 @@ class LinkWidget extends WidgetType {
       other.from === this.from &&
       other.tone === this.tone &&
       other.revealed === this.revealed &&
-      other.reading === this.reading
+      other.reading === this.reading &&
+      other.paper === this.paper
     )
   }
 
   toDOM(view: EditorView): HTMLElement {
     const anchor = document.createElement('span')
     const isSource = this.href.startsWith('source:')
+    const isPaper = this.href.startsWith(PAPER_SCHEME)
     anchor.className = isSource
       ? `cm-source-link ${citationClass(this.tone, this.revealed)}`
-      : 'cm-link'
+      : isPaper
+        ? `cm-paper-link${this.paper === null ? ' missing' : ''}`
+        : 'cm-link'
     anchor.textContent = this.label
     anchor.title = isSource
       ? this.reading
         ? `${this.href} — open the cited page`
         : `${this.href} — Cmd/Ctrl-click to open the cited page`
-      : this.href
+      : isPaper
+        ? this.paper === null
+          ? 'This paper is not in the library (any more)'
+          : `${this.paper} — ${this.reading ? 'open' : 'Cmd/Ctrl-click to open'} the paper`
+        : this.href
     anchor.setAttribute('role', 'link')
     anchor.setAttribute('tabindex', '0')
     const open = (event: Event) => {
       event.preventDefault()
       event.stopPropagation()
       if (isSource) this.options.onOpenSource?.(this.href.slice('source:'.length))
-      else this.options.onOpenLink?.(this.href)
+      else if (isPaper) {
+        if (this.paper !== null) this.options.onOpenPaper?.(this.href.slice(PAPER_SCHEME.length))
+      } else this.options.onOpenLink?.(this.href)
     }
     anchor.addEventListener('mousedown', (event) => {
       // Reading, a link is a link: one click goes where it points.
@@ -243,6 +278,8 @@ class LinkWidget extends WidgetType {
     return event.type === 'mousedown' || event.type === 'keydown'
   }
 }
+
+const PAPER_SCHEME = 'paper:'
 
 class MathWidget extends WidgetType {
   constructor(
@@ -382,6 +419,7 @@ function buildDecorations(view: EditorView, options: LivePreviewOptions): Decora
     !reading && touchesSelection(selection, from, to)
   const ranges: Range<Decoration>[] = []
   const codeRanges: [number, number][] = []
+  const papers = state.field(knownPapers, false) ?? []
   const doc = state.doc
 
   const tree = syntaxTree(state)
@@ -500,9 +538,13 @@ function buildDecorations(view: EditorView, options: LivePreviewOptions): Decora
         const label = doc.sliceString(labelFrom, labelTo)
         const href = doc.sliceString(url.from, url.to)
         if (!label) return
+        const paper = href.startsWith(PAPER_SCHEME)
+          ? (papers.find((known) => known.documentId === href.slice(PAPER_SCHEME.length))?.title ??
+            null)
+          : null
         ranges.push(
           Decoration.replace({
-            widget: new LinkWidget(label, href, from, options, tone, revealed, reading),
+            widget: new LinkWidget(label, href, from, options, tone, revealed, reading, paper),
           }).range(from, to),
         )
         return
@@ -550,6 +592,7 @@ class LivePreviewPlugin {
       update.startState.field(sourceMode, false) !== update.state.field(sourceMode, false) ||
       update.startState.field(activeCitation, false) !== update.state.field(activeCitation, false) ||
       update.startState.field(readingMode, false) !== update.state.field(readingMode, false) ||
+      update.startState.field(knownPapers, false) !== update.state.field(knownPapers, false) ||
       // The parser works in the background and reaches the end of a long note
       // late; what it finds there has to be drawn when it does.
       syntaxTree(update.startState) !== syntaxTree(update.state)
@@ -587,6 +630,7 @@ export function livePreview(options: LivePreviewOptions = {}): Extension {
     sourceMode,
     activeCitation,
     readingMode.init(() => options.reading ?? false),
+    knownPapers,
     plugin,
     EditorView.atomicRanges.of((view) => view.plugin(plugin)?.atomic ?? Decoration.none),
     theme,
@@ -638,5 +682,16 @@ const theme = EditorView.baseTheme({
   '.cm-citation.active': { background: 'var(--mark-active)' },
   '.cm-citation.revealed': { boxShadow: 'inset 0 0 0 1px var(--mark-active-line)' },
   '.cm-link': { color: 'var(--accent)', cursor: 'pointer' },
+  // A paper of the library, named in the text.
+  '.cm-paper-link': {
+    color: 'var(--accent)',
+    borderBottom: '1px solid var(--accent)',
+    cursor: 'pointer',
+  },
+  '.cm-paper-link.missing': {
+    color: 'var(--muted-strong)',
+    borderBottom: '1px dashed var(--muted-strong)',
+    cursor: 'default',
+  },
   '.cm-math-display': { display: 'inline-block', width: '100%', textAlign: 'center' },
 })
