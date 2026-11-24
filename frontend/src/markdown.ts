@@ -102,8 +102,18 @@ function inline(text: string): string {
   )
 }
 
+/**
+ * One line of inline Markdown — emphasis, code, math, links — as HTML.
+ *
+ * For text that sits inside something else that is drawn as HTML: the cell of
+ * a table in a note. Escaped first, like everything here.
+ */
+export function renderInline(source: string): string {
+  return inline(escapeHtml(source))
+}
+
 /** The cells of a pipe-table row, or null when the line is not one. */
-function tableCells(line: string): string[] | null {
+export function tableCells(line: string): string[] | null {
   const trimmed = line.trim()
   if (!trimmed.includes('|')) return null
   const inner = trimmed.replace(/^\|/, '').replace(/\|$/, '')
@@ -111,7 +121,70 @@ function tableCells(line: string): string[] | null {
   return inner.split(/(?<!\\)\|/).map((cell) => cell.trim().replace(/\\\|/g, '|'))
 }
 
-const TABLE_RULE = /^\s*\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)*\|?\s*$/
+export const TABLE_RULE = /^\s*\|?\s*:?-+:?\s*(\|\s*:?-+:?\s*)*\|?\s*$/
+
+/**
+ * Whether two lines open a table: a row of cells, and under it a rule of
+ * dashes with as many columns. The count is what tells a table from a line
+ * that happens to hold a bar and is followed by a rule across the page.
+ */
+export function opensTable(first: string, second: string | undefined): string[] | null {
+  const header = tableCells(first)
+  if (!header || second === undefined || !TABLE_RULE.test(second)) return null
+  return tableCells(second)?.length === header.length ? header : null
+}
+
+export type Alignment = 'left' | 'center' | 'right' | null
+
+/** How each column is set, from the colons in the rule under the header. */
+export function alignmentsOf(rule: string): Alignment[] {
+  return (tableCells(rule) ?? []).map((cell) => {
+    const left = cell.startsWith(':')
+    const right = cell.endsWith(':')
+    return left && right ? 'center' : right ? 'right' : left ? 'left' : null
+  })
+}
+
+export interface TableBlock {
+  /** Zero-based indices of its first and last lines. */
+  fromLine: number
+  toLine: number
+  header: string[]
+  align: Alignment[]
+  rows: string[][]
+}
+
+/**
+ * The pipe tables in a text: a row of cells, a rule of dashes, then the rows.
+ *
+ * Found by reading the lines, the same way wherever tables are drawn. What
+ * looks like one inside a code block is an example, and is left alone.
+ */
+export function findTables(lines: string[]): TableBlock[] {
+  const tables: TableBlock[] = []
+  let fence: string | null = null
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index]!
+    const opening = /^\s*(```|~~~)/.exec(line)
+    if (opening) {
+      fence = fence === null ? opening[1]! : fence === opening[1] ? null : fence
+      continue
+    }
+    if (fence !== null) continue
+    const rule = lines[index + 1]
+    const header = opensTable(line, rule)
+    if (!header || rule === undefined) continue
+    const rows: string[][] = []
+    let last = index + 1
+    while (last + 1 < lines.length && lines[last + 1]!.trim() !== '' && tableCells(lines[last + 1]!)) {
+      last += 1
+      rows.push(tableCells(lines[last]!)!)
+    }
+    tables.push({ fromLine: index, toLine: last, header, align: alignmentsOf(rule), rows })
+    index = last
+  }
+  return tables
+}
 
 export function renderMarkdown(source: string): string {
   const escaped = escapeHtml(source)
@@ -161,9 +234,9 @@ export function renderMarkdown(source: string): string {
     }
 
     // A table: a row of cells, then a rule of dashes, then the rows.
-    const header = tableCells(line)
     const rule = lines[index + 1]
-    if (header && rule !== undefined && TABLE_RULE.test(rule) && rule.includes('-')) {
+    const header = opensTable(line, rule)
+    if (header && rule !== undefined) {
       closeParagraph()
       closeList()
       const rows: string[][] = []
@@ -173,8 +246,14 @@ export function renderMarkdown(source: string): string {
         index += 1
       }
       index -= 1
+      const align = alignmentsOf(rule)
       const cellsOf = (cells: string[], tag: 'th' | 'td'): string =>
-        header.map((_, column) => `<${tag}>${inline(cells[column] ?? '')}</${tag}>`).join('')
+        header
+          .map((_, column) => {
+            const set = align[column] ? ` style="text-align:${align[column]}"` : ''
+            return `<${tag}${set}>${inline(cells[column] ?? '')}</${tag}>`
+          })
+          .join('')
       html.push(
         '<div class="table-wrap"><table>' +
           `<thead><tr>${cellsOf(header, 'th')}</tr></thead>` +

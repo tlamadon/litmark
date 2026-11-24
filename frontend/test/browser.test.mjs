@@ -666,6 +666,51 @@ describeOrSkip('the application in Firefox', () => {
     assert.equal(await script(client, width), before, 'reopening the sidebar did not restore the layout')
   })
 
+  test('a table is drawn as one, and shown as written to be edited', async (t) => {
+    await click(client, '.mode-tabs [data-mode="read"]')
+    await waitFor(client, `!!document.querySelector('.editor.reading')`, { label: 'reading mode' })
+    const drawn = await script(
+      client,
+      `const table = document.querySelector('.cm-content .cm-table-wrap table')
+       return table && {
+         cells: table.querySelectorAll('th, td').length,
+         height: Math.round(table.getBoundingClientRect().height),
+         // No cell broken in the middle of a word to save a column.
+         wrap: getComputedStyle(table.querySelector('td')).overflowWrap,
+         bars: document.querySelector('.cm-content').textContent.includes('|'),
+       }`,
+    )
+    if (!drawn) {
+      t.skip('the open note has no table')
+      return
+    }
+    assert.ok(drawn.cells >= 2 && drawn.height > 20, JSON.stringify(drawn))
+    assert.equal(drawn.wrap, 'normal', JSON.stringify(drawn))
+    assert.ok(!drawn.bars, 'the bars the table is written with are still on show')
+
+    // Editing, a click on the table is a wish to change it: its lines appear.
+    await click(client, '.mode-tabs [data-mode="edit"]')
+    await waitFor(client, `!document.querySelector('.editor.reading')`, { label: 'edit mode' })
+    await click(client, '.cm-table-wrap td')
+    const written = await waitFor(
+      client,
+      `(() => {
+         const lines = [...document.querySelectorAll('.cm-table-source')].map((n) => n.textContent)
+         return lines.length >= 2 ? lines : null
+       })()`,
+      { label: 'the table as written' },
+    )
+    assert.ok(written[0].includes('|') && /^[|:\\s-]+$/.test(written[1]), written.join(' / '))
+
+    // And reading again, it is a table again.
+    await click(client, '.mode-tabs [data-mode="read"]')
+    await waitFor(
+      client,
+      `!!document.querySelector('.cm-table-wrap table') && !document.querySelector('.cm-table-source')`,
+      { label: 'the table to be drawn again' },
+    )
+  })
+
   test('what was typed just before leaving a note is saved', async (t) => {
     const openNotes = async () => {
       if (!(await script(client, `return !!document.querySelector('.library')`))) {

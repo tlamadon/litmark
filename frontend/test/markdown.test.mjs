@@ -9,7 +9,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 
-import { renderMarkdown } from './bundle/markdown.mjs'
+import { findTables, renderInline, renderMarkdown } from './bundle/markdown.mjs'
 
 test('escapes raw HTML rather than rendering it', () => {
   const html = renderMarkdown('<img src=x onerror="alert(1)">')
@@ -109,10 +109,64 @@ test('a pipe table becomes a table, with its cells rendered inline', () => {
     ['| Paper | Claim |', '| --- | :---: |', '| **One** | restricts [p. 2](source:ref-001) |', '| Two | a \\| b |'].join('\n'),
   )
   assert.match(html, /<table>/)
-  assert.match(html, /<th>Paper<\/th><th>Claim<\/th>/)
+  // The colons in the rule say how a column is set.
+  assert.match(html, /<th>Paper<\/th><th style="text-align:center">Claim<\/th>/)
   assert.match(html, /<td><strong>One<\/strong><\/td>/)
   assert.match(html, /data-source-ref="ref-001"/)
-  assert.match(html, /<td>a \| b<\/td>/)
+  assert.match(html, /<td style="text-align:center">a \| b<\/td>/)
+})
+
+test('the tables of a text are found where they are, and not in code', () => {
+  const lines = [
+    'Before.',
+    '',
+    '| Paper | N | Share |',
+    '|:------|--:|:-----:|',
+    '| One | 12 | 0.4 |',
+    '| Two | 7 |',
+    '',
+    '```',
+    '| not | a table |',
+    '| --- | --- |',
+    '```',
+    '',
+    'a | b',
+    '--- | ---',
+    '1 | 2',
+    'After a | bar, but no rule.',
+  ]
+  assert.deepEqual(findTables(lines), [
+    {
+      fromLine: 2,
+      toLine: 5,
+      header: ['Paper', 'N', 'Share'],
+      align: ['left', 'right', 'center'],
+      rows: [
+        ['One', '12', '0.4'],
+        ['Two', '7'],
+      ],
+    },
+    // Without the bars at the edges, and running on until a blank line.
+    {
+      fromLine: 12,
+      toLine: 15,
+      header: ['a', 'b'],
+      align: [null, null],
+      rows: [
+        ['1', '2'],
+        ['After a', 'bar, but no rule.'],
+      ],
+    },
+  ])
+  assert.deepEqual(findTables(['| a |', 'not a rule']), [])
+  // One dash is rule enough, as it is elsewhere Markdown is read.
+  assert.equal(findTables(['| a | b |', '|:-:|-|', '| 1 | 2 |']).length, 1)
+  // A bar in a line, and a rule across the page under it, are not a table.
+  assert.deepEqual(findTables(['Either a | or b.', '---', 'More.']), [])
+})
+
+test('a cell is rendered as inline text, escaped like the rest', () => {
+  assert.equal(renderInline('**x** `y` <b>'), '<strong>x</strong> <code>y</code> &lt;b&gt;')
 })
 
 test('a line with a bar but no rule under it stays a paragraph', () => {

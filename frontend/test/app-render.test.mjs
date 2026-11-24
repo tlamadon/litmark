@@ -321,6 +321,11 @@ test('the library, what is open, and the panel about it', async (t) => {
     '',
     'See also [one that is gone](paper:doc-404).',
     '',
+    '| Paper | Proxy | N |',
+    '|:--|:-:|--:|',
+    '| [OP](paper:doc-002) | **investment** | 12 |',
+    '| LP | materials [p. 2](source:ref-001) | 7 |',
+    '',
     '```',
     '# not a heading',
     '```',
@@ -407,10 +412,31 @@ test('the library, what is open, and the panel about it', async (t) => {
     node.classList.contains('missing'),
     node.title,
   ])
-  assert.deepEqual(links, [
+  assert.deepEqual(links.slice(0, 2), [
     ['Olley–Pakes (1996)', false, 'The Dynamics of Productivity — open the paper'],
     ['one that is gone', true, 'This paper is not in the library (any more)'],
   ])
+
+  // A table is drawn as one — not as the bars and dashes it is written in —
+  // with its columns set as the rule says, and its cells as inline Markdown.
+  const table = root.querySelector('.cm-content .cm-table-wrap table')
+  assert.ok(table, 'the table is still shown as written')
+  assert.deepEqual(
+    [...table.querySelectorAll('tr')].map((row) => [...row.children].map((cell) => cell.textContent)),
+    [
+      ['Paper', 'Proxy', 'N'],
+      ['OP', 'investment', '12'],
+      ['LP', 'materials p. 2', '7'],
+    ],
+  )
+  assert.deepEqual(
+    [...table.querySelectorAll('th')].map((cell) => cell.style.textAlign),
+    ['left', 'center', 'right'],
+  )
+  assert.ok(table.querySelector('td strong'), 'a cell is not rendered as Markdown')
+  assert.ok(table.querySelector('.cm-paper-link[data-paper="doc-002"]:not(.missing)'))
+  assert.ok(table.querySelector('.cm-source-link[data-source-ref="ref-001"]'))
+  assert.ok(!(root.querySelector('.cm-content')?.textContent ?? '').includes('|:--|'))
   const line = root.querySelector('.cm-content')?.textContent ?? ''
   assert.ok(line.includes('as Levinsohn and Petrin (2003) do.'), line)
 

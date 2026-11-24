@@ -469,6 +469,13 @@ by itself, with the cursor after what was inserted.
 Editing is live preview over the real Markdown: syntax is revealed around the
 cursor and hidden elsewhere, and **Source** shows the whole text raw.
 
+A **table** written in Markdown — a row of cells, a rule of dashes, the rows —
+is drawn as a table, its columns set left, centre or right as the colons in
+the rule say, and its cells as ordinary inline Markdown: emphasis, math, a
+citation or a paper's link, each working as it does in a paragraph. Editing,
+a click on the table (or the cursor moved into it) shows its lines as written,
+in a fixed-width face; moving out draws it again.
+
 **Delete** — in the panel beside an open note, or the × on its card in the
 library — removes it once you confirm. The text
 is kept aside and the deletion is listed under *Recent edits*, where **Undo**

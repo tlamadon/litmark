@@ -32,6 +32,7 @@ import {
 } from '@codemirror/view'
 import katex from 'katex'
 
+import { findTables, renderInline, type TableBlock } from '../markdown'
 import type { KnownPaper } from '../papers'
 
 /** Toggles the Source-mode view, which shows the complete Markdown text. */
@@ -311,6 +312,163 @@ class MathWidget extends WidgetType {
     }
     return host
   }
+}
+
+/**
+ * A table, drawn as one.
+ *
+ * Pipes and dashes are how a table is written, not how it is read. Until the
+ * cursor is put inside it, the lines are replaced by the table they describe;
+ * with the cursor there, they are shown as written, to be edited. The cells
+ * are ordinary inline Markdown, and a citation or a paper named in one is a
+ * link as it would be in a paragraph.
+ */
+class TableWidget extends WidgetType {
+  constructor(
+    /** The lines as written: two tables are the same when these are. */
+    readonly source: string,
+    readonly table: TableBlock,
+    readonly from: number,
+    readonly options: LivePreviewOptions,
+    readonly activeReference: string | null,
+    readonly papers: readonly KnownPaper[],
+    readonly reading: boolean,
+  ) {
+    super()
+  }
+
+  eq(other: TableWidget): boolean {
+    return (
+      other.source === this.source &&
+      other.from === this.from &&
+      other.activeReference === this.activeReference &&
+      other.papers === this.papers &&
+      other.reading === this.reading
+    )
+  }
+
+  toDOM(view: EditorView): HTMLElement {
+    const wrap = document.createElement('div')
+    wrap.className = 'cm-table-wrap'
+    const table = document.createElement('table')
+    const { header, align, rows } = this.table
+    const row = (cells: string[], tag: 'th' | 'td'): HTMLTableRowElement => {
+      const line = document.createElement('tr')
+      header.forEach((_unused, column) => {
+        const cell = document.createElement(tag)
+        // Escaped and limited to a fixed set of constructs in renderInline.
+        cell.innerHTML = renderInline(cells[column] ?? '')
+        if (align[column]) cell.style.textAlign = align[column]!
+        line.append(cell)
+      })
+      return line
+    }
+    const head = document.createElement('thead')
+    head.append(row(header, 'th'))
+    const body = document.createElement('tbody')
+    for (const cells of rows) body.append(row(cells, 'td'))
+    table.append(head, body)
+    wrap.append(table)
+
+    // The links inside look and behave as they do in a paragraph.
+    for (const link of wrap.querySelectorAll<HTMLElement>('[data-source-ref]')) {
+      const tone: CitationTone = link.dataset.sourceRef === this.activeReference ? 'active' : 'other'
+      link.className = `cm-source-link ${citationClass(tone, false)}`
+    }
+    for (const link of wrap.querySelectorAll<HTMLElement>('[data-paper]')) {
+      const known = this.papers.find((paper) => paper.documentId === link.dataset.paper)
+      link.className = known ? 'cm-paper-link' : 'cm-paper-link missing'
+      link.title = known ? known.title : 'This paper is not in the library (any more)'
+    }
+
+    wrap.addEventListener('mousedown', (event) => {
+      const target = event.target as HTMLElement | null
+      const follow = this.reading || event.metaKey || event.ctrlKey
+      const cited = target?.closest<HTMLElement>('[data-source-ref]')?.dataset.sourceRef
+      const paper = target?.closest<HTMLElement>('[data-paper]')
+      if (follow && cited) {
+        event.preventDefault()
+        this.options.onOpenSource?.(cited)
+        return
+      }
+      if (follow && paper) {
+        event.preventDefault()
+        if (!paper.classList.contains('missing')) this.options.onOpenPaper?.(paper.dataset.paper!)
+        return
+      }
+      // An ordinary link opens as links do; and reading, a click is only a click.
+      if (target?.closest('a[href]') || this.reading) return
+      // Editing: the click is on the table to change it. Put the cursor in,
+      // which shows it as written.
+      event.preventDefault()
+      view.dispatch({ selection: { anchor: this.from } })
+      view.focus()
+    })
+    return wrap
+  }
+
+  ignoreEvent(event: Event): boolean {
+    return event.type === 'mousedown'
+  }
+}
+
+const TABLE_SOURCE_LINE = Decoration.line({ class: 'cm-table-source' })
+
+/**
+ * Tables, as decorations. A table drawn in place of its lines changes the
+ * height of what is shown, which only decorations held in the state may do —
+ * so these are kept apart from the rest, in a field of their own.
+ */
+function tableDecorations(state: EditorState, options: LivePreviewOptions): DecorationSet {
+  if (state.field(sourceMode, false)) return Decoration.none
+  const doc = state.doc
+  const reading = state.field(readingMode, false) ?? false
+  const active = state.field(activeCitation, false)?.referenceId ?? null
+  const papers = state.field(knownPapers, false) ?? []
+  const lines = doc.toString().split('\n')
+  const ranges: Range<Decoration>[] = []
+  for (const table of findTables(lines)) {
+    const from = doc.line(table.fromLine + 1).from
+    const to = doc.line(table.toLine + 1).to
+    if (!reading && touchesSelection(state.selection, from, to)) {
+      // Being edited: as written, in a face where the columns line up.
+      for (let line = table.fromLine + 1; line <= table.toLine + 1; line += 1) {
+        ranges.push(TABLE_SOURCE_LINE.range(doc.line(line).from))
+      }
+      continue
+    }
+    const source = lines.slice(table.fromLine, table.toLine + 1).join('\n')
+    ranges.push(
+      Decoration.replace({
+        widget: new TableWidget(source, table, from, options, active, papers, reading),
+        block: true,
+      }).range(from, to),
+    )
+  }
+  return Decoration.set(ranges, true)
+}
+
+function tableField(options: LivePreviewOptions): StateField<DecorationSet> {
+  return StateField.define<DecorationSet>({
+    create: (state) => tableDecorations(state, options),
+    update(value, transaction) {
+      const before = transaction.startState
+      const after = transaction.state
+      if (
+        transaction.docChanged ||
+        transaction.selection !== undefined ||
+        before.field(sourceMode, false) !== after.field(sourceMode, false) ||
+        before.field(readingMode, false) !== after.field(readingMode, false) ||
+        before.field(knownPapers, false) !== after.field(knownPapers, false) ||
+        before.field(activeCitation, false)?.referenceId !==
+          after.field(activeCitation, false)?.referenceId
+      ) {
+        return tableDecorations(after, options)
+      }
+      return value
+    },
+    provide: (field) => EditorView.decorations.from(field),
+  })
 }
 
 class BulletWidget extends WidgetType {
@@ -631,6 +789,7 @@ export function livePreview(options: LivePreviewOptions = {}): Extension {
     activeCitation,
     readingMode.init(() => options.reading ?? false),
     knownPapers,
+    tableField(options),
     plugin,
     EditorView.atomicRanges.of((view) => view.plugin(plugin)?.atomic ?? Decoration.none),
     theme,
@@ -694,4 +853,33 @@ const theme = EditorView.baseTheme({
     cursor: 'default',
   },
   '.cm-math-display': { display: 'inline-block', width: '100%', textAlign: 'center' },
+  // A table wider than the note scrolls within itself. Padding, not margin:
+  // the editor measures the block, and a margin would be left out of it.
+  '.cm-table-wrap': {
+    overflowX: 'auto',
+    padding: '0.35em 0 0.35em 6px',
+    // The editor wraps its lines anywhere, to keep long words inside the
+    // page; in a cell that breaks "investment" in two to save a column.
+    whiteSpace: 'normal',
+    overflowWrap: 'normal',
+    wordBreak: 'normal',
+  },
+  '.cm-table-wrap table': { borderCollapse: 'collapse', fontSize: '0.93em' },
+  '.cm-table-wrap th, .cm-table-wrap td': {
+    border: '1px solid var(--rule)',
+    padding: '0.25em 0.6em',
+    textAlign: 'left',
+    verticalAlign: 'top',
+  },
+  '.cm-table-wrap th': { background: 'var(--code-bg)', fontWeight: '600' },
+  '.cm-table-wrap code': {
+    fontFamily: 'var(--mono)',
+    fontSize: '0.92em',
+    background: 'var(--code-bg)',
+    borderRadius: '3px',
+    padding: '0.05em 0.25em',
+  },
+  '.cm-table-wrap a[href]': { color: 'var(--accent)' },
+  // The same table as written, while it is being edited.
+  '.cm-table-source': { fontFamily: 'var(--mono)', fontSize: '0.88em' },
 })
