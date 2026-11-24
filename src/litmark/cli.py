@@ -1,4 +1,10 @@
-"""Command line entry point: `init`, `clone`, `serve`, `sync`, and `doctor`."""
+"""Command line entry point.
+
+Two kinds of command share it. `init`, `clone`, `serve`, `sync` and `doctor`
+act on a project directory on this machine. The rest (`recall`, `add`,
+`append`, … — see :mod:`client`) ask a server that is already running, from
+wherever you are, with the token it was started with.
+"""
 
 from __future__ import annotations
 
@@ -26,6 +32,12 @@ def build_parser() -> argparse.ArgumentParser:
         description=(
             "A local research workspace: import papers, read cited summaries, write "
             "sourced Markdown notes, and chat with a coding agent."
+        ),
+        epilog=(
+            "init, clone, sync, serve and doctor act on a project directory here. "
+            "The other commands ask a running server, wherever it is: set "
+            "LITMARK_URL to its address and LITMARK_MCP_TOKEN to the token it was "
+            "started with."
         ),
     )
     parser.add_argument("--verbose", "-v", action="store_true", help="Log debug output.")
@@ -116,6 +128,9 @@ def build_parser() -> argparse.ArgumentParser:
     doctor = sub.add_parser("doctor", help="Check the workspace, sync, and agent setup.")
     doctor.add_argument("path", type=Path, nargs="?", default=Path.cwd())
 
+    from .client import add_commands
+
+    add_commands(sub)
     return parser
 
 
@@ -158,6 +173,10 @@ def main(argv: list[str] | None = None) -> int:
             return cmd_serve(args)
         if args.command == "doctor":
             return cmd_doctor(args)
+        from .client import COMMANDS, run
+
+        if args.command in COMMANDS:
+            return run(args)
     except WorkspaceError as exc:
         print(f"error: {exc.message}", file=sys.stderr)
         return 1

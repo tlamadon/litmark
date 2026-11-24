@@ -186,6 +186,61 @@ behind TLS. Whoever holds the token can read every paper and note and rewrite
 them. With `LITMARK_PASSWORD` also set, the browser is still asked for the
 password; `/mcp` asks for the token instead.
 
+## From a terminal
+
+The same memory, without a session in between. `litmark serve` runs where the
+project lives; the commands below run wherever `litmark` is installed and ask
+that server. They need its address and its token — the one in
+`LITMARK_MCP_TOKEN` — and no project directory of their own:
+
+```bash
+export LITMARK_URL=http://<its-name>:8765
+export LITMARK_MCP_TOKEN=…        # the token the server was started with
+
+litmark recall minimum wage employment
+litmark add ~/Downloads/card-krueger.pdf --tag field:labor
+litmark pages doc-007 3-5
+litmark cite doc-007 4 "no indication that the rise in the minimum wage reduced employment"
+litmark append reading-log "No employment effect [Card and Krueger, p. 4](source:ref-031)."
+litmark edit reading-log          # in $EDITOR
+```
+
+| | |
+|---|---|
+| `recall WORDS…` | notes, summaries and passages on a subject, in one go |
+| `papers`, `search WORDS…` | the papers with their IDs and tags; passages of their text (`--tag`, `--in DOC`) |
+| `pages DOC 3 4-6` | a paper's extracted text, page by page |
+| `summary DOC` | a paper's summary |
+| `notes`, `note NOTE` | the notes; one of them |
+| `append NOTE [TEXT]` | add to the end of a note, from the arguments or standard input |
+| `write NOTE`, `edit NOTE` | replace a note from standard input or `--file`; or open it in `$EDITOR` |
+| `add PDF…` | send papers in (`--tag`, `--no-summary`) and wait for their text |
+| `tag DOC… --add T --remove T` | change tags |
+| `cite DOC PAGE "QUOTE"` | register a quotation, and print the link that cites it |
+| `tools`, `call TOOL key=value…` | everything the server can be asked, and a way to ask for any of it |
+
+Each command is one call to the tools a session gets over MCP, so the rules are
+the same ones. `write` replaces an existing note only with the revision you
+read (`note` reports it, `--revision` takes it; `edit` does both for you, and
+keeps what you typed if the save is refused). A link to a source must be to one
+that `cite` registered.
+
+**Output is for reading; `--json` gives the answer as it came.** `note` and
+`summary` print the text alone on standard output, so `litmark note plan >
+plan.md` is the note. A command that was refused says why and exits with 1.
+
+**What a command writes is on the record** like any other edit from outside,
+under the name `cli`. Run by a Claude Code session, a command is recorded as
+`claude-code` — as it would be had the session connected over MCP — so what you
+typed and what a session did stay apart. Set `LITMARK_CLIENT`, or pass `--as`,
+to name a machine instead.
+
+For a session that has a shell, this is also a way to use the project with
+nothing connected beforehand: `litmark recall …` in a terminal is the same
+question as the `recall` tool. The token is read from the environment only,
+never from the command line, and is sent to whatever `LITMARK_URL` names — the
+same care applies as for MCP.
+
 ## Tags
 
 A tag is your own label for gathering papers: a field, a year's job market, a
