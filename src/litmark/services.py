@@ -22,9 +22,9 @@ from .agent.runner import DEFAULT_PARALLEL_RUNS, AgentRunner
 from .agent.tools import ProjectTools
 from .bibliography import Bibliography, build_bibliography
 from .db import Database
-from .documents import DocumentStore
+from .documents import DocumentStore, normalize_tags
 from .errors import WorkspaceError
-from .events import DOCUMENT_UPDATED, SYNC_UPDATED, EventBus
+from .events import DOCUMENT_UPDATED, FILE_CHANGED, SYNC_UPDATED, EventBus
 from .gitsync import GitError, GitSync
 from .jobs import JobQueue
 from .papersync import PaperSync
@@ -80,6 +80,7 @@ class Services:
         if self.papers.enabled:
             self.documents.fetch_pages = self.papers.ensure_pages
         self.git = GitSync(workspace.root, settings, papers_in_storage=self.papers.enabled)
+        self.git.annotate = self._outside_edits
         git_settings = settings.get("git") if isinstance(settings.get("git"), dict) else {}
         self._sync_quiet = float(git_settings.get("quiet_seconds", SYNC_QUIET_SECONDS))
         self._sync_fetch = float(git_settings.get("fetch_seconds", SYNC_FETCH_SECONDS))
@@ -89,6 +90,7 @@ class Services:
         self._last_exchange = 0.0
         self.tools = ProjectTools(workspace, self.documents, self.references, self.db)
         self.tools.on_documents_changed = self.announce_documents
+        self.tools.on_external_change = self._announce_change
         self.auto_summary = bool(agent_settings.get("auto_summary", True))
 
         self.backend_name = backend_name or str(agent_settings.get("backend", "claude"))
@@ -153,6 +155,58 @@ class Services:
         """Tell every open window that these papers' details changed."""
         if document_ids:
             self.bus.publish(DOCUMENT_UPDATED, {"document_ids": document_ids})
+
+    def _announce_change(self, change: dict[str, Any]) -> None:
+        """An edit from outside this application's own runs: show it everywhere."""
+        self.bus.publish(FILE_CHANGED, change)
+
+    def import_paper(
+        self,
+        data: bytes,
+        filename: str,
+        *,
+        tags: list[str] | None = None,
+        summarize: bool = True,
+        origin: str,
+    ) -> dict[str, Any]:
+        """Take in a PDF sent by a session elsewhere, and record who sent it."""
+        wanted = normalize_tags(tags or [])
+        document, duplicate = self.documents.import_pdf(data, filename)
+        document_id = document.document_id
+        if wanted:
+            self.documents.tag([document_id], add=wanted)
+        if not duplicate:
+            self.tools.record_document_change(
+                document_id, origin=origin, summary=f"Imported {document.original_filename}"
+            )
+            self.enqueue_extraction(document_id, summarize=summarize)
+        self.announce_documents([document_id])
+        return {"document_id": document_id, "duplicate": duplicate}
+
+    def _outside_edits(self) -> str:
+        """For a commit message: which sessions elsewhere wrote what is in it.
+
+        The record of edits lives in this machine's database; the commit is what
+        travels with the project, so the attribution is written there too.
+        """
+        since = int(self.db.get_meta("attributed_through", "0") or 0)
+        rows = self.db.query(
+            "SELECT rowid, origin, target_kind, target_id FROM changes "
+            "WHERE rowid > ? AND origin LIKE 'mcp:%' ORDER BY rowid",
+            (since,),
+        )
+        latest = self.db.query_one("SELECT COALESCE(MAX(rowid), 0) AS seq FROM changes")
+        self.db.set_meta("attributed_through", str(latest["seq"] if latest else since))
+        by_origin: dict[str, list[str]] = {}
+        for item in rows:
+            target = f"{item['target_kind']} {item['target_id']}"
+            targets = by_origin.setdefault(str(item["origin"]), [])
+            if target not in targets:
+                targets.append(target)
+        return "\n".join(
+            f"Edited over MCP by {origin.removeprefix('mcp:')}: {', '.join(targets)}"
+            for origin, targets in by_origin.items()
+        )
 
     def enqueue_extraction(self, document_id: str, *, summarize: bool = True) -> str:
         return self.jobs.enqueue(

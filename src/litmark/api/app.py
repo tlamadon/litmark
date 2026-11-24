@@ -15,6 +15,7 @@ credential remains the real boundary in both cases.
 
 from __future__ import annotations
 
+import contextlib
 import logging
 from collections.abc import Awaitable, Callable
 from importlib import resources
@@ -25,7 +26,8 @@ from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 
 from .. import __version__
-from ..errors import WorkspaceError
+from ..errors import InvalidInput, WorkspaceError
+from ..mcpserver import MCP_PATH, TOKEN_ENV, UPLOAD_PATH, UploadTickets
 from ..services import Services
 from .routes import build_router
 
@@ -55,6 +57,7 @@ def create_app(
     dev_origin: str | None = None,
     allowed_hosts: set[str] | None = None,
     password: str | None = None,
+    mcp_token: str | None = None,
 ) -> FastAPI:
     """Build the application.
 
@@ -62,6 +65,10 @@ def create_app(
     served — the page included, since the page carries the session credential.
     It is for a server reachable by more than its owner (a container on a
     host); it protects nothing in transit, so it belongs behind TLS.
+
+    ``mcp_token``, when set, opens the project to sessions elsewhere: the MCP
+    endpoint at ``/mcp``, which asks for that token as a bearer credential, and
+    the one-time upload addresses it hands out. Unset, neither is served.
 
     ``allowed_hosts`` widens host and origin validation for a reverse proxy or
     port-forward. Pass ``{"*"}`` to accept any hostname, which is what a proxy
@@ -79,6 +86,14 @@ def create_app(
     )
     app.state.services = services
     app.state.dev_origin = dev_origin
+    tickets = UploadTickets()
+    mcp_endpoint: object | None = None
+    mcp_sessions: object | None = None
+    mcp_running = contextlib.AsyncExitStack()
+    if mcp_token:
+        from ..mcpserver import asgi_endpoint, build_server
+
+        mcp_endpoint, mcp_sessions = asgi_endpoint(build_server(services, tickets))
 
     @app.on_event("startup")
     async def _startup() -> None:
@@ -88,6 +103,8 @@ def create_app(
         recovered = services.recover()
         services.runner.start()
         services.start_sync()
+        if mcp_sessions is not None:
+            await mcp_running.enter_async_context(mcp_sessions.run())  # type: ignore[attr-defined]
         log.info(
             "Opened project %s (requeued %s jobs, marked %s interrupted runs)",
             services.workspace.root,
@@ -97,6 +114,7 @@ def create_app(
 
     @app.on_event("shutdown")
     async def _shutdown() -> None:
+        await mcp_running.aclose()
         await services.shutdown()
 
     @app.middleware("http")
@@ -119,7 +137,37 @@ def create_app(
                 },
                 status_code=400,
             )
-        if password and not _password_given(request, password):
+        path = request.url.path
+        outside = _outside_route(path, request.method, enabled=bool(mcp_token))
+        if outside == "mcp":
+            # Its own credential, for a program rather than a person: a bearer
+            # token, which cannot share a header with the browser's password.
+            if not mcp_token:
+                return JSONResponse(
+                    {
+                        "error": {
+                            "code": "mcp_disabled",
+                            "message": (
+                                "This server does not accept MCP connections. Start "
+                                f"it with {TOKEN_ENV} set to a long random token."
+                            ),
+                        }
+                    },
+                    status_code=404,
+                )
+            if not _bearer_given(request, mcp_token):
+                return JSONResponse(
+                    {
+                        "error": {
+                            "code": "unauthorized",
+                            "message": "Send the access token as `Authorization: Bearer <token>`.",
+                        }
+                    },
+                    status_code=401,
+                    headers={"www-authenticate": 'Bearer realm="Litmark MCP"'},
+                )
+        # An upload address is its own credential, checked where it is used.
+        if password and not outside and not _password_given(request, password):
             return PlainTextResponse(
                 "This Litmark server asks for a password.\n",
                 status_code=401,
@@ -137,7 +185,6 @@ def create_app(
                 status_code=403,
             )
 
-        path = request.url.path
         if path.startswith("/api/") and not _authorized(request, services.session_token):
             return JSONResponse(
                 {
@@ -163,6 +210,15 @@ def create_app(
         return JSONResponse(exc.to_payload(), status_code=exc.status_code)
 
     app.include_router(build_router(), prefix="/api")
+
+    if mcp_endpoint is not None:
+        from starlette.routing import Route
+
+        app.router.routes.append(Route(MCP_PATH, endpoint=mcp_endpoint))
+
+        @app.api_route(UPLOAD_PATH + "/{ticket_id}", methods=["PUT", "POST"])
+        async def upload_paper(request: Request, ticket_id: str, wait: float = 60.0) -> JSONResponse:
+            return await _receive_paper(request, services, tickets, ticket_id, wait)
 
     assets = static_root()
     if assets is not None:
@@ -193,6 +249,147 @@ def create_app(
             )
 
     return app
+
+
+async def _receive_paper(
+    request: Request,
+    services: Services,
+    tickets: UploadTickets,
+    ticket_id: str,
+    wait: float,
+) -> JSONResponse:
+    """Take the PDF a session was given leave to send, and say what became of it.
+
+    The answer waits a while for the text to be extracted, so that one request
+    is enough to go from a file to a paper that can be read and cited.
+    """
+    import asyncio
+
+    from fastapi.concurrency import run_in_threadpool
+
+    ticket = tickets.get(ticket_id)
+    if ticket is None:
+        return JSONResponse(
+            {
+                "error": {
+                    "code": "upload_expired",
+                    "message": (
+                        "This upload address is unknown, already used, or expired. "
+                        "Ask for a new one with the add_paper tool."
+                    ),
+                }
+            },
+            status_code=404,
+        )
+    limit = services.documents.max_upload_bytes
+    chunks: list[bytes] = []
+    size = 0
+    async for chunk in request.stream():
+        size += len(chunk)
+        if size > limit:
+            return JSONResponse(
+                {
+                    "error": {
+                        "code": "too_large",
+                        "message": f"The file is over this project's {limit / 1e6:.0f} MB limit.",
+                    }
+                },
+                status_code=413,
+            )
+        chunks.append(chunk)
+    data = b"".join(chunks)
+    try:
+        imported = await run_in_threadpool(
+            lambda: services.import_paper(
+                data,
+                ticket.filename,
+                tags=ticket.tags,
+                summarize=ticket.summarize,
+                origin=ticket.origin,
+            )
+        )
+    except InvalidInput as exc:
+        message = exc.message
+        if "multipart" in (request.headers.get("content-type") or ""):
+            message += " Send the file itself as the request body (curl -T), not a form."
+        return JSONResponse(
+            {"error": {"code": exc.code, "message": message}}, status_code=exc.status_code
+        )
+    tickets.spend(ticket_id)
+
+    document_id = imported["document_id"]
+    deadline = asyncio.get_running_loop().time() + max(0.0, min(wait, 300.0))
+    while True:
+        document = services.documents.get(document_id)
+        status = document.extraction.get("status")
+        if status in ("ok", "failed") or asyncio.get_running_loop().time() >= deadline:
+            break
+        await asyncio.sleep(0.3)
+
+    if status == "ok":
+        message = (
+            "The paper is in the library and its text is extracted: read it with "
+            "read_pages, cite it with resolve_source."
+        )
+    elif status == "failed":
+        message = (
+            "The paper is stored, but its text could not be extracted: "
+            f"{document.extraction.get('error') or 'no reason was recorded'}"
+        )
+    else:
+        message = (
+            "The paper is stored and its text is still being extracted. "
+            "list_documents shows when it is ready (extraction_status: ok)."
+        )
+    if imported["duplicate"]:
+        message = "This paper was already in the library; nothing was added. " + message
+    return JSONResponse(
+        {
+            "ok": True,
+            "document_id": document_id,
+            "title": document.display_title,
+            "duplicate": imported["duplicate"],
+            "page_count": document.page_count,
+            "tags": document.tags,
+            "extraction_status": status,
+            "extraction_quality": document.extraction.get("quality"),
+            "extraction_warnings": document.extraction.get("warnings") or [],
+            "message": message,
+        },
+        status_code=200 if imported["duplicate"] else 201,
+    )
+
+
+def _outside_route(path: str, method: str, *, enabled: bool) -> str | None:
+    """Whether a request is one a session elsewhere makes, with its own credential.
+
+    Drawn narrowly, because what it returns excuses the request from the
+    browser's password: exactly the MCP endpoint, and exactly the sending of a
+    file to an upload address. Anything else under those names — a GET, which
+    would otherwise be answered with the page and the credential in it — is
+    treated as the browser's.
+    """
+    if path.rstrip("/") == MCP_PATH:
+        return "mcp"
+    ticket = path.removeprefix(UPLOAD_PATH + "/")
+    if (
+        enabled
+        and path.startswith(UPLOAD_PATH + "/")
+        and ticket
+        and "/" not in ticket
+        and method in ("PUT", "POST")
+    ):
+        return "upload"
+    return None
+
+
+def _bearer_given(request: Request, token: str) -> bool:
+    import hmac
+
+    scheme, _, supplied = (request.headers.get("authorization") or "").partition(" ")
+    if scheme.lower() != "bearer" or not supplied.strip():
+        return False
+    return hmac.compare_digest(supplied.strip().encode("utf-8"), token.encode("utf-8"))
 
 
 def _render_index(assets: Path, token: str) -> str:

@@ -10,7 +10,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 
-import { describeTool, pageRange, transcriptOf } from './bundle/chat/describe.mjs'
+import { describeOrigin, describeTool, pageRange, transcriptOf } from './bundle/chat/describe.mjs'
 import { applyEvent, foldEvent, latestSeq, turnFromRecord } from './bundle/chat/turns.mjs'
 
 const NAMES = {
@@ -301,4 +301,39 @@ test('steps about tags say which papers and which tags', () => {
     NAMES,
   )
   assert.equal(searched.target, '“minimum wage” in papers tagged field:labor — 3 matches')
+})
+
+test('recalling and adding to a note read as what they are', () => {
+  const tool = (name, input, result = {}) => ({
+    kind: 'tool', id: 'x', tool: name, input, result, finished: true, isError: false,
+  })
+  const recalled = describeTool(tool('recall', { query: 'mobility restrictions' }, { count: 4 }), NAMES)
+  assert.equal(recalled.verb, 'recalled')
+  assert.equal(recalled.target, '“mobility restrictions” — 4 things found')
+
+  const added = describeTool(
+    tool('append_note', { note_id: 'welcome', text: 'x' }, { ok: true, title: 'Welcome' }),
+    NAMES,
+  )
+  assert.equal(added.verb, 'added to')
+  assert.equal(added.target, 'note “Welcome”')
+  assert.deepEqual(added.open, { kind: 'note', noteId: 'welcome' })
+
+  const made = describeTool(
+    tool('append_note', { note_id: 'log', text: 'x' }, { ok: true, created: true, title: 'Log' }),
+    NAMES,
+  )
+  assert.equal(made.verb, 'created')
+})
+
+test('an edit says who made it, and whether that was from outside', () => {
+  assert.deepEqual(
+    [describeOrigin('user').label, describeOrigin('agent').label],
+    ['you', 'Litmark'],
+  )
+  const outside = describeOrigin('mcp:claude-code')
+  assert.equal(outside.label, 'claude-code')
+  assert.equal(outside.outside, true)
+  assert.match(outside.title, /over MCP/)
+  assert.equal(describeOrigin('user').outside, false)
 })

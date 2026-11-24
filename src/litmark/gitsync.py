@@ -30,6 +30,7 @@ import re
 import socket
 import subprocess
 import threading
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -90,6 +91,9 @@ class GitSync:
         self._lock = threading.Lock()
         self._has_identity: bool | None = None
         self._last: dict[str, Any] = {"synced_at": None, "error": None, "conflict": None}
+        # Asked for lines to add to a commit's message, when one is about to be
+        # made: the application's account of who wrote what is in it.
+        self.annotate: Callable[[], str] | None = None
 
     # ------------------------------------------------------------ plumbing
 
@@ -343,7 +347,16 @@ class GitSync:
         self._run("add", "-A")
         if self._run("diff", "--cached", "--quiet", check=False).returncode == 0:
             return None
-        self._run("commit", "-m", message or describe_changes(changed))
+        text = message or describe_changes(changed)
+        if self.annotate is not None:
+            try:
+                extra = self.annotate().strip()
+            except Exception:  # noqa: BLE001 - the commit matters more than its footnote
+                log.exception("Could not annotate the commit")
+                extra = ""
+            if extra:
+                text = f"{text.rstrip()}\n\n{extra}\n"
+        self._run("commit", "-m", text)
         return self._run("rev-parse", "--short", "HEAD").stdout.strip()
 
     # ---------------------------------------------------------------- sync

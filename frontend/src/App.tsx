@@ -224,6 +224,10 @@ export function App() {
         if (event.type === 'document_updated' || event.type === 'job_updated') {
           void refreshState()
         }
+        if (event.type === 'document_updated') {
+          // A paper sent or relabelled from elsewhere is in the record of edits.
+          void api.changes().then((payload) => setChanges(payload.changes))
+        }
         if (event.type === 'file_changed') {
           void refreshState()
           void api.changes().then((payload) => setChanges(payload.changes))

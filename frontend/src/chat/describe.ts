@@ -124,6 +124,19 @@ export function describeTool(entry: ToolEntry, names: Names): Activity {
       }
     }
 
+    case 'recall': {
+      const tags = tagList(input.tags)
+      return {
+        ...base,
+        verb: 'recalled',
+        target: `“${shorten(text(input.query), 60)}”${tags ? ` in papers tagged ${tags}` : ''}${count(
+          result,
+          'thing found',
+          'things found',
+        )}`,
+      }
+    }
+
     case 'read_pages': {
       const pages = (Array.isArray(input.pages) ? input.pages : [])
         .map(Number)
@@ -190,10 +203,16 @@ export function describeTool(entry: ToolEntry, names: Names): Activity {
     }
 
     case 'write_note':
+    case 'append_note':
     case 'patch_note': {
       const title = text(result?.title) || names.note(noteId)
-      const verb =
-        entry.tool === 'patch_note' ? 'edited' : result?.created ? 'created' : 'rewrote'
+      const verb = result?.created
+        ? 'created'
+        : entry.tool === 'patch_note'
+          ? 'edited'
+          : entry.tool === 'append_note'
+            ? 'added to'
+            : 'rewrote'
       return {
         ...base,
         tone: entry.finished && !entry.isError ? 'ok' : tone,
@@ -233,6 +252,26 @@ export function describeChange(entry: ChangeEntry, names: Names): Activity {
       ? { kind: 'note', noteId: entry.targetId }
       : { kind: 'summary', documentId: entry.targetId },
   }
+}
+
+/**
+ * Who made an edit, as a reader would say it. The record keeps `user`,
+ * `agent`, or `mcp:<client>` for a session elsewhere that wrote over MCP.
+ */
+export function describeOrigin(origin: string): { label: string; outside: boolean; title: string } {
+  if (origin.startsWith('mcp:')) {
+    const client = origin.slice(4) || 'another session'
+    return {
+      label: client,
+      outside: true,
+      title: `Written from outside Litmark, by a session calling itself “${client}” (over MCP)`,
+    }
+  }
+  if (origin === 'user') return { label: 'you', outside: false, title: 'Saved from the editor' }
+  if (origin === 'agent') {
+    return { label: 'Litmark', outside: false, title: 'Written by the agent in this window' }
+  }
+  return { label: origin, outside: false, title: origin }
 }
 
 /* ----------------------------------------------------------- transcript */

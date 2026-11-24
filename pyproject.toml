@@ -38,6 +38,9 @@ dependencies = [
 claude = ["claude-agent-sdk>=0.2,<1.0"]
 # Papers in any S3-compatible store. Not needed for the directory backend.
 s3 = ["boto3>=1.34,<2.0"]
+# Serving the project to other sessions over MCP. The agent adapter brings an
+# MCP library too, but accepts versions older than the server here is written for.
+mcp = ["mcp>=2.3,<3.0"]
 
 [project.scripts]
 litmark = "litmark.cli:main"
@@ -56,6 +59,7 @@ dev = [
   # The S3 backend is tested against an emulator, through the real client.
   "boto3>=1.34,<2.0",
   "moto[s3]>=5.0",
+  "mcp>=2.3,<3.0",
 ]
 
 [tool.hatch.version]

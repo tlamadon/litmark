@@ -36,7 +36,7 @@ RUN apt-get update \
 
 COPY --from=wheel /dist/ /tmp/dist/
 # The `claude` extra brings the agent runtime with it; nothing else to install.
-RUN pip install --no-cache-dir "$(ls /tmp/dist/*.whl)[claude,s3]" && rm -rf /tmp/dist
+RUN pip install --no-cache-dir "$(ls /tmp/dist/*.whl)[claude,s3,mcp]" && rm -rf /tmp/dist
 # An image without the agent runtime or the browser assets would start, and
 # then be useless. Better that the build fails, on whichever architecture.
 RUN python - <<'PY'

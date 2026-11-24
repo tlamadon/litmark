@@ -166,6 +166,10 @@ def build_router() -> APIRouter:
             create=not exists,
             snapshot_reason="user",
         )
+        if exists and note.revision == body.expected_revision:
+            # The text that was already there: nothing was edited, so there is
+            # nothing to record, and no edit to attribute to the user.
+            return note.to_json()
         services.db.execute(
             "INSERT INTO changes(id, target_kind, target_id, origin, summary, "
             "base_revision, new_revision, created_at) VALUES(?, ?, ?, ?, ?, ?, ?, ?)",

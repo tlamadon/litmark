@@ -8,7 +8,7 @@
 
 import { markdown, markdownLanguage } from '@codemirror/lang-markdown'
 import { history, historyKeymap, defaultKeymap, indentWithTab } from '@codemirror/commands'
-import { Compartment, EditorState, type Extension } from '@codemirror/state'
+import { Annotation, Compartment, EditorState, type Extension } from '@codemirror/state'
 import { search, searchKeymap } from '@codemirror/search'
 import {
   EditorView,
@@ -77,6 +77,9 @@ export interface RevealResult {
 }
 
 const AUTOSAVE_DELAY_MS = 900
+
+/** Marks a change that brings in what the file now holds, not what was typed. */
+const fromDisk = Annotation.define<boolean>()
 
 export function MarkdownEditor(props: MarkdownEditorProps) {
   const host = useRef<HTMLDivElement | null>(null)
@@ -226,7 +229,11 @@ export function MarkdownEditor(props: MarkdownEditorProps) {
         indentWithTab,
       ]),
       EditorView.updateListener.of((update) => {
-        if (update.docChanged) {
+        // Text put in because the file changed elsewhere is not an edit made
+        // here: saving it back would write what was just read, and record a
+        // save by the user that never happened.
+        const reloaded = update.transactions.some((tr) => tr.annotation(fromDisk))
+        if (update.docChanged && !reloaded) {
           setState({ kind: 'dirty' })
           latest.current.onDirtyChange?.(true)
           schedule()
@@ -349,6 +356,7 @@ export function MarkdownEditor(props: MarkdownEditorProps) {
     }
     editor.dispatch({
       changes: { from: 0, to: editor.state.doc.length, insert: props.text },
+      annotations: fromDisk.of(true),
     })
     revision.current = props.revision
     setState({ kind: 'clean' })

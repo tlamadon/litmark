@@ -702,6 +702,26 @@ button.tag:hover {
   font-size: 0.82rem;
 }
 
+.changes li > span:first-child {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+/* The name of what was edited runs on in the line, however long it is. */
+.changes li > span:first-child .link {
+  display: inline;
+  padding: 0;
+  text-align: left;
+}
+
+/* Written from outside, by a session elsewhere: worth telling apart at a glance. */
+.changes .origin.outside {
+  padding: 0 0.3rem;
+  border-radius: 0.25rem;
+  background: var(--mark-other);
+  font-weight: 600;
+}
+
 /* ------------------------------------------------------------------- main */
 
 .main {

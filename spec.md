@@ -227,10 +227,12 @@ Provide project tools with explicit schemas:
 | `list_documents` | IDs, metadata, tags, summaries, and availability status; optionally only the documents carrying given tags. |
 | `tag_documents` | Tags added to, or removed from, one or more documents. |
 | `search_documents` | Matching passages with document IDs and physical page numbers; optionally restricted to documents carrying given tags. |
+| `recall` | What the project already holds on a subject, across notes, summaries and page text, with excerpts. |
 | `read_pages` | Extracted page text and extraction warnings. |
 | `read_note` | Markdown text and current revision/hash. |
 | `resolve_source` | A registered reference ID or an explicit matching failure. |
 | `write_note` / `patch_note` | A version-checked edit with a persisted change record. |
+| `append_note` | Text added at the end of a note (created if absent), without the caller reading it first. |
 | `read_summary` / `write_summary` | A document summary and its revision; writes are version-checked like notes. |
 | `list_notes` | Note IDs, titles, and revisions. |
 
@@ -305,6 +307,15 @@ Operational state under `.research/` — conversations among it — is not synce
 ### Access when served beyond the owner's machine
 
 An optional password (`LITMARK_PASSWORD`, HTTP Basic) is required before anything is served, the page included, since the page carries the session credential. It is single-user access control for a container on a host, to be used behind TLS; multi-user authentication remains out of scope.
+
+### Access by other sessions over MCP
+
+*(Added after v0.1.)* The project doubles as a memory for agent sessions running elsewhere: a session discussing a paper recalls what the project holds and sets down what it learns, and the result is ordinary project content — cited notes and summaries, visible in the interface and synced like the rest. No separate store of "memories" exists.
+
+- The server answers MCP over streamable HTTP at `/mcp`, only when started with `LITMARK_MCP_TOKEN`, which the client presents as a bearer credential. It is stateless and answers in JSON, so a client's connection survives a restart. Host validation applies as everywhere; the browser's password does not, since the two credentials cannot share a header. This is single-user access for a private network; OAuth for hosted clients is out of scope.
+- It serves the same project tools as the built-in agent, by name from an explicit list, plus `add_paper`.
+- **Attribution.** Every change made this way is recorded with origin `mcp:<client>` — the name from the client's handshake, or an `X-Litmark-Client` header — which the caller cannot set through tool arguments. Such changes are announced to open windows immediately, are undoable like the agent's, and are named in the body of the git commit that carries them, because the change log itself is local state and is not synced. Imports and tag changes are logged too, without an undo.
+- **Papers.** A tool call cannot carry a file. `add_paper` issues a single-use upload address, valid for fifteen minutes and held in memory; the session sends the PDF's bytes to it with an HTTP PUT. The address is its own credential. The response waits for extraction (bounded) so one request yields a paper that can be read and cited. Litmark does not fetch papers from the network itself.
 
 ## 10. Proposed implementation
 

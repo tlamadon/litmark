@@ -301,7 +301,7 @@ class ClaudeAgentBackend(AgentBackend):
         @tool_decorator(name, schema["description"], schema["input_schema"])
         async def handler(args: dict[str, Any]) -> dict[str, Any]:
             arguments = dict(args or {})
-            if name in {"write_note", "patch_note", "write_summary"}:
+            if name in {"write_note", "patch_note", "append_note", "write_summary"}:
                 arguments.setdefault("run_id", run_id)
             loop = asyncio.get_running_loop()
             result = await loop.run_in_executor(

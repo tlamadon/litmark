@@ -321,6 +321,7 @@ def cmd_serve(args: argparse.Namespace) -> int:
     import uvicorn
 
     from .api.app import create_app, static_root
+    from .mcpserver import MCP_PATH, TOKEN_ENV, check_token, require_library
     from .services import open_services
 
     services = open_services(args.path, backend_name=args.backend)
@@ -335,8 +336,17 @@ def cmd_serve(args: argparse.Namespace) -> int:
     # From the environment only: a password on a command line is in every
     # process listing.
     password = os.environ.get(PASSWORD_ENV) or None
+    # Likewise the token that lets sessions elsewhere use the project over MCP.
+    mcp_token = os.environ.get(TOKEN_ENV) or None
+    if mcp_token:
+        mcp_token = check_token(mcp_token)
+        require_library()
     app = create_app(
-        services, dev_origin=args.dev_origin, allowed_hosts=allowed_hosts, password=password
+        services,
+        dev_origin=args.dev_origin,
+        allowed_hosts=allowed_hosts,
+        password=password,
+        mcp_token=mcp_token,
     )
 
     display_host = "127.0.0.1" if args.host == "0.0.0.0" else args.host
@@ -368,6 +378,9 @@ def cmd_serve(args: argparse.Namespace) -> int:
         print(f"  text: committed to git as you work" + (f", synced with {remote}" if remote else ""))
     elif reason and usable:
         print(f"  text: {reason}")
+    if mcp_token:
+        print(f"  mcp: {url.rstrip('/')}{MCP_PATH} — other sessions may read and write here,")
+        print(f"       with the token in {TOKEN_ENV} as a bearer credential.")
     if availability.ready:
         print(f"  agent: {availability.backend} ready")
     else:

@@ -381,7 +381,10 @@ class Workspace:
                 )
             if current is not None and current != text:
                 self.snapshot(path, reason=snapshot_reason)
-            atomic_write_text(path, text)
+            if current != text:
+                # Unchanged text is left as it lies: a rewrite would make the
+                # file look edited to everything that goes by its timestamp.
+                atomic_write_text(path, text)
             return self._read_note_path(path)
 
     def delete_note(self, note_id: str, *, expected_revision: str | None = None) -> None:

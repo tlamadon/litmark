@@ -126,6 +126,66 @@ did is still there after a reload.
 Summaries of imported papers run as background work in a conversation of their
 own, listed at the bottom of the menu, and never in the middle of yours.
 
+## A memory for other sessions (MCP)
+
+A project is also somewhere other Claude sessions can remember things. A
+session in a terminal on another machine, talking about a paper, can ask this
+project what it already holds, set down what it learns, and send in the paper
+itself — and what it writes shows up here, beside the PDF, cited and editable
+like anything else.
+
+It is off until the server is started with an access token, taken from the
+environment so it is never in a file of the project. It needs the `mcp` extra
+(`pip install 'litmark[mcp]'`; the container image has it):
+
+```bash
+export LITMARK_MCP_TOKEN="$(openssl rand -hex 32)"
+litmark serve ./my-research --host <tailscale-address> --allow-host <its-name>
+```
+
+The server then answers MCP at `/mcp` (streamable HTTP), asking for the token
+as a bearer credential. To connect Claude Code:
+
+```bash
+claude mcp add --transport http litmark http://<its-name>:8765/mcp \
+  --header "Authorization: Bearer $LITMARK_MCP_TOKEN"
+```
+
+Add `--header "X-Litmark-Client: laptop"` to choose the name its edits are
+recorded under; otherwise it is what the client calls itself (`claude-code`).
+
+A session gets the tools the agent inside has, and two ways of using them as a
+memory:
+
+- **Learning from earlier work.** `recall` searches notes, summaries and the
+  papers' text in one call; `read_note`, `read_summary` and `read_pages` then
+  give what it points to in full.
+- **Setting something down.** `append_note` adds to the end of a note without
+  reading or disturbing the rest, creating the note if need be. `write_note`
+  and `patch_note` revise, under the same version check as every other edit.
+  `resolve_source` turns a quotation into a citation you can click.
+- **Adding a paper.** A tool call carries JSON, not files, so `add_paper`
+  answers with a one-time upload address and the session sends the PDF to it
+  (`curl -T paper.pdf <address>`). The address expires after fifteen minutes,
+  works once, and needs no other credential. The reply names the new paper once
+  its text is extracted. A session with no way to make an HTTP request cannot
+  add papers; import those in the browser.
+
+**What a session elsewhere did is on the record.** Each of its edits, imports
+and tag changes is listed under *Recent edits* with the client's name, set
+apart from yours and the built-in agent's, and edits to notes and summaries can
+be undone there. The git commit that carries such an edit says so in its
+message (`Edited over MCP by claude-code: note reading-log`), so the
+attribution travels with the project. A session cannot choose the name it is
+recorded under beyond that header, and cannot overwrite an edit it has not
+read: a stale write is refused, as it is for everyone.
+
+**The token is the whole of the protection**, and it is sent in the clear over
+plain HTTP. Keep the server on a private network (Tailscale, WireGuard) or
+behind TLS. Whoever holds the token can read every paper and note and rewrite
+them. With `LITMARK_PASSWORD` also set, the browser is still asked for the
+password; `/mcp` asks for the token instead.
+
 ## Tags
 
 A tag is your own label for gathering papers: a field, a year's job market, a
@@ -278,6 +338,7 @@ is the same thing as a Compose file.
 | `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` | Credentials for the bucket. |
 | `ANTHROPIC_API_KEY` or `CLAUDE_CODE_OAUTH_TOKEN` | The agent's credential. The second is what `claude setup-token` issues, for using a subscription where no browser sign-in is possible. |
 | `LITMARK_PASSWORD` | Asked for by the browser before anything is served. |
+| `LITMARK_MCP_TOKEN` | Opens `/mcp` to other sessions holding this token. Unset, it is not served. See [A memory for other sessions](#a-memory-for-other-sessions-mcp). |
 
 **Set a password, and put TLS in front.** Without `LITMARK_PASSWORD`, anyone
 who can reach the port can read the project and run the agent on your account.

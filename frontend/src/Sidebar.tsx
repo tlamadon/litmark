@@ -16,6 +16,8 @@ import {
   type SearchHit,
   type TagCount,
 } from './api'
+import { ago } from './chat/ConversationMenu'
+import { describeOrigin } from './chat/describe'
 import { filterByTags, TagFilter, TagInput, UNTAGGED } from './Tags'
 
 export interface SidebarProps {
@@ -381,22 +383,44 @@ export function Sidebar(props: SidebarProps) {
         <summary>Recent edits</summary>
         {props.changes.length === 0 && <p class="muted">No edits recorded yet.</p>}
         <ul>
-          {props.changes.map((change) => (
-            <li key={change.change_id}>
-              <span>
-                <strong>{change.origin}</strong> · {change.target_id}
-                <br />
-                <span class="muted">{change.summary}</span>
-              </span>
-              {change.undoable ? (
-                <button type="button" class="link" onClick={() => props.onUndo(change)}>
-                  Undo
-                </button>
-              ) : (
-                <span class="muted">{change.undone_at ? 'undone' : '—'}</span>
-              )}
-            </li>
-          ))}
+          {props.changes.map((change) => {
+            const origin = describeOrigin(change.origin)
+            const isNote = change.target_kind === 'note'
+            const name = isNote
+              ? (props.notes.find((note) => note.note_id === change.target_id)?.title ??
+                change.target_id)
+              : (props.documents.find((document) => document.document_id === change.target_id)
+                  ?.display_title ?? change.target_id)
+            const open = (): void => {
+              if (isNote) props.onOpenNote(change.target_id)
+              else if (change.target_kind === 'summary') props.onOpenSummary(change.target_id)
+              else props.onOpenDocument(change.target_id)
+            }
+            return (
+              <li key={change.change_id}>
+                <span>
+                  <strong class={origin.outside ? 'origin outside' : 'origin'} title={origin.title}>
+                    {origin.label}
+                  </strong>{' '}
+                  ·{' '}
+                  <button type="button" class="link" onClick={open}>
+                    {change.target_kind === 'summary' ? `summary of ${name}` : name}
+                  </button>
+                  <br />
+                  <span class="muted">
+                    {[change.summary, ago(change.created_at)].filter(Boolean).join(' · ')}
+                  </span>
+                </span>
+                {change.undoable ? (
+                  <button type="button" class="link" onClick={() => props.onUndo(change)}>
+                    Undo
+                  </button>
+                ) : (
+                  <span class="muted">{change.undone_at ? 'undone' : ''}</span>
+                )}
+              </li>
+            )
+          })}
         </ul>
       </details>
     </nav>
