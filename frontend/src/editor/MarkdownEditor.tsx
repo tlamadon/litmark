@@ -8,7 +8,7 @@
 
 import { markdown, markdownLanguage } from '@codemirror/lang-markdown'
 import { history, historyKeymap, defaultKeymap, indentWithTab } from '@codemirror/commands'
-import { EditorState, type Extension } from '@codemirror/state'
+import { Compartment, EditorState, type Extension } from '@codemirror/state'
 import { search, searchKeymap } from '@codemirror/search'
 import {
   EditorView,
@@ -21,7 +21,16 @@ import {
 import { useEffect, useRef, useState } from 'preact/hooks'
 
 import { ApiError } from '../api'
-import { livePreview, setSourceMode, sourceReferenceAt } from './livePreview'
+import {
+  citationsOf,
+  livePreview,
+  readingMode,
+  setActiveReference,
+  setReadingMode,
+  setRevealedCitation,
+  setSourceMode,
+  sourceReferenceAt,
+} from './livePreview'
 
 export type SaveState =
   | { kind: 'clean' }
@@ -37,12 +46,34 @@ export interface MarkdownEditorProps {
   text: string
   revision: string | null
   readOnly?: boolean
+  /**
+   * Open for editing rather than reading. Reading is the usual way in — a
+   * note just created is the exception: it is there to be written.
+   */
+  startEditing?: boolean
   placeholder?: string
   save: (text: string, expectedRevision: string | null) => Promise<{ revision: string }>
   onOpenSource?: (referenceId: string) => void
   onSelectionChange?: (selection: string) => void
   onDirtyChange?: (dirty: boolean) => void
   registerInsert?: (insert: (markdown: string) => void) => void
+  /** The reference on show in the paper; its citations here are picked out. */
+  activeReference?: string | null
+  /** Edits that could not be saved after the buffer was left. */
+  onSaveLost?: (message: string) => void
+  /**
+   * Hands out a way to show where a reference is cited in this buffer: it is
+   * brought to the middle of the view and marked, and the cursor is left where
+   * it was. Called again for the same reference, it shows the next place.
+   */
+  registerReveal?: (reveal: (referenceId: string) => RevealResult) => void
+}
+
+export interface RevealResult {
+  /** The reference is cited in this buffer, and the view is now there. */
+  found: boolean
+  /** Every citation here has been visited; this one is the first again. */
+  wrapped: boolean
 }
 
 const AUTOSAVE_DELAY_MS = 900
@@ -53,17 +84,40 @@ export function MarkdownEditor(props: MarkdownEditorProps) {
   const revision = useRef<string | null>(props.revision)
   const timer = useRef<number | null>(null)
   const saving = useRef(false)
+  // The save under way, so one that must follow it can wait its turn.
+  const inFlight = useRef<Promise<void> | null>(null)
   const [state, setState] = useState<SaveState>({ kind: 'clean' })
   const [showSource, setShowSource] = useState(false)
+  // Reading or editing. A different buffer is a different instance of this
+  // component, so each opens in the mode it was asked to.
+  const [reading, setReading] = useState(!props.startEditing || Boolean(props.readOnly))
+  const editability = useRef(new Compartment())
+  // Whether the reader has put the selection somewhere in this buffer: until
+  // they have, "where the cursor is" means nothing.
+  const placed = useRef(false)
+
+  /** What may be done to the text in each mode. */
+  const editable = (isReading: boolean): Extension => [
+    EditorView.editable.of(!isReading && !props.readOnly),
+    EditorState.readOnly.of(isReading || Boolean(props.readOnly)),
+  ]
   // The citation the cursor is inside, if any. Drives the visible
   // "Open source" action, so the Cmd/Ctrl-click shortcut is not the only way in.
   const [sourceAtCursor, setSourceAtCursor] = useState<string | null>(null)
+  // The citation last gone to, so asking again moves on to the next one.
+  const revealed = useRef<{ referenceId: string; index: number } | null>(null)
 
   // Keep a stable reference to the latest props for use inside CodeMirror.
   const latest = useRef(props)
   latest.current = props
 
-  const flush = async (): Promise<void> => {
+  const flush = (): Promise<void> => {
+    const run = flushNow()
+    inFlight.current = run
+    return run
+  }
+
+  const flushNow = async (): Promise<void> => {
     const editor = view.current
     if (!editor || saving.current) return
     const text = editor.state.doc.toString()
@@ -98,7 +152,18 @@ export function MarkdownEditor(props: MarkdownEditorProps) {
 
   const schedule = (): void => {
     if (timer.current !== null) window.clearTimeout(timer.current)
-    timer.current = window.setTimeout(() => void flush(), AUTOSAVE_DELAY_MS)
+    timer.current = window.setTimeout(() => {
+      timer.current = null
+      void flush()
+    }, AUTOSAVE_DELAY_MS)
+  }
+
+  /** Save now what a pending autosave was waiting to save. */
+  const flushPending = (): void => {
+    if (timer.current === null) return
+    window.clearTimeout(timer.current)
+    timer.current = null
+    void flush()
   }
 
   useEffect(() => {
@@ -116,18 +181,46 @@ export function MarkdownEditor(props: MarkdownEditorProps) {
       livePreview({
         onOpenSource: (id) => latest.current.onOpenSource?.(id),
         onOpenLink: (href) => window.open(href, '_blank', 'noopener,noreferrer'),
+        reading,
       }),
+      EditorView.domEventHandlers({
+        // Reading, a double-click on the text is "let me change this": edit,
+        // with the cursor where the click was.
+        dblclick: (event, target) => {
+          if (!target.state.field(readingMode, false)) return false
+          // On a link, the two clicks were two openings of the link.
+          if ((event.target as HTMLElement | null)?.closest?.('.cm-source-link, .cm-link')) {
+            return false
+          }
+          const at = target.posAtCoords({ x: event.clientX, y: event.clientY })
+          setModeRef.current(false, at ?? undefined)
+          return true
+        },
+      }),
+      // Focusable while reading too, so find and copy work from the keyboard.
+      EditorView.contentAttributes.of({ tabindex: '0' }),
       keymap.of([
         {
           key: 'Mod-s',
           preventDefault: true,
           run: () => {
             if (timer.current !== null) window.clearTimeout(timer.current)
+            timer.current = null
             void flush()
             return true
           },
         },
         ...searchKeymap,
+        {
+          // Done editing. After the search bindings, so Escape closes an open
+          // search panel first.
+          key: 'Escape',
+          run: (target) => {
+            if (target.state.field(readingMode, false)) return false
+            setModeRef.current(true)
+            return true
+          },
+        },
         ...historyKeymap,
         ...defaultKeymap,
         indentWithTab,
@@ -138,6 +231,7 @@ export function MarkdownEditor(props: MarkdownEditorProps) {
           latest.current.onDirtyChange?.(true)
           schedule()
         }
+        if (update.selectionSet) placed.current = true
         if (update.selectionSet || update.docChanged) {
           const { from, to, head } = update.state.selection.main
           if (latest.current.onSelectionChange) {
@@ -148,7 +242,7 @@ export function MarkdownEditor(props: MarkdownEditorProps) {
           setSourceAtCursor(sourceReferenceAt(update.state, head))
         }
       }),
-      EditorView.editable.of(!props.readOnly),
+      editability.current.of(editable(reading)),
     ]
 
     const editor = new EditorView({
@@ -162,22 +256,86 @@ export function MarkdownEditor(props: MarkdownEditorProps) {
     props.registerInsert?.((snippet: string) => {
       const target = view.current
       if (!target) return
-      const at = target.state.selection.main.to
+      // At the cursor, when there is one the reader put there. A note opened
+      // and only read has none: its end is where a new reference belongs,
+      // not the top of its first line.
+      const at = placed.current ? target.state.selection.main.to : target.state.doc.length
+      const text =
+        !placed.current && at > 0 && !snippet.startsWith('\n')
+          ? `\n\n${snippet.trimStart()}`
+          : snippet
+      // An insertion is an edit: the buffer is opened for editing, with the
+      // cursor after what was put in, and that place brought into view.
+      setModeRef.current(false)
       target.dispatch({
-        changes: { from: at, insert: snippet },
-        selection: { anchor: at + snippet.length },
+        changes: { from: at, insert: text },
+        selection: { anchor: at + text.length },
+        effects: EditorView.scrollIntoView(at + text.length, { y: 'center' }),
       })
       target.focus()
     })
 
+    revealed.current = null
+    props.registerReveal?.((referenceId: string): RevealResult => {
+      const target = view.current
+      if (!target) return { found: false, wrapped: false }
+      const spots = citationsOf(target.state, referenceId)
+      if (spots.length === 0) return { found: false, wrapped: false }
+
+      const last = revealed.current
+      const again = last !== null && last.referenceId === referenceId
+      const index = again ? (last.index + 1) % spots.length : 0
+      revealed.current = { referenceId, index }
+      const spot = spots[index]!
+      // Shown, not entered: brought to the middle of the view and marked, with
+      // the cursor and the keyboard focus left where they were. Looking up
+      // where a passage is cited is reading, not the start of an edit.
+      target.dispatch({
+        effects: [
+          setActiveReference.of(referenceId),
+          setRevealedCitation.of(spot.from),
+          EditorView.scrollIntoView(spot.from, { y: 'center' }),
+        ],
+      })
+      return { found: true, wrapped: again && index === 0 }
+    })
+
+    // A tab put away is often a tab about to be closed: save without waiting
+    // out the delay.
+    const onHidden = (): void => {
+      if (document.visibilityState === 'hidden') flushPending()
+    }
+    document.addEventListener('visibilitychange', onHidden)
+
+    // Bound to this buffer: by the time it is left, `props.save` is the next one's.
+    const saveThisBuffer = props.save
     return () => {
-      if (timer.current !== null) window.clearTimeout(timer.current)
+      document.removeEventListener('visibilitychange', onHidden)
+      // Leaving within the autosave delay must not drop what was just typed.
+      // The timer is the mark of edits not yet sent; a save already under way
+      // goes first, so this one is checked against the revision it produced.
+      if (timer.current !== null) {
+        window.clearTimeout(timer.current)
+        timer.current = null
+        const text = editor.state.doc.toString()
+        const lost = latest.current.onSaveLost
+        void (inFlight.current ?? Promise.resolve())
+          .then(() => saveThisBuffer(text, revision.current))
+          .catch((error: unknown) => {
+            lost?.(error instanceof Error ? error.message : 'Saving failed.')
+          })
+      }
       editor.destroy()
       view.current = null
     }
     // Rebuilding on docKey is intentional: a different note is a different buffer.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [props.docKey])
+
+  // The passage on show in the paper names which citations to pick out.
+  useEffect(() => {
+    view.current?.dispatch({ effects: setActiveReference.of(props.activeReference ?? null) })
+  }, [props.activeReference, props.docKey])
 
   // Reload a clean buffer when the file changed on disk; keep a dirty one.
   useEffect(() => {
@@ -196,6 +354,34 @@ export function MarkdownEditor(props: MarkdownEditorProps) {
     setState({ kind: 'clean' })
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [props.text, props.revision])
+
+  /**
+   * Switch between reading and editing; into editing, optionally with the
+   * cursor at a position — where a double-click landed.
+   */
+  const setMode = (toReading: boolean, at?: number): void => {
+    const editor = view.current
+    if (!editor || props.readOnly) return
+    if (toReading) flushPending()
+    editor.dispatch({
+      effects: [
+        setReadingMode.of(toReading),
+        editability.current.reconfigure(editable(toReading)),
+        // The raw text is something one edits; reading shows it rendered.
+        ...(toReading ? [setSourceMode.of(false)] : []),
+      ],
+      ...(at === undefined ? {} : { selection: { anchor: at } }),
+    })
+    if (toReading) {
+      setShowSource(false)
+      editor.contentDOM.blur()
+    } else {
+      editor.focus()
+    }
+    setReading(toReading)
+  }
+  const setModeRef = useRef(setMode)
+  setModeRef.current = setMode
 
   const toggleSource = (): void => {
     const next = !showSource
@@ -234,10 +420,38 @@ export function MarkdownEditor(props: MarkdownEditorProps) {
   }
 
   return (
-    <div class="editor">
+    <div class={reading ? 'editor reading' : 'editor'}>
       <div class="editor-bar">
         <SaveIndicator state={state} />
+        {reading && !props.readOnly && (
+          <span class="mode-hint">Double-click the text to edit it</span>
+        )}
         <div class="editor-actions">
+          {!props.readOnly && (
+            <div class="mode-tabs" role="group" aria-label="Read or edit">
+              <button
+                type="button"
+                class={reading ? 'on' : ''}
+                aria-pressed={reading}
+                data-mode="read"
+                title="Read: a click opens a citation's source, and nothing is edited"
+                onClick={() => setMode(true)}
+              >
+                Read
+              </button>
+              <button
+                type="button"
+                class={reading ? '' : 'on'}
+                aria-pressed={!reading}
+                data-mode="edit"
+                title="Edit the Markdown (double-clicking the text does this too; Escape returns)"
+                onClick={() => setMode(false)}
+              >
+                Edit
+              </button>
+            </div>
+          )}
+          {!reading && (
           <button
             type="button"
             class="toggle open-source"
@@ -254,6 +468,8 @@ export function MarkdownEditor(props: MarkdownEditorProps) {
           >
             {sourceAtCursor ? `Open source · ${sourceAtCursor}` : 'Open source'}
           </button>
+          )}
+          {!reading && (
           <button
             type="button"
             class={showSource ? 'toggle active' : 'toggle'}
@@ -262,6 +478,7 @@ export function MarkdownEditor(props: MarkdownEditorProps) {
           >
             Source
           </button>
+          )}
         </div>
       </div>
 

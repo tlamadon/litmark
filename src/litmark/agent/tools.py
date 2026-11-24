@@ -13,7 +13,9 @@ from __future__ import annotations
 
 import json
 import logging
+import threading
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
@@ -60,19 +62,36 @@ class ProjectTools:
         self.references = references
         self.db = db
         self._changed: list[dict[str, Any]] = []
+        self._changed_lock = threading.Lock()
+        # Called with the IDs of papers whose metadata changed, so open
+        # windows show it. Set by the application; absent in bare tests.
+        self.on_documents_changed: Callable[[list[str]], None] | None = None
 
     # --------------------------------------------------------- side effects
 
-    def drain_changes(self) -> list[dict[str, Any]]:
-        changed, self._changed = self._changed, []
-        return changed
+    def drain_changes(self, run_id: str | None = None) -> list[dict[str, Any]]:
+        """Edits committed since the last call, for the runner to announce.
+
+        Conversations run side by side, so a run collects only its own edits:
+        with ``run_id`` given, another run's are left for that run to announce.
+        """
+        with self._changed_lock:
+            if run_id is None:
+                changed, self._changed = self._changed, []
+                return changed
+            mine = [change for change in self._changed if change.get("run_id") == run_id]
+            self._changed = [c for c in self._changed if c.get("run_id") != run_id]
+            return mine
 
     # ---------------------------------------------------------------- reads
 
-    def list_documents(self) -> dict[str, Any]:
-        """IDs, metadata, summaries, and availability status."""
+    def list_documents(self, tags: list[str] | None = None) -> dict[str, Any]:
+        """IDs, metadata, tags, summaries, and availability status."""
+        tagged = self.documents.with_tags(tags)
         documents = []
         for document in self.documents.list():
+            if tagged is not None and document.document_id not in tagged:
+                continue
             summary = self.documents.summary_text(document.document_id)
             documents.append(
                 {
@@ -80,6 +99,7 @@ class ProjectTools:
                     "title": document.display_title,
                     "authors": document.authors,
                     "year": document.year,
+                    "tags": document.tags,
                     "original_filename": document.original_filename,
                     "page_count": document.page_count,
                     "extraction_status": document.extraction.get("status"),
@@ -90,7 +110,30 @@ class ProjectTools:
                     "has_summary": summary is not None,
                 }
             )
-        return {"documents": documents, "count": len(documents)}
+        return {
+            "documents": documents,
+            "count": len(documents),
+            "tags_in_use": self.documents.all_tags(),
+        }
+
+    def tag_documents(
+        self,
+        document_ids: list[str],
+        add: list[str] | None = None,
+        remove: list[str] | None = None,
+    ) -> dict[str, Any]:
+        """Add tags to, or remove tags from, one or more documents."""
+        changed = self.documents.tag(document_ids, add=add, remove=remove)
+        if changed and self.on_documents_changed is not None:
+            self.on_documents_changed([document.document_id for document in changed])
+        return {
+            "ok": True,
+            "changed": len(changed),
+            "documents": [
+                {"document_id": d.document_id, "title": d.display_title, "tags": d.tags}
+                for d in (self.documents.get(i) for i in dict.fromkeys(document_ids))
+            ],
+        }
 
     def list_notes(self) -> dict[str, Any]:
         return {
@@ -101,10 +144,14 @@ class ProjectTools:
         }
 
     def search_documents(
-        self, query: str, document_ids: list[str] | None = None, limit: int = 20
+        self,
+        query: str,
+        document_ids: list[str] | None = None,
+        limit: int = 20,
+        tags: list[str] | None = None,
     ) -> dict[str, Any]:
         """Matching passages with document IDs and physical page numbers."""
-        hits = self.documents.search(query, document_ids=document_ids, limit=limit)
+        hits = self.documents.search(query, document_ids=document_ids, tags=tags, limit=limit)
         return {
             "query": query,
             "matches": [hit.to_json() for hit in hits],
@@ -481,15 +528,17 @@ class ProjectTools:
                 utcnow(),
             ),
         )
-        self._changed.append(
-            {
-                "change_id": change_id,
-                "target_kind": target_kind,
-                "target_id": target_id,
-                "revision": new_revision,
-                "summary": summary,
-            }
-        )
+        with self._changed_lock:
+            self._changed.append(
+                {
+                    "change_id": change_id,
+                    "target_kind": target_kind,
+                    "target_id": target_id,
+                    "revision": new_revision,
+                    "summary": summary,
+                    "run_id": run_id,
+                }
+            )
         return change_id
 
     def _latest_snapshot(self, target_kind: str, target_id: str) -> str | None:
@@ -516,10 +565,41 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
     {
         "name": "list_documents",
         "description": (
-            "List imported documents with IDs, metadata, summaries, and availability "
-            "status. Start here to learn which document IDs exist."
+            "List imported documents with IDs, metadata, tags, summaries, and "
+            "availability status. Start here to learn which document IDs exist. Tags "
+            "are the user's own labels for gathering papers (a field, a year's job "
+            "market, a candidate); pass `tags` to list only the documents carrying "
+            "all of them. The result also lists every tag in use."
         ),
-        "input_schema": {"type": "object", "properties": {}, "additionalProperties": False},
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "tags": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Only documents carrying every one of these tags.",
+                },
+            },
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "tag_documents",
+        "description": (
+            "Add tags to, or remove tags from, one or more documents. A tag is a short "
+            "label; `group:value` (for example `field:labor`) is the convention for "
+            "tags of a kind. Reuse tags already in use rather than coining near "
+            "duplicates. Only change tags when the user asks for it."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "document_ids": {"type": "array", "items": {"type": "string"}},
+                "add": {"type": "array", "items": {"type": "string"}},
+                "remove": {"type": "array", "items": {"type": "string"}},
+            },
+            "required": ["document_ids"],
+        },
     },
     {
         "name": "search_documents",
@@ -537,6 +617,11 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
                     "description": "Restrict the search to these documents.",
                 },
                 "limit": {"type": "integer", "description": "Maximum matches (default 20)."},
+                "tags": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Restrict the search to documents carrying all these tags.",
+                },
             },
             "required": ["query"],
         },
@@ -559,6 +644,14 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
             },
             "required": ["document_id", "pages"],
         },
+    },
+    {
+        "name": "list_notes",
+        "description": (
+            "List the project's notes with their IDs, titles, and current revisions. "
+            "Start here to learn which notes exist before reading or editing one."
+        ),
+        "input_schema": {"type": "object", "properties": {}, "additionalProperties": False},
     },
     {
         "name": "read_note",
@@ -679,6 +772,27 @@ def dispatch(tools: ProjectTools, name: str, arguments: dict[str, Any]) -> dict[
     except Exception as exc:  # noqa: BLE001 - reported to the agent, not swallowed
         log.exception("Tool %s failed", name)
         return {"ok": False, "error": "tool_failed", "message": f"{type(exc).__name__}: {exc}"}
+
+
+MAX_RESULT_TEXT = 300
+MAX_RESULT_ITEMS = 12
+
+
+def trim_result(value: Any, depth: int = 0) -> Any:
+    """Cut a tool result down to what an activity line can show.
+
+    A page read returns the page; the record of the run wants its number, not
+    its text. The agent still receives the result in full.
+    """
+    if isinstance(value, str):
+        return value if len(value) <= MAX_RESULT_TEXT else value[:MAX_RESULT_TEXT] + "…"
+    if depth >= 4:
+        return None if isinstance(value, (dict, list)) else value
+    if isinstance(value, dict):
+        return {str(key): trim_result(item, depth + 1) for key, item in value.items()}
+    if isinstance(value, list):
+        return [trim_result(item, depth + 1) for item in value[:MAX_RESULT_ITEMS]]
+    return value
 
 
 def as_text(payload: dict[str, Any]) -> str:

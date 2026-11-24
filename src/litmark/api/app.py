@@ -24,6 +24,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 
+from .. import __version__
 from ..errors import WorkspaceError
 from ..services import Services
 from .routes import build_router
@@ -53,8 +54,14 @@ def create_app(
     *,
     dev_origin: str | None = None,
     allowed_hosts: set[str] | None = None,
+    password: str | None = None,
 ) -> FastAPI:
     """Build the application.
+
+    ``password``, when set, is asked for by the browser before anything is
+    served — the page included, since the page carries the session credential.
+    It is for a server reachable by more than its owner (a container on a
+    host); it protects nothing in transit, so it belongs behind TLS.
 
     ``allowed_hosts`` widens host and origin validation for a reverse proxy or
     port-forward. Pass ``{"*"}`` to accept any hostname, which is what a proxy
@@ -65,7 +72,7 @@ def create_app(
     accept_any_host = ANY_HOST in effective_hosts
     app = FastAPI(
         title="Litmark",
-        version="0.1.0",
+        version=__version__,
         docs_url=None,
         redoc_url=None,
         openapi_url=None,
@@ -80,6 +87,7 @@ def create_app(
         services.bind_loop(asyncio.get_running_loop())
         recovered = services.recover()
         services.runner.start()
+        services.start_sync()
         log.info(
             "Opened project %s (requeued %s jobs, marked %s interrupted runs)",
             services.workspace.root,
@@ -110,6 +118,12 @@ def create_app(
                     }
                 },
                 status_code=400,
+            )
+        if password and not _password_given(request, password):
+            return PlainTextResponse(
+                "This Litmark server asks for a password.\n",
+                status_code=401,
+                headers={"www-authenticate": 'Basic realm="Litmark", charset="UTF-8"'},
             )
         origin = request.headers.get("origin")
         if origin and not _origin_allowed(origin, dev_origin, effective_hosts):
@@ -192,6 +206,23 @@ def _render_index(assets: Path, token: str) -> str:
     if marker in html:
         return html.replace(marker, replacement)
     return html.replace("<head>", f"<head>\n    {replacement}", 1)
+
+
+def _password_given(request: Request, password: str) -> bool:
+    """HTTP Basic, any user name: one person, one password."""
+    import base64
+    import binascii
+    import hmac
+
+    scheme, _, encoded = (request.headers.get("authorization") or "").partition(" ")
+    if scheme.lower() != "basic" or not encoded:
+        return False
+    try:
+        decoded = base64.b64decode(encoded.strip(), validate=True).decode("utf-8")
+    except (binascii.Error, UnicodeDecodeError):
+        return False
+    _, _, supplied = decoded.partition(":")
+    return hmac.compare_digest(supplied.encode("utf-8"), password.encode("utf-8"))
 
 
 def _authorized(request: Request, token: str) -> bool:

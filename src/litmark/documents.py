@@ -10,6 +10,7 @@ import json
 import logging
 import re
 import threading
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -37,6 +38,11 @@ RUNNING = "running"
 OK = "ok"
 FAILED = "failed"
 
+# Tags
+MAX_TAG_CHARS = 60
+MAX_TAGS_PER_DOCUMENT = 40
+UNTAGGED = "untagged"
+
 # Summary status
 NONE = "none"
 QUEUED = "queued"
@@ -55,6 +61,9 @@ class Document:
     authors: str | None = None
     year: int | None = None
     page_count: int | None = None
+    # Labels the user puts on a paper to gather it with others: a field, a
+    # year's job market, a candidate. Kept in metadata.json, so they travel.
+    tags: list[str] = field(default_factory=list)
     extraction: dict[str, Any] = field(default_factory=dict)
     summary: dict[str, Any] = field(default_factory=dict)
 
@@ -83,6 +92,7 @@ class Document:
             "authors": self.authors,
             "year": self.year,
             "page_count": self.page_count,
+            "tags": self.tags,
             "extraction": self.extraction,
             "summary": self.summary,
         }
@@ -109,6 +119,7 @@ class Document:
             authors=data.get("authors"),
             year=data.get("year"),
             page_count=data.get("page_count"),
+            tags=[str(tag) for tag in data.get("tags") or []],
             extraction=data.get("extraction") or {},
             summary=data.get("summary") or {},
         )
@@ -142,6 +153,12 @@ class DocumentStore:
         self._lock = threading.RLock()
         self._extraction_cache: dict[str, tuple[float, DocumentExtraction]] = {}
         self.max_upload_bytes = max_upload_bytes
+        # Set when the project has storage: fetches a paper's extracted text
+        # that this machine does not have yet. Returns whether it is here now.
+        self.fetch_pages: Callable[[str], bool] | None = None
+        # Papers storage had no text for, so a search does not ask again for
+        # each of them on every query. Cleared whenever the project syncs.
+        self._no_pages: set[str] = set()
 
     # ---------------------------------------------------------------- paths
 
@@ -197,6 +214,76 @@ class DocumentStore:
             json.dumps(document.to_json(), indent=2, ensure_ascii=False) + "\n",
         )
         return document
+
+    def update(self, document_id: str, change: Callable[[Document], None]) -> Document:
+        """Read a paper's metadata, change it, and write it back, as one step.
+
+        Several things write this file — extraction in a worker thread, the
+        summary's status from the agent's loop, the user's tags from a request
+        — and each changes its own part. Done as separate reads and writes, a
+        slow writer puts back what it read and erases what a quicker one wrote
+        meanwhile. Every change to stored metadata goes through here.
+        """
+        with self._lock:
+            document = self.get(document_id)
+            change(document)
+            return self.save(document)
+
+    # ----------------------------------------------------------------- tags
+
+    def all_tags(self) -> list[dict[str, Any]]:
+        """Every tag in use, with how many papers carry it."""
+        counts: dict[str, int] = {}
+        for document in self.list():
+            for tag in document.tags:
+                counts[tag] = counts.get(tag, 0) + 1
+        return [
+            {"tag": tag, "count": counts[tag]} for tag in sorted(counts, key=tag_sort_key)
+        ]
+
+    def set_tags(self, document_id: str, tags: list[str]) -> Document:
+        """Replace a paper's tags with exactly these."""
+        with self._lock:
+            known = [entry["tag"] for entry in self.all_tags()]
+            document = self.get(document_id)
+            document.tags = normalize_tags(tags, known=known)
+            return self.save(document)
+
+    def tag(
+        self,
+        document_ids: list[str],
+        *,
+        add: list[str] | None = None,
+        remove: list[str] | None = None,
+    ) -> list[Document]:
+        """Add tags to, and remove tags from, several papers at once.
+
+        Returns the papers that actually changed.
+        """
+        with self._lock:
+            known = [entry["tag"] for entry in self.all_tags()]
+            adding = normalize_tags(add or [], known=known)
+            removing = {tag.casefold() for tag in normalize_tags(remove or [], known=known)}
+            documents = [self.get(document_id) for document_id in dict.fromkeys(document_ids)]
+            changed: list[Document] = []
+            for document in documents:
+                kept = [tag for tag in document.tags if tag.casefold() not in removing]
+                wanted = normalize_tags([*kept, *adding], known=known)
+                if wanted != document.tags:
+                    document.tags = wanted
+                    changed.append(self.save(document))
+            return changed
+
+    def with_tags(self, tags: list[str] | None) -> set[str] | None:
+        """IDs of the papers carrying every one of these tags; None for no filter."""
+        wanted = [tag.casefold() for tag in normalize_tags(tags or [])]
+        if not wanted:
+            return None
+        return {
+            document.document_id
+            for document in self.list()
+            if all(tag in {own.casefold() for own in document.tags} for tag in wanted)
+        }
 
     def next_id(self) -> str:
         with self._lock:
@@ -275,28 +362,33 @@ class DocumentStore:
 
     def run_extraction(self, document_id: str) -> dict[str, Any]:
         """Job handler. Runs in a worker thread; never touches the event loop."""
-        document = self.get(document_id)
-        document.extraction = {**document.extraction, "status": RUNNING, "error": None}
-        self.save(document)
+
+        def started(document: Document) -> None:
+            document.extraction = {**document.extraction, "status": RUNNING, "error": None}
+
+        self.update(document_id, started)
 
         pdf = self._workspace.resolve_inside(self.pdf_path(document_id))
         try:
             extraction = extract_pdf(pdf)
         except ExtractionError as exc:
-            document = self.get(document_id)
-            document.extraction = {
-                **document.extraction,
-                "status": FAILED,
-                "kind": exc.kind,
-                "error": str(exc),
-                "completed_at": utcnow(),
-            }
-            document.summary = {
-                **document.summary,
-                "status": UNAVAILABLE,
-                "error": "No text could be extracted, so no summary can be written.",
-            }
-            self.save(document)
+            failure = exc
+
+            def failed(document: Document) -> None:
+                document.extraction = {
+                    **document.extraction,
+                    "status": FAILED,
+                    "kind": failure.kind,
+                    "error": str(failure),
+                    "completed_at": utcnow(),
+                }
+                document.summary = {
+                    **document.summary,
+                    "status": UNAVAILABLE,
+                    "error": "No text could be extracted, so no summary can be written.",
+                }
+
+            self.update(document_id, failed)
             return {"status": FAILED, "error": str(exc), "kind": exc.kind}
 
         atomic_write_text(
@@ -305,27 +397,28 @@ class DocumentStore:
         )
         self._extraction_cache.pop(document_id, None)
 
-        document = self.get(document_id)
-        document.page_count = extraction.page_count or document.page_count
-        if not document.title:
-            document.title = _guess_title(extraction)
-        document.extraction = {
-            "status": OK,
-            "version": extraction.extraction_version,
-            "quality": extraction.quality,
-            "warnings": extraction.warnings,
-            "empty_pages": extraction.empty_pages(),
-            "error": None,
-            "completed_at": utcnow(),
-            "encrypted": document.extraction.get("encrypted", False),
-        }
-        if extraction.quality == "none":
-            document.summary = {
-                **document.summary,
-                "status": UNAVAILABLE,
-                "error": "No text could be extracted, so no summary can be written.",
+        def finished(document: Document) -> None:
+            document.page_count = extraction.page_count or document.page_count
+            if not document.title:
+                document.title = _guess_title(extraction)
+            document.extraction = {
+                "status": OK,
+                "version": extraction.extraction_version,
+                "quality": extraction.quality,
+                "warnings": extraction.warnings,
+                "empty_pages": extraction.empty_pages(),
+                "error": None,
+                "completed_at": utcnow(),
+                "encrypted": document.extraction.get("encrypted", False),
             }
-        self.save(document)
+            if extraction.quality == "none":
+                document.summary = {
+                    **document.summary,
+                    "status": UNAVAILABLE,
+                    "error": "No text could be extracted, so no summary can be written.",
+                }
+
+        self.update(document_id, finished)
         return {
             "status": OK,
             "pages": extraction.page_count,
@@ -335,6 +428,13 @@ class DocumentStore:
     def extraction(self, document_id: str) -> DocumentExtraction:
         """Load ``pages.json``, cached by file modification time."""
         path = self._workspace.resolve_inside(self.pages_path(document_id))
+        if not path.is_file() and self.fetch_pages and document_id not in self._no_pages:
+            try:
+                if not self.fetch_pages(document_id):
+                    self._no_pages.add(document_id)
+            except Exception as exc:  # noqa: BLE001 - reading must not fail on storage
+                log.warning("Extracted text of %s could not be fetched: %s", document_id, exc)
+                self._no_pages.add(document_id)
         if not path.is_file():
             raise NotFound(
                 f"Document {document_id!r} has no extracted text yet.",
@@ -347,6 +447,10 @@ class DocumentStore:
         extraction = DocumentExtraction.from_json(json.loads(path.read_text("utf-8")))
         self._extraction_cache[document_id] = (stamp, extraction)
         return extraction
+
+    def retry_missing_pages(self) -> None:
+        """Storage may have caught up: ask again for text it lacked before."""
+        self._no_pages.clear()
 
     def page(self, document_id: str, page_number: int) -> PageExtraction:
         from .references import find_page
@@ -373,14 +477,17 @@ class DocumentStore:
     def set_summary_status(
         self, document_id: str, status: str, *, error: str | None = None
     ) -> Document:
-        document = self.get(document_id)
-        document.summary = {
-            **document.summary,
-            "status": status,
-            "error": error,
-            "generated_at": utcnow() if status == READY else document.summary.get("generated_at"),
-        }
-        return self.save(document)
+        def change(document: Document) -> None:
+            document.summary = {
+                **document.summary,
+                "status": status,
+                "error": error,
+                "generated_at": (
+                    utcnow() if status == READY else document.summary.get("generated_at")
+                ),
+            }
+
+        return self.update(document_id, change)
 
     # --------------------------------------------------------------- search
 
@@ -389,6 +496,7 @@ class DocumentStore:
         query: str,
         *,
         document_ids: list[str] | None = None,
+        tags: list[str] | None = None,
         limit: int = 20,
     ) -> list[SearchHit]:
         """Case-insensitive keyword search over extracted page text.
@@ -400,10 +508,13 @@ class DocumentStore:
         if not terms:
             return []
         phrase = " ".join(terms)
+        tagged = self.with_tags(tags)
 
         hits: list[SearchHit] = []
         for document in self.list():
             if document_ids and document.document_id not in document_ids:
+                continue
+            if tagged is not None and document.document_id not in tagged:
                 continue
             if not document.searchable:
                 continue
@@ -443,6 +554,45 @@ class DocumentStore:
                 )
         hits.sort(key=lambda hit: (-hit.score, hit.document_id, hit.page_number))
         return hits[:limit]
+
+
+def tag_sort_key(tag: str) -> tuple[str, str]:
+    """Grouped tags (`field:labor`) sort by group, then by value; case aside."""
+    group, colon, value = tag.partition(":")
+    if not colon:
+        return ("", tag.casefold())  # Plain tags first, among themselves.
+    return (group.casefold(), value.casefold())
+
+
+def normalize_tags(tags: list[str], *, known: list[str] | None = None) -> list[str]:
+    """Tags as they are stored: tidy, unique whatever their case, and in order.
+
+    A tag is a short free label. One with a colon is read as `group:value`
+    (`field:labor`, `jmp:2026`, `author:Card`), which is only a convention —
+    the interface gathers such tags under their group. A tag typed in a
+    different case than one already in the project takes the existing spelling,
+    so `Labor` and `labor` do not become two collections.
+    """
+    spelling = {tag.casefold(): tag for tag in known or []}
+    seen: dict[str, str] = {}
+    for raw in tags:
+        if not isinstance(raw, str):
+            raise InvalidInput("A tag is a piece of text.")
+        tag = " ".join(raw.replace("\x00", " ").split()).lstrip("#").strip()
+        # `field : labor` and `field:labor` are the same tag.
+        tag = re.sub(r"\s*:\s*", ":", tag).strip(":").strip()
+        if not tag:
+            continue
+        if "," in tag:
+            raise InvalidInput(f"A tag cannot contain a comma: {tag!r}.")
+        if len(tag) > MAX_TAG_CHARS:
+            raise InvalidInput(f"A tag is at most {MAX_TAG_CHARS} characters: {tag[:30]!r}…")
+        if tag.casefold() == UNTAGGED:
+            raise InvalidInput(f"{UNTAGGED!r} is how papers without tags are listed.")
+        seen.setdefault(tag.casefold(), spelling.get(tag.casefold(), tag))
+    if len(seen) > MAX_TAGS_PER_DOCUMENT:
+        raise InvalidInput(f"A paper carries at most {MAX_TAGS_PER_DOCUMENT} tags.")
+    return sorted(seen.values(), key=tag_sort_key)
 
 
 def _snippet(text: str, start: int, end: int, *, window: int = 110) -> str:

@@ -12,19 +12,22 @@ import {
   ApiError,
   api,
   type ChangeRecord,
-  type Conversation,
+  type ConversationSummary,
   type DocumentRecord,
   type MessageContext,
   type NoteSummary,
   type ProjectState,
   type ReferenceRecord,
   type SearchHit,
+  type SyncState,
 } from './api'
 import { Chat } from './chat/Chat'
-import { MarkdownEditor } from './editor/MarkdownEditor'
+import type { OpenTarget } from './chat/describe'
+import { MarkdownEditor, type RevealResult } from './editor/MarkdownEditor'
 import { EventStream, type ServerEvent } from './events'
 import { PdfViewer, type PdfMark, type PdfSelection } from './pdf/PdfViewer'
 import { Sidebar } from './Sidebar'
+import { SyncStatus } from './SyncStatus'
 
 type MainTarget =
   | { kind: 'note'; noteId: string }
@@ -32,17 +35,71 @@ type MainTarget =
   | { kind: 'empty' }
 
 interface Buffer {
+  /** Which note or summary this text is: the target it was read for. */
+  key: string
   text: string
   revision: string | null
 }
 
+const keyOf = (target: MainTarget): string =>
+  target.kind === 'note'
+    ? `note:${target.noteId}`
+    : target.kind === 'summary'
+      ? `summary:${target.documentId}`
+      : 'empty'
+
 const NARROW_QUERY = '(max-width: 1100px)'
+
+/** Events after which the list of conversations is no longer current. */
+const CONVERSATION_EVENTS = new Set([
+  'run_queued',
+  'run_started',
+  'done',
+  'message_added',
+  'conversation_updated',
+])
+
+const CHAT_WIDTH_KEY = 'litmark:chat-width'
+const CHAT_MIN_WIDTH = 300
+const CHAT_DEFAULT_WIDTH = 420
+
+/** The widest the drawer may be dragged: never more than half the window. */
+const chatMaxWidth = (): number => Math.max(CHAT_MIN_WIDTH, Math.round(window.innerWidth * 0.5))
+
+function storedChatWidth(): number {
+  try {
+    const stored = Number(window.localStorage.getItem(CHAT_WIDTH_KEY))
+    if (Number.isFinite(stored) && stored >= CHAT_MIN_WIDTH) return stored
+  } catch {
+    /* storage can be refused; the default stands */
+  }
+  return CHAT_DEFAULT_WIDTH
+}
+
+/** Which conversation was open, so a reload comes back to it. */
+function rememberedConversation(root: string): string | null {
+  try {
+    return window.localStorage.getItem(`litmark:conversation:${root}`)
+  } catch {
+    return null // Storage can be refused; the most recent conversation stands in.
+  }
+}
+
+function rememberConversation(root: string, id: string): void {
+  try {
+    window.localStorage.setItem(`litmark:conversation:${root}`, id)
+  } catch {
+    /* as above */
+  }
+}
 
 export function App() {
   const [state, setState] = useState<ProjectState | null>(null)
   const [fatal, setFatal] = useState<string | null>(null)
   const [connected, setConnected] = useState(false)
-  const [events, setEvents] = useState<ServerEvent[]>([])
+  const [stream, setStream] = useState<EventStream | null>(null)
+  // Bumped when an agent edit lands, so a clean buffer follows the file.
+  const [fileTick, setFileTick] = useState(0)
 
   const [target, setTarget] = useState<MainTarget>({ kind: 'empty' })
   const [buffer, setBuffer] = useState<Buffer | null>(null)
@@ -59,18 +116,42 @@ export function App() {
   const [documentReferences, setDocumentReferences] = useState<ReferenceRecord[]>([])
   const [gotoNonce, setGotoNonce] = useState(0)
 
-  const [conversation, setConversation] = useState<Conversation | null>(null)
+  const [conversations, setConversations] = useState<ConversationSummary[]>([])
+  const [conversationId, setConversationId] = useState<string | null>(null)
+  // Conversations that finished a run while another was on screen.
+  const [unread, setUnread] = useState<ReadonlySet<string>>(new Set())
   const [context, setContext] = useState<MessageContext>({})
+  const [sync, setSync] = useState<SyncState | null>(null)
   const [changes, setChanges] = useState<ChangeRecord[]>([])
 
   const [showSidebar, setShowSidebar] = useState(true)
   const [showChat, setShowChat] = useState(true)
+  const [chatWidth, setChatWidth] = useState(storedChatWidth)
   const [showSource, setShowSourcePanel] = useState(true)
   const [narrow, setNarrow] = useState(() => window.matchMedia(NARROW_QUERY).matches)
   const [sourceTakesOver, setSourceTakesOver] = useState(false)
 
   const insertRef = useRef<((markdown: string) => void) | null>(null)
-  const stream = useRef<EventStream | null>(null)
+  const revealRef = useRef<((referenceId: string) => RevealResult) | null>(null)
+  // A citation to go to once the note that holds it has opened.
+  const pendingReveal = useRef<string | null>(null)
+  // The note just created, which opens ready to be written in.
+  const startEditing = useRef<string | null>(null)
+  const docKey = keyOf(target)
+  const docKeyRef = useRef(docKey)
+  docKeyRef.current = docKey
+
+  /**
+   * Text read for one note must not land in another. A read can come back
+   * after the reader has moved on; put there, it would show one note under
+   * another's name — and be saved into it at the next keystroke.
+   */
+  const placeBuffer = useCallback((key: string, text: string, revision: string | null): void => {
+    if (docKeyRef.current === key) setBuffer({ key, text, revision })
+  }, [])
+  const conversationRef = useRef<string | null>(null)
+  const refreshTimer = useRef<number | null>(null)
+  conversationRef.current = conversationId
 
   // -------------------------------------------------------------- loading
 
@@ -85,22 +166,90 @@ export function App() {
     }
   }, [])
 
+  const refreshConversations = useCallback(async (): Promise<ConversationSummary[]> => {
+    try {
+      const { conversations: next } = await api.listConversations()
+      setConversations(next)
+      return next
+    } catch {
+      return [] // The list catches up on the next event.
+    }
+  }, [])
+
+  const refreshSync = useCallback(async (): Promise<void> => {
+    try {
+      setSync(await api.syncStatus())
+    } catch {
+      /* the indicator catches up on the next round */
+    }
+  }, [])
+
+  const selectConversation = useCallback((id: string): void => {
+    setConversationId(id)
+    setUnread((current) => {
+      if (!current.has(id)) return current
+      const next = new Set(current)
+      next.delete(id)
+      return next
+    })
+  }, [])
+
   useEffect(() => {
+    if (conversationId && state) rememberConversation(state.project.root, conversationId)
+  }, [conversationId, state?.project.root])
+
+  useEffect(() => {
+    let source: EventStream | null = null
     void (async () => {
       const next = await refreshState()
       if (!next) return
 
-      const conversationId =
-        next.conversations[0]?.conversation_id ??
-        (await api.createConversation('Research chat')).conversation_id
-      setConversation(await api.conversation(conversationId))
+      // Back to the conversation that was open; failing that, the most recent.
+      setConversations(next.conversations)
+      const chats = next.conversations.filter((c) => c.kind === 'chat')
+      const remembered = rememberedConversation(next.project.root)
+      const opening =
+        next.conversations.find((c) => c.conversation_id === remembered)?.conversation_id ??
+        chats[0]?.conversation_id ??
+        (await api.createConversation()).conversation_id
+      setConversationId(opening)
+      if (chats.length === 0) void refreshConversations()
+      void api.changes().then((payload) => setChanges(payload.changes))
+      void refreshSync()
 
       if (next.notes.length > 0) setTarget({ kind: 'note', noteId: next.notes[0]!.note_id })
 
-      const source = new EventStream(setConnected)
-      source.subscribe((event) => setEvents((current) => [...current, event]))
+      source = new EventStream(setConnected)
+      source.subscribe((event: ServerEvent) => {
+        if (event.type === 'document_updated' || event.type === 'job_updated') {
+          void refreshState()
+        }
+        if (event.type === 'file_changed') {
+          void refreshState()
+          void api.changes().then((payload) => setChanges(payload.changes))
+          setFileTick((tick) => tick + 1)
+        }
+        if (event.type === 'sync_updated') {
+          setSync(event.status as SyncState)
+          // The remote had news: notes and papers may have changed under us.
+          if (Array.isArray(event.pulled) && event.pulled.length > 0) {
+            void refreshState()
+            void api.changes().then((payload) => setChanges(payload.changes))
+            setFileTick((tick) => tick + 1)
+          }
+        }
+        if (CONVERSATION_EVENTS.has(event.type)) {
+          // A run's events come in bursts; one read of the list covers them.
+          if (refreshTimer.current !== null) window.clearTimeout(refreshTimer.current)
+          refreshTimer.current = window.setTimeout(() => void refreshConversations(), 150)
+        }
+        const finished = event.conversation_id
+        if (event.type === 'done' && finished && finished !== conversationRef.current) {
+          setUnread((current) => new Set(current).add(finished))
+        }
+      })
       source.start(next.latest_seq)
-      stream.current = source
+      setStream(source)
     })()
 
     const media = window.matchMedia(NARROW_QUERY)
@@ -108,27 +257,43 @@ export function App() {
     media.addEventListener('change', onChange)
     return () => {
       media.removeEventListener('change', onChange)
-      stream.current?.close()
+      if (refreshTimer.current !== null) window.clearTimeout(refreshTimer.current)
+      source?.close()
     }
-  }, [refreshState])
+  }, [refreshState, refreshConversations, refreshSync])
+
+  // What is waiting to be saved changes as the user types; ask now and then.
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      if (!document.hidden) void refreshSync()
+    }, 30_000)
+    return () => window.clearInterval(timer)
+  }, [refreshSync])
 
   // Load the buffer for whatever the main area is showing.
   useEffect(() => {
+    const key = keyOf(target)
+    // A different buffer starts clean, whatever the one before it was.
+    setDirty(false)
+    if (startEditing.current !== key) startEditing.current = null
     void (async () => {
-      if (target.kind === 'note') {
-        const note = await api.readNote(target.noteId)
-        setBuffer({ text: note.text, revision: note.revision })
-      } else if (target.kind === 'summary') {
-        const summary = await api.summary(target.documentId)
-        setBuffer({
-          text: summary.text ?? '',
-          revision: summary.revision,
-        })
-      } else {
-        setBuffer(null)
+      try {
+        if (target.kind === 'note') {
+          const note = await api.readNote(target.noteId)
+          placeBuffer(key, note.text, note.revision)
+        } else if (target.kind === 'summary') {
+          const summary = await api.summary(target.documentId)
+          placeBuffer(key, summary.text ?? '', summary.revision)
+        } else {
+          setBuffer(null)
+        }
+      } catch (error) {
+        setInsertNotice(
+          error instanceof ApiError ? error.body.message : 'That could not be opened.',
+        )
       }
     })()
-  }, [target])
+  }, [target, placeBuffer])
 
   // Keep the note context chip in step with what is being edited.
   useEffect(() => {
@@ -142,22 +307,6 @@ export function App() {
   useEffect(() => {
     setContext((current) => ({ ...current, selection: selection || null }))
   }, [selection])
-
-  // React to server events that change files or documents under us.
-  useEffect(() => {
-    if (events.length === 0) return
-    const latest = events[events.length - 1]!
-    if (latest.type === 'document_updated' || latest.type === 'job_updated') {
-      void refreshState()
-    }
-    if (latest.type === 'file_changed') {
-      void refreshState()
-      void api.changes().then((payload) => setChanges(payload.changes))
-      // A clean buffer follows the file; a dirty one is left alone and the
-      // editor surfaces a conflict if the user then saves.
-      if (!dirty) void reloadBuffer()
-    }
-  }, [events])
 
   const reloadReferences = useCallback(async (): Promise<void> => {
     if (!openDocument) {
@@ -182,19 +331,52 @@ export function App() {
   }, [buffer?.revision, reloadReferences])
 
   const reloadBuffer = useCallback(async (): Promise<void> => {
+    const key = keyOf(target)
     if (target.kind === 'note') {
       const note = await api.readNote(target.noteId)
-      setBuffer({ text: note.text, revision: note.revision })
+      placeBuffer(key, note.text, note.revision)
     } else if (target.kind === 'summary') {
       const summary = await api.summary(target.documentId)
-      setBuffer({ text: summary.text ?? '', revision: summary.revision })
+      placeBuffer(key, summary.text ?? '', summary.revision)
     }
-  }, [target])
+  }, [target, placeBuffer])
 
-  const reloadConversation = useCallback(async (): Promise<void> => {
-    if (!conversation) return
-    setConversation(await api.conversation(conversation.conversation_id))
-  }, [conversation?.conversation_id])
+  // A clean buffer follows an agent's edit; a dirty one is left alone and the
+  // editor surfaces a conflict if the user then saves.
+  useEffect(() => {
+    if (fileTick > 0 && !dirty) void reloadBuffer()
+  }, [fileTick])
+
+  const newConversation = useCallback(async (): Promise<void> => {
+    // An empty conversation is as good as a new one: go there instead of
+    // leaving a trail of them.
+    const blank = conversations.find((c) => c.kind === 'chat' && c.turn_count === 0)
+    const id = blank?.conversation_id ?? (await api.createConversation()).conversation_id
+    await refreshConversations()
+    selectConversation(id)
+  }, [conversations, refreshConversations, selectConversation])
+
+  const renameConversation = useCallback(
+    async (id: string, title: string): Promise<void> => {
+      await api.renameConversation(id, title)
+      await refreshConversations()
+    },
+    [refreshConversations],
+  )
+
+  const deleteConversation = useCallback(
+    async (id: string): Promise<void> => {
+      await api.deleteConversation(id)
+      const left = await refreshConversations()
+      if (id !== conversationRef.current) return
+      const next =
+        left.find((c) => c.kind === 'chat')?.conversation_id ??
+        (await api.createConversation()).conversation_id
+      if (!left.some((c) => c.conversation_id === next)) await refreshConversations()
+      selectConversation(next)
+    },
+    [refreshConversations, selectConversation],
+  )
 
   // ------------------------------------------------------------- actions
 
@@ -202,21 +384,23 @@ export function App() {
     async (text: string, expectedRevision: string | null) => {
       if (target.kind === 'note') {
         const note = await api.saveNote(target.noteId, text, expectedRevision)
-        setBuffer({ text: note.text, revision: note.revision })
-        setDirty(false)
+        placeBuffer(keyOf(target), note.text, note.revision)
+        // A save that lands after the note was left says nothing about the
+        // one now open.
+        if (keyOf(target) === docKeyRef.current) setDirty(false)
         void refreshState()
         return { revision: note.revision }
       }
       if (target.kind === 'summary') {
         const result = await api.saveSummary(target.documentId, text, expectedRevision)
-        setBuffer({ text, revision: result.revision })
-        setDirty(false)
+        placeBuffer(keyOf(target), text, result.revision)
+        if (keyOf(target) === docKeyRef.current) setDirty(false)
         void refreshState()
         return { revision: result.revision }
       }
       throw new Error('Nothing is open to save.')
     },
-    [target, refreshState],
+    [target, refreshState, placeBuffer],
   )
 
   const openSource = useCallback(
@@ -288,11 +472,12 @@ export function App() {
   const createNote = useCallback(async (): Promise<void> => {
     const note = await api.createNote('Untitled note')
     await refreshState()
+    startEditing.current = `note:${note.note_id}`
     setTarget({ kind: 'note', noteId: note.note_id })
   }, [refreshState])
 
   const importFiles = useCallback(
-    async (files: File[]): Promise<void> => {
+    async (files: File[], tags: string[] = []): Promise<void> => {
       const pdfs = files.filter(
         (file) => file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf'),
       )
@@ -300,7 +485,15 @@ export function App() {
         setInsertNotice('Only PDF import is supported in this version.')
         return
       }
-      const result = await api.uploadDocuments(pdfs)
+      let result: Awaited<ReturnType<typeof api.uploadDocuments>>
+      try {
+        result = await api.uploadDocuments(pdfs, tags)
+      } catch (error) {
+        setInsertNotice(
+          error instanceof ApiError ? error.body.message : 'The papers could not be imported.',
+        )
+        return
+      }
       await refreshState()
       const messages: string[] = []
       for (const item of result.imported) {
@@ -316,6 +509,21 @@ export function App() {
       if (first) {
         setOpenDocument(first)
         setShowSourcePanel(true)
+      }
+    },
+    [refreshState],
+  )
+
+  /** A change of tags: do it, show the result, and say why if it was refused. */
+  const changeTags = useCallback(
+    async (change: () => Promise<unknown>): Promise<void> => {
+      try {
+        await change()
+        await refreshState()
+      } catch (error) {
+        setInsertNotice(
+          error instanceof ApiError ? error.body.message : 'The tags could not be changed.',
+        )
       }
     },
     [refreshState],
@@ -337,6 +545,106 @@ export function App() {
       }))
     },
     [state?.documents, narrow],
+  )
+
+  /** Drag the drawer's edge to trade room between the chat and the page. */
+  const resizeChat = useCallback((event: PointerEvent): void => {
+    const handle = event.currentTarget as HTMLElement
+    handle.setPointerCapture(event.pointerId)
+    let width = 0
+    const onMove = (move: PointerEvent): void => {
+      // The drawer sits against the right edge of the window.
+      width = Math.min(chatMaxWidth(), Math.max(CHAT_MIN_WIDTH, window.innerWidth - move.clientX))
+      setChatWidth(width)
+    }
+    const onUp = (): void => {
+      handle.removeEventListener('pointermove', onMove)
+      handle.removeEventListener('pointerup', onUp)
+      handle.removeEventListener('pointercancel', onUp)
+      if (width > 0) {
+        try {
+          window.localStorage.setItem(CHAT_WIDTH_KEY, String(width))
+        } catch {
+          /* the width holds for this visit */
+        }
+      }
+    }
+    handle.addEventListener('pointermove', onMove)
+    handle.addEventListener('pointerup', onUp)
+    handle.addEventListener('pointercancel', onUp)
+    event.preventDefault()
+  }, [])
+
+  /**
+   * Go from a highlight in the paper to where it is cited.
+   *
+   * In the note that is open, if it cites the passage; otherwise the note or
+   * summary that does is opened. A passage cited in several places is walked
+   * through by clicking again: each citation in this note, then the next place.
+   */
+  const revealCitation = useCallback(
+    (reference: ReferenceRecord): void => {
+      setHighlight(reference)
+      const places = reference.cited_by ?? []
+      if (places.length === 0) return
+      const keyOfPlace = (place: (typeof places)[number]): string =>
+        place.kind === 'note' ? `note:${place.id}` : `summary:${place.id}`
+
+      const here = places.findIndex((place) => keyOfPlace(place) === docKeyRef.current)
+      let next = places[0]!
+      if (here >= 0) {
+        const result = revealRef.current?.(reference.reference_id)
+        const more = places.length > 1
+        if (result?.found && !(result.wrapped && more)) {
+          setSourceTakesOver(false)
+          return
+        }
+        if (!more) return // Cited here by the record, but no longer in the text.
+        next = places[(here + 1) % places.length]!
+      }
+      pendingReveal.current = reference.reference_id
+      setTarget(
+        next.kind === 'note'
+          ? { kind: 'note', noteId: next.id }
+          : { kind: 'summary', documentId: next.id },
+      )
+      setSourceTakesOver(false)
+    },
+    [],
+  )
+
+  /** Show a paper at a page, as a step in the chat names it. Attaches nothing. */
+  const showDocument = useCallback(
+    (documentId: string, page: number): void => {
+      const document = state?.documents.find((item) => item.document_id === documentId)
+      if (!document) {
+        setInsertNotice('That paper is no longer in this project.')
+        return
+      }
+      setOpenDocument(document)
+      setHighlight(null)
+      setGotoPage(page)
+      setGotoNonce((value) => value + 1)
+      setShowSourcePanel(true)
+      if (narrow) setSourceTakesOver(true)
+    },
+    [state?.documents, narrow],
+  )
+
+  /** Open whatever a line of the conversation refers to. */
+  const openTarget = useCallback(
+    (target: OpenTarget): void => {
+      if (target.kind === 'document') showDocument(target.documentId, target.page)
+      else if (target.kind === 'reference') void openSource(target.referenceId)
+      else if (target.kind === 'note') {
+        setTarget({ kind: 'note', noteId: target.noteId })
+        setSourceTakesOver(false)
+      } else {
+        setTarget({ kind: 'summary', documentId: target.documentId })
+        setSourceTakesOver(false)
+      }
+    },
+    [showDocument, openSource],
   )
 
   const jumpToHit = useCallback(
@@ -369,7 +677,7 @@ export function App() {
   }, [])
 
   const undo = useCallback(
-    async (change: ChangeRecord): Promise<void> => {
+    async (change: Pick<ChangeRecord, 'change_id'>): Promise<void> => {
       try {
         await api.undo(change.change_id)
         await reloadBuffer()
@@ -407,7 +715,7 @@ export function App() {
         const where =
           citedBy.length === 0
             ? 'not cited in any note yet'
-            : citedBy.map((citation) => citation.title).join(', ')
+            : `cited in ${citedBy.map((citation) => citation.title).join(', ')} — click to go there`
         const quote = reference.quote ? `“${reference.quote.slice(0, 90)}” — ` : ''
         return {
           referenceId: reference.reference_id,
@@ -419,11 +727,6 @@ export function App() {
       })
   }, [documentReferences, target, highlight?.reference_id])
 
-  const docKey = useMemo(() => {
-    if (target.kind === 'note') return `note:${target.noteId}`
-    if (target.kind === 'summary') return `summary:${target.documentId}`
-    return 'empty'
-  }, [target])
 
   if (fatal !== null) {
     return (
@@ -483,6 +786,17 @@ export function App() {
         </span>
         <span class="spacer" />
         {!connected && <span class="badge warn">Reconnecting…</span>}
+        {sync && (
+          <SyncStatus
+            sync={sync}
+            onOpened={() => void refreshSync()}
+            onSync={async (resolve) => {
+              const result = await api.syncNow(resolve)
+              setSync(result)
+              if (result.problems.length > 0) throw new Error(result.problems.join(' '))
+            }}
+          />
+        )}
         {!state.agent.ready && (
           <span class="badge" title={state.agent.message}>
             Agent not configured
@@ -507,7 +821,7 @@ export function App() {
         </div>
       )}
 
-      <div class="body">
+      <div class="body" style={{ '--chat-width': `${chatWidth}px` }}>
         {showSidebar && (
           <Sidebar
             documents={state.documents}
@@ -524,7 +838,10 @@ export function App() {
             }}
             onOpenDocument={openDocumentById}
             onNewNote={() => void createNote()}
-            onImport={(files) => void importFiles(files)}
+            tags={state.tags}
+            onImport={(files, tags) => void importFiles(files, tags)}
+            onSetTags={(documentId, tags) => void changeTags(() => api.setTags(documentId, tags))}
+            onTagDocuments={(ids, add) => void changeTags(() => api.tagDocuments(ids, add))}
             onSearchJump={(hit) => void jumpToHit(hit)}
             onSummarize={async (documentId) => {
               const result = await api.summarize(documentId)
@@ -547,7 +864,7 @@ export function App() {
                 </button>
               )}
             </div>
-            {buffer && target.kind !== 'empty' ? (
+            {buffer && buffer.key === docKey && target.kind !== 'empty' ? (
               <MarkdownEditor
                 docKey={docKey}
                 text={buffer.text}
@@ -556,10 +873,28 @@ export function App() {
                 onOpenSource={(id) => void openSource(id)}
                 onSelectionChange={setSelection}
                 onDirtyChange={setDirty}
+                activeReference={highlight?.reference_id ?? null}
+                startEditing={startEditing.current === docKey}
+                onSaveLost={(message) =>
+                  setInsertNotice(
+                    `The last edits to “${currentTitle}” could not be saved: ${message}`,
+                  )
+                }
                 registerInsert={(insert) => {
                   insertRef.current = insert
                 }}
+                registerReveal={(reveal) => {
+                  revealRef.current = reveal
+                  // Opened in order to show a citation: go to it.
+                  const waiting = pendingReveal.current
+                  pendingReveal.current = null
+                  if (waiting) reveal(waiting)
+                }}
               />
+            ) : target.kind !== 'empty' ? (
+              <div class="empty">
+                <p>Opening…</p>
+              </div>
             ) : (
               <div class="empty">
                 <p>Open a note, or drag PDFs onto the sidebar to import them.</p>
@@ -606,10 +941,12 @@ export function App() {
                 const reference = documentReferences.find(
                   (item) => item.reference_id === referenceId,
                 )
-                if (reference) setHighlight(reference)
+                if (reference) revealCitation(reference)
               }}
               onClose={() => {
                 setOpenDocument(null)
+                // No passage is on show any more, here or in the note.
+                setHighlight(null)
                 setSourceTakesOver(false)
               }}
             />
@@ -618,18 +955,40 @@ export function App() {
 
         {showChat && (
           <aside class="chat-drawer">
+            <div
+              class="chat-splitter"
+              role="separator"
+              aria-orientation="vertical"
+              aria-label="Resize the chat"
+              title="Drag to resize; double-click to reset"
+              onPointerDown={resizeChat}
+              onDblClick={() => {
+                setChatWidth(CHAT_DEFAULT_WIDTH)
+                try {
+                  window.localStorage.removeItem(CHAT_WIDTH_KEY)
+                } catch {
+                  /* nothing was stored */
+                }
+              }}
+            />
             <Chat
-              conversation={conversation}
+              conversations={conversations}
+              currentId={conversationId}
+              unread={unread}
+              stream={stream}
               agent={state.agent}
               documents={state.documents}
+              notes={state.notes}
+              changes={changes}
               context={context}
-              events={events}
               onContextChange={setContext}
+              onSelect={selectConversation}
+              onNew={() => void newConversation()}
+              onRename={renameConversation}
+              onDelete={deleteConversation}
+              onOpen={openTarget}
               onOpenSource={(id) => void openSource(id)}
-              onReload={() => {
-                void reloadConversation()
-                if (!dirty) void reloadBuffer()
-              }}
+              onUndo={(changeId) => void undo({ change_id: changeId })}
             />
           </aside>
         )}

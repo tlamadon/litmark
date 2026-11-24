@@ -17,7 +17,7 @@ The package and command name is `litmark`, confirmed available on PyPI before th
 ## 2. Product principles
 
 1. **Markdown is the document.** Human and agent work ultimately produce ordinary, portable `.md` files.
-2. **Evidence is one click away.** Source links open the correct PDF page and, where resolved, highlight the exact passage.
+2. **Evidence is one click away.** Source links open the correct PDF page and, where resolved, highlight the exact passage. The reverse holds too: a highlight in the PDF, clicked, goes to the sentence that cites it — in the open note, or by opening the note or summary that does — and clicking again walks through every place it is cited. Going there shows the citation, centred and marked, without moving the cursor or taking the keyboard focus; citations in a note carry the colours of the paper's highlights, the passage on show in one and the rest in another.
 3. **The interface stays focused on research.** Present documents, notes, and conversation; expose technical activity only in an expandable detail view.
 4. **The agent does real work.** Chat drives a coding-agent runtime with file and search tools, persistent sessions, and observable edits.
 5. **Installation is simple.** A Python package contains the server and compiled browser assets.
@@ -59,11 +59,11 @@ Design for a laptop browser: quiet typography, readable text widths, resizable p
 | Area | Contents and behavior |
 | --- | --- |
 | Project sidebar | Documents and Notes sections, search, import button, new-note action, bibliography export; each document shows title, summary preview, and ingestion status. |
-| Main editor | The current note or document summary, using Markdown live preview. |
-| Right source panel | PDF viewer, filename/title, page controls, zoom, search, and evidence highlights. The document scrolls continuously rather than a page at a time, and every registered mark in it is drawn, not only the one just opened. |
-| Chat drawer | Persistent conversation, context attachments, streaming replies, stop button, and expandable tool activity. |
+| Main editor | The current note or document summary, using Markdown live preview. It opens for reading: rendered, with nothing revealed or made editable by a click, and a click on a citation opens its source. A double-click on the text, or the Edit control, starts editing at that place; Escape or Read returns. A newly created note opens for editing, and inserting a reference switches to editing. *(v0.1 had editing only, so every click placed a cursor and opened the syntax under it — in the way when most use is reading and asking the agent.)* |
+| Right source panel | PDF viewer, filename/title, page controls, zoom, search, and evidence highlights. The document scrolls continuously rather than a page at a time, and every registered mark in it is drawn, not only the one just opened. Which pages are rasterised is recomputed from the layout whenever the view moves — pages near the viewport are drawn, drawn pages are kept until far away — so no sequence of scrolls, jumps, and zooms leaves a page in view blank; a page that fails to draw says so and offers to try again. |
+| Chat drawer | Several persistent conversations with a menu to switch between them, context attachments, streaming replies, a stop button, and each turn's steps shown one line apiece in the reader's terms. A transcript view shows the same turns verbatim. |
 
-The sidebar, source panel, and chat drawer can collapse. Chat must not permanently shrink the editor and PDF into unreadable columns. On narrower windows, the source panel may replace the main view, with an explicit return-to-note action. Full mobile editing is outside the initial scope.
+The sidebar, source panel, and chat drawer can collapse. Chat must not permanently shrink the editor and PDF into unreadable columns: the drawer's width is the user's to drag, within a floor and a ceiling of half the window. On narrower windows, the source panel may replace the main view, with an explicit return-to-note action. Full mobile editing is outside the initial scope.
 
 ### Markdown live preview
 
@@ -205,8 +205,8 @@ Prefer searching and reading relevant pages over placing the entire corpus in ea
 - Stream public assistant text, tool names/status, errors, and changed-file notifications.
 - Persist chat history and backend session identifiers across browser reconnects.
 - Permit stopping a run; stopping must cancel backend work, not merely hide output.
-- Serialize agent runs per project, including automatic summaries; prioritize explicit user requests over queued summaries.
-- On server restart, mark unfinished runs interrupted. Resume the conversation if the backend supports it, otherwise start a new backend session with the saved transcript/context and disclose that recovery.
+- Serialize agent runs per conversation, and let conversations run side by side up to a configurable limit (`[agent] max_parallel_runs`, default 3). Safety rests on the version checks every edit already goes through, not on running one thing at a time. Automatic summaries are background work in a conversation of their own, so they share one lane; when lanes are scarce, explicit user requests start ahead of queued summaries. *(v0.1 serialized all runs per project. A long question then held up every other one, and summaries ran inside the user's first conversation, resuming its session.)*
+- On server restart, mark unfinished runs interrupted. Resume the conversation if the backend supports it, otherwise start a new backend session with the saved transcript/context and disclose that recovery. The same fallback applies whenever a saved session cannot be reopened — the project directory moved, or another machine opened it.
 - Report tool/provider failures honestly; never replace a failed live run with simulated output.
 - Keep read-only questions read-only. A request to create or edit a note authorizes that edit; do not require confirmation for every ordinary operation.
 
@@ -214,14 +214,19 @@ Prefer searching and reading relevant pages over placing the entire corpus in ea
 
 Implement one live adapter first. The proposed default is the Claude Agent SDK for Python, behind a small provider-neutral interface. Its exact supported authentication and runtime requirements must be validated during the first integration milestone. A second backend is an extension, not a v0.1 requirement. The SDK provides a Python integration surface and session resumption; see its [official reference](https://code.claude.com/docs/en/agent-sdk/python).
 
-The adapter exposes `start_run`, `cancel_run`, session recovery, and an asynchronous event stream. Normalize events into `text_delta`, `tool_started`, `tool_finished`, `file_proposed`, `file_changed`, `error`, and `done`. Give events durable sequence IDs so reconnecting clients can replay without duplicating messages or edits.
+The adapter exposes `start_run`, `cancel_run`, session recovery, and an asynchronous event stream. Normalize events into `text_delta`, `tool_started`, `tool_finished`, `file_proposed`, `file_changed`, `notice`, `error`, and `done`. Give events durable sequence IDs so reconnecting clients can replay without duplicating messages or edits.
+
+The durable events of a run are also how an earlier conversation is drawn again: the browser folds the events it reads back with the same function that folds them live, so a reload shows what each turn did, not only what it said. The one exception to durability is the partial text of a reply as it streams. Those fragments are broadcast but not stored — the finished block replaces them — and each carries its offset in the block, so a browser that missed some shows nothing of that block until it arrives whole rather than text with a hole in it. A block the run never finished is stored as it stood, marked unfinished.
+
+The agent runs hermetically. The runtime is told to load only the project's own tool server and no filesystem settings, so the user's personal MCP servers, plugins, hooks, skills, and memory are not part of a research session. This matters twice over: the agent runs with permission checks bypassed and reads PDFs, which are untrusted text, so nothing beyond the project tools may be within its reach; and those extras otherwise add tens of thousands of tokens to the start of every conversation.
 
 Provide project tools with explicit schemas:
 
 | Tool | Result |
 | --- | --- |
-| `list_documents` | IDs, metadata, summaries, and availability status. |
-| `search_documents` | Matching passages with document IDs and physical page numbers. |
+| `list_documents` | IDs, metadata, tags, summaries, and availability status; optionally only the documents carrying given tags. |
+| `tag_documents` | Tags added to, or removed from, one or more documents. |
+| `search_documents` | Matching passages with document IDs and physical page numbers; optionally restricted to documents carrying given tags. |
 | `read_pages` | Extracted page text and extraction warnings. |
 | `read_note` | Markdown text and current revision/hash. |
 | `resolve_source` | A registered reference ID or an explicit matching failure. |
@@ -243,7 +248,7 @@ Prevent silent overwrites when the user and agent work on the same note.
 4. The server commits an agent edit only if its base still matches. Validate referenced IDs before publishing generated content.
 5. On conflict, preserve the proposed edit and the user's version, then show a comparison with explicit choices. Do not implement automatic three-way merging in v0.1.
 
-A clean editor buffer refreshes when an agent edit lands. A dirty buffer remains intact and is offered conflict resolution. Saving pending user edits before submitting chat helps, but does not replace version checks.
+Edits are saved after a short pause, and at once when the buffer is left for another or the tab is hidden, so what was typed just before switching notes is not lost; a save already under way goes first, so the last one is checked against the revision it produced. A clean editor buffer refreshes when an agent edit lands. A dirty buffer remains intact and is offered conflict resolution. Saving pending user edits before submitting chat helps, but does not replace version checks.
 
 Maintain file snapshots and an edit log for undo. Undo is itself version-checked so it cannot remove later human edits. Cancellation preserves already committed edits, identifies them in the conversation, and discards uncommitted proposals unless retained for review. Arbitrary external editors cannot be made fully transactional; detect their changes and preserve recovery snapshots.
 
@@ -255,7 +260,7 @@ Keep user material as files in a movable project directory. Proposed layout:
 | --- | --- |
 | `project.toml` | Schema version and non-secret project settings. |
 | `documents/<id>/original.pdf` | Original immutable PDF. |
-| `documents/<id>/metadata.json` | Identity, hash, original filename, title, page count, ingestion status. |
+| `documents/<id>/metadata.json` | Identity, hash, original filename, title, page count, tags, ingestion status. |
 | `documents/<id>/pages.json` | Per-page text, character geometry, offset mapping, extraction version/warnings. |
 | `documents/<id>/summary.md` | Editable, cited summary. |
 | `notes/*.md` | User and agent notes. |
@@ -266,6 +271,40 @@ Keep user material as files in a movable project directory. Proposed layout:
 | `.research/runs/` | Staged edits and run diagnostics. |
 
 The database stores application state; it is not the sole home of notes or source evidence. Document copies, notes, and references must remain usable outside the app. Export chat transcripts as Markdown or JSON on request. Rebuildable indexes may live in SQLite. Register references before writing links that use them; unused registry entries are harmless after interrupted writes.
+
+### Tags
+
+*(Added after v0.1.)* A document carries zero or more tags: short free-text labels the user assigns to gather papers — by field, by a year's job market, by candidate. There is no schema. A tag containing a colon is read as `group:value`, and the interface gathers such tags under their group; that convention is the only structure.
+
+- Tags are stored, sorted, in `metadata.json`, so they are project text: versioned, synced, and usable outside the application. They appear in the generated bibliography as `keywords`.
+- Tags are unique within a document whatever their case, and a tag typed in a different case than one already in the project takes the existing spelling.
+- The document list can be narrowed to the documents carrying every selected tag, or to those with none. Tags can be set on one document, added to every listed document at once, and given at import.
+- The agent sees tags, can restrict listing and search to them, and changes them only on request.
+- Every write to `metadata.json` — extraction status, summary status, tags — is a single read-modify-write under one lock, so concurrent writers cannot erase each other's part.
+
+### Sync between machines
+
+*(Added after v0.1, which kept a project on one machine.)* A project's material is of two kinds, and each is carried the way that suits it.
+
+**Text through git, committed by the application.** Notes, summaries, `references.json`, `references.bib`, `project.toml` and each `metadata.json` are versioned in a repository whose top level is the project directory. The application commits what changed once edits have settled, replays local commits over the remote's, and publishes — on a timer and on request. The user is not asked to commit, and commit messages are generated in the project's terms.
+
+- Act only on a repository whose top level *is* the project. A project inside some other repository is never committed to.
+- Commit before fetching, so nothing uncommitted is ever in the way of incoming changes.
+- When both sides changed the same lines: stop, restore the working tree exactly as it was, publish the local commits to a side branch so they exist off this disk, and wait for the user to choose a side. The choice is applied as a merge preferring that side for the contested lines only; both histories are kept.
+- Network commands never prompt. A token for an `https` remote is passed to git through the environment for the duration of the command and is not written to the repository's configuration.
+
+**Papers through a blob store, addressed by hash.** `original.pdf` is stored under the SHA-256 already recorded in `metadata.json`; extracted `pages.json` is stored compressed under that hash plus the extraction version. Because a name is the hash of its content there is nothing to reconcile: an object is written once and never rewritten, and a download is verified against the name it was requested by. Backends: any S3-compatible service, or a plain directory. Credentials come from the environment, never the project file.
+
+- On opening a project, fetch the extracted text of every paper that lacks it, so search and the agent's reading cover the whole library. If storage has no text for a paper, fetch its PDF and extract again, without regenerating its summary.
+- Fetch a PDF when it is first opened (or all of them with `prefetch`).
+- With no storage configured, PDFs remain in git rather than being ignored into nonexistence.
+- A project whose storage is misdescribed still opens; its notes are local.
+
+Operational state under `.research/` — conversations among it — is not synced. Document and reference IDs are sequential, so two copies that both allocate before syncing collide; this is surfaced as a git conflict, and concurrent use of two copies is not supported.
+
+### Access when served beyond the owner's machine
+
+An optional password (`LITMARK_PASSWORD`, HTTP Basic) is required before anything is served, the page included, since the page carries the session credential. It is single-user access control for a container on a host, to be used behind TLS; multi-user authentication remains out of scope.
 
 ## 10. Proposed implementation
 
@@ -318,7 +357,7 @@ The target application includes ingestion, summaries, live-preview editing, PDF 
 
 Prototype the live-preview cursor behavior and quote-to-PDF geometry early. For a short class, provide the shell and editor integration as starter code and let students build a complete document-to-agent-to-note workflow. Building the full application from an empty repository is a larger exercise.
 
-Deferred: OCR, document URL downloads, Word/HTML ingestion, Zotero and other reference-manager integration, semantic search, multiple agent providers, arbitrary analysis execution, multi-user collaboration, full mobile editing, complex tables, and public hosting. Keep extension points small rather than building a plugin framework first.
+Deferred: OCR, document URL downloads, Word/HTML ingestion, Zotero and other reference-manager integration, semantic search, multiple agent providers, arbitrary analysis execution, multi-user collaboration, full mobile editing, complex tables, and multi-user public hosting. Keep extension points small rather than building a plugin framework first.
 
 ## 12. Acceptance criteria
 

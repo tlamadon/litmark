@@ -13,12 +13,16 @@
  * other viewer. Only pages near the viewport are rasterised; the rest keep
  * correctly-sized placeholders, which keeps the scrollbar honest and memory
  * bounded on a long document.
+ *
+ * Which pages are drawn is worked out from where the pages are, every time
+ * the view moves — not remembered from events about pages coming and going.
+ * A page near the view is drawn; that is the whole rule, so there is no
+ * sequence of scrolls, jumps and zooms that can leave a page in view blank.
  */
 
 import {
   useCallback,
   useEffect,
-  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -35,8 +39,18 @@ pdfjs.GlobalWorkerOptions.workerSrc = workerUrl
 const ZOOM_STEPS = [0.5, 0.6, 0.75, 0.9, 1, 1.15, 1.3, 1.5, 1.75, 2, 2.5, 3]
 // Breathing room so a page is not flush against the panel edges.
 const PAGE_MARGIN = 24
-// How many pages either side of the viewport to keep rasterised.
-const RENDER_MARGIN_PAGES = 1
+// Draw pages this far outside the viewport, so they are ready when scrolled to.
+const RENDER_MARGIN_PX = 600
+// Keep a drawn page until it is this far away; between the two distances a
+// page stays as it is, so scrolling back and forth does not redraw it.
+const DISCARD_MARGIN_PX = 3000
+// Sharper than this buys nothing a reader can see, and costs memory fourfold.
+const MAX_DEVICE_PIXEL_RATIO = 2
+// A canvas past this many pixels fails to allocate in some browsers, and
+// draws nothing without saying so. Zoomed far in, resolution gives way first.
+const MAX_CANVAS_PIXELS = 4096 * 4096
+// How long the panel's width must hold still before pages are redrawn to fit.
+const FIT_SETTLE_MS = 90
 // Above this many pages, assume a uniform size rather than measuring each one.
 const MEASURE_LIMIT = 300
 
@@ -86,7 +100,7 @@ export function PdfViewer(props: PdfViewerProps) {
   const [available, setAvailable] = useState<number | null>(null)
   const [currentPage, setCurrentPage] = useState(1)
   const [pageInput, setPageInput] = useState('1')
-  const [rendered, setRendered] = useState<Set<number>>(() => new Set([1]))
+  const [rendered, setRendered] = useState<Set<number>>(() => new Set())
 
   const scroller = useRef<HTMLDivElement | null>(null)
   const pageNodes = useRef<Map<number, HTMLDivElement>>(new Map())
@@ -120,6 +134,48 @@ export function PdfViewer(props: PdfViewerProps) {
     }
   }, [])
 
+  /**
+   * Decide which pages are drawn, from where they are now.
+   *
+   * A page within reach of the viewport is drawn; a drawn page is kept until
+   * it is far away. Nothing is carried over but the set itself, so whatever
+   * moved the view — a scroll, a jump to a cited page, a zoom, a resize — the
+   * pages in view end up drawn.
+   */
+  const refresh = useCallback(() => {
+    const root = scroller.current
+    if (!root) return
+    const view = root.getBoundingClientRect()
+    if (view.height === 0) return
+    const near = new Set<number>()
+    const far = new Set<number>()
+    for (const [page, node] of pageNodes.current) {
+      const box = node.getBoundingClientRect()
+      const distance = Math.max(view.top - box.bottom, box.top - view.bottom)
+      if (distance < RENDER_MARGIN_PX) near.add(page)
+      else if (distance > DISCARD_MARGIN_PX) far.add(page)
+    }
+    setRendered((previous) => {
+      const next = new Set(near)
+      for (const page of previous) if (!far.has(page)) next.add(page)
+      if (next.size === previous.size && [...next].every((page) => previous.has(page))) {
+        return previous
+      }
+      return next
+    })
+    reportCurrentPage()
+  }, [reportCurrentPage])
+
+  /** Once per frame at most, and after layout: positions are read, not guessed. */
+  const refreshFrame = useRef(0)
+  const scheduleRefresh = useCallback(() => {
+    if (refreshFrame.current) return
+    refreshFrame.current = window.requestAnimationFrame(() => {
+      refreshFrame.current = 0
+      refresh()
+    })
+  }, [refresh])
+
   const url = useMemo(
     () => api.pdfUrl(props.document.document_id),
     [props.document.document_id],
@@ -133,7 +189,7 @@ export function PdfViewer(props: PdfViewerProps) {
     setError(null)
     setPdf(null)
     setSizes([])
-    setRendered(new Set([1]))
+    setRendered(new Set())
     setCurrentPage(1)
     setPageInput('1')
 
@@ -193,12 +249,22 @@ export function PdfViewer(props: PdfViewerProps) {
   useEffect(() => {
     const node = scroller.current
     if (!node) return
-    const update = () => setAvailable(node.clientWidth)
-    update()
+    setAvailable(node.clientWidth)
     if (typeof ResizeObserver === 'undefined') return
-    const observer = new ResizeObserver(update)
+    // Dragging a panel edge changes the width at every frame. Redrawing every
+    // page to fit each of those widths starts renders only to cancel them;
+    // wait until the width holds still, then fit once.
+    let timer = 0
+    const observer = new ResizeObserver(() => {
+      window.clearTimeout(timer)
+      timer = window.setTimeout(() => setAvailable(node.clientWidth), FIT_SETTLE_MS)
+      scheduleRefresh()
+    })
     observer.observe(node)
-    return () => observer.disconnect()
+    return () => {
+      window.clearTimeout(timer)
+      observer.disconnect()
+    }
   }, [pdf])
 
   const scale = useMemo(() => {
@@ -216,76 +282,22 @@ export function PdfViewer(props: PdfViewerProps) {
 
   // ------------------------------------------------- which pages to render
 
-  useLayoutEffect(() => {
-    const root = scroller.current
-    if (!root || sizes.length === 0) return
-    if (typeof IntersectionObserver === 'undefined') {
-      setRendered(new Set(sizes.map((_unused, index) => index + 1)))
-      return
-    }
-
-    const observer = new IntersectionObserver(
-      (entries) => {
-        setRendered((previous) => {
-          const next = new Set(previous)
-          let changed = false
-          for (const entry of entries) {
-            if (!entry.isIntersecting) continue
-            const page = Number((entry.target as HTMLElement).dataset.page)
-            if (!page) continue
-            for (
-              let near = page - RENDER_MARGIN_PAGES;
-              near <= page + RENDER_MARGIN_PAGES;
-              near += 1
-            ) {
-              if (near >= 1 && near <= sizes.length && !next.has(near)) {
-                next.add(near)
-                changed = true
-              }
-            }
-          }
-          return changed ? next : previous
-        })
-
-        reportCurrentPage()
-      },
-      { root, rootMargin: '250px 0px', threshold: [0, 0.1, 0.5, 0.9] },
-    )
-
-    for (const node of pageNodes.current.values()) observer.observe(node)
-    return () => observer.disconnect()
-  }, [sizes])
+  // Recomputed whenever the layout can have changed: page sizes, zoom, and
+  // the pages themselves appearing.
+  useEffect(() => {
+    scheduleRefresh()
+  }, [sizes, scale, pdf])
 
   useEffect(() => {
     const root = scroller.current
     if (!root) return
-    let frame = 0
-    const onScroll = () => {
-      if (frame) return
-      frame = window.requestAnimationFrame(() => {
-        frame = 0
-        reportCurrentPage()
-      })
-    }
-    root.addEventListener('scroll', onScroll, { passive: true })
+    root.addEventListener('scroll', scheduleRefresh, { passive: true })
     return () => {
-      root.removeEventListener('scroll', onScroll)
-      if (frame) window.cancelAnimationFrame(frame)
+      root.removeEventListener('scroll', scheduleRefresh)
+      if (refreshFrame.current) window.cancelAnimationFrame(refreshFrame.current)
+      refreshFrame.current = 0
     }
-  }, [pdf, reportCurrentPage])
-
-  // Release pages far from the viewport, so a long document does not
-  // accumulate full-resolution canvases.
-  useEffect(() => {
-    setRendered((previous) => {
-      const next = new Set<number>()
-      for (const page of previous) {
-        if (Math.abs(page - currentPage) <= RENDER_MARGIN_PAGES + 2) next.add(page)
-      }
-      next.add(currentPage)
-      return next.size === previous.size ? previous : next
-    })
-  }, [currentPage])
+  }, [pdf])
 
   // ------------------------------------------------------------- scrolling
 
@@ -296,7 +308,6 @@ export function PdfViewer(props: PdfViewerProps) {
   useEffect(() => {
     const target = props.gotoPage
     if (!target || sizes.length === 0) return
-    setRendered((previous) => new Set([...previous, target]))
     // A frame's grace so the placeholder exists at its final height.
     const timer = window.setTimeout(() => scrollToPage(target), 60)
     return () => window.clearTimeout(timer)
@@ -305,7 +316,6 @@ export function PdfViewer(props: PdfViewerProps) {
   const go = (next: number): void => {
     const clamped = Math.min(Math.max(1, next), total)
     setPageInput(String(clamped))
-    setRendered((previous) => new Set([...previous, clamped]))
     window.setTimeout(() => scrollToPage(clamped), 30)
   }
 
@@ -479,6 +489,8 @@ export function PdfViewer(props: PdfViewerProps) {
                 register={(node) => {
                   if (node) pageNodes.current.set(pageNumber, node)
                   else pageNodes.current.delete(pageNumber)
+                  // A page that has just appeared may already be in view.
+                  scheduleRefresh()
                 }}
               />
             )
@@ -502,9 +514,11 @@ interface PdfPageProps {
 
 function PdfPage(props: PdfPageProps) {
   const host = useRef<HTMLDivElement | null>(null)
-  const canvas = useRef<HTMLCanvasElement | null>(null)
+  const surface = useRef<HTMLDivElement | null>(null)
   const textLayer = useRef<HTMLDivElement | null>(null)
   const [drawn, setDrawn] = useState(false)
+  const [failure, setFailure] = useState<string | null>(null)
+  const [attempt, setAttempt] = useState(0)
 
   const width = Math.floor(props.size.width * props.scale)
   const height = Math.floor(props.size.height * props.scale)
@@ -514,81 +528,104 @@ function PdfPage(props: PdfPageProps) {
     return () => props.register(null)
   }, [])
 
+  // Not near the view: drop the bitmap. The sized placeholder keeps the
+  // layout, and the scrollbar, exactly as they were.
   useEffect(() => {
-    if (!props.active) {
-      setDrawn(false)
-      // Drop the bitmap; the sized placeholder keeps the layout stable.
-      const target = canvas.current
-      if (target) {
-        target.width = 0
-        target.height = 0
-      }
-      textLayer.current?.replaceChildren()
-      return
-    }
+    if (props.active) return
+    surface.current?.replaceChildren()
+    textLayer.current?.replaceChildren()
+    setDrawn(false)
+    setFailure(null)
+  }, [props.active])
 
+  useEffect(() => {
+    if (!props.active) return
     let cancelled = false
     let task: { cancel: () => void } | null = null
+    let text: { cancel: () => void } | null = null
+    setFailure(null)
 
     void (async () => {
-      const page = await props.pdf.getPage(props.pageNumber)
-      if (cancelled) return
-      const viewport = page.getViewport({ scale: props.scale })
-      const ratio = window.devicePixelRatio || 1
-      const target = canvas.current
-      if (!target) return
-
-      target.width = Math.floor(viewport.width * ratio)
-      target.height = Math.floor(viewport.height * ratio)
-      target.style.width = `${Math.floor(viewport.width)}px`
-      target.style.height = `${Math.floor(viewport.height)}px`
-
-      const context = target.getContext('2d')
-      if (!context) return
-      context.setTransform(ratio, 0, 0, ratio, 0, 0)
-      context.clearRect(0, 0, viewport.width, viewport.height)
-
-      const render = page.render({ canvasContext: context, viewport })
-      task = render
       try {
-        await render.promise
-      } catch {
-        return // superseded by a newer render, or the page was released
-      }
-      if (cancelled) return
-      setDrawn(true)
+        const page = await props.pdf.getPage(props.pageNumber)
+        if (cancelled) return
+        const viewport = page.getViewport({ scale: props.scale })
 
-      // PDF.js's own text layer, so selections line up with the glyphs.
-      const layer = textLayer.current
-      if (layer) {
-        layer.replaceChildren()
-        layer.style.width = `${Math.floor(viewport.width)}px`
-        layer.style.height = `${Math.floor(viewport.height)}px`
-        const built = new pdfjs.TextLayer({
-          textContentSource: page.streamTextContent(),
-          container: layer,
+        let ratio = Math.min(window.devicePixelRatio || 1, MAX_DEVICE_PIXEL_RATIO)
+        const pixels = viewport.width * viewport.height * ratio * ratio
+        if (pixels > MAX_CANVAS_PIXELS) ratio *= Math.sqrt(MAX_CANVAS_PIXELS / pixels)
+
+        // A canvas of its own for every render. PDF.js refuses to draw twice
+        // on one canvas at a time, and a render being cancelled may not have
+        // let go of it yet; a fresh one cannot collide. It also means the
+        // picture already on the page stays there, stretched to the new size,
+        // until the sharp one is ready — a zoom never flashes blank.
+        const canvas = document.createElement('canvas')
+        canvas.width = Math.max(1, Math.floor(viewport.width * ratio))
+        canvas.height = Math.max(1, Math.floor(viewport.height * ratio))
+        const context = canvas.getContext('2d', { alpha: false })
+        if (!context) throw new Error('This browser gave no canvas to draw on.')
+
+        const render = page.render({
+          canvasContext: context,
           viewport,
+          transform: ratio === 1 ? undefined : [ratio, 0, 0, ratio, 0, 0],
         })
-        await built.render()
+        task = render
+        await render.promise
+        if (cancelled) return
+        surface.current?.replaceChildren(canvas)
+        setDrawn(true)
+
+        // PDF.js's own text layer, so selections line up with the glyphs.
+        const layer = textLayer.current
+        if (layer) {
+          layer.replaceChildren()
+          const built = new pdfjs.TextLayer({
+            textContentSource: page.streamTextContent(),
+            container: layer,
+            viewport,
+          })
+          text = built
+          await built.render()
+        }
+      } catch (error) {
+        // Superseded by a newer render, or the page was released: expected.
+        if (cancelled || (error as { name?: string })?.name === 'RenderingCancelledException') {
+          return
+        }
+        // Anything else is a page that is blank for a reason. Say so on the
+        // page, where it can be tried again, instead of leaving it empty.
+        console.error(`Page ${props.pageNumber} could not be drawn`, error)
+        setFailure(error instanceof Error ? error.message : 'Unknown error')
       }
     })()
 
     return () => {
       cancelled = true
       task?.cancel()
+      text?.cancel()
     }
-  }, [props.pdf, props.pageNumber, props.scale, props.active])
+  }, [props.pdf, props.pageNumber, props.scale, props.active, attempt])
 
   return (
     <div
       class="pdf-page"
       ref={host}
       data-page={props.pageNumber}
-      style={{ width: `${width}px`, height: `${height}px` }}
+      style={{
+        width: `${width}px`,
+        height: `${height}px`,
+        // PDF.js sizes the spans of its text layer from these. Without them
+        // every span falls back to the page's font size: the text one selects
+        // is then far larger than the text one sees, and off to the side.
+        '--scale-factor': String(props.scale),
+        '--total-scale-factor': String(props.scale),
+      }}
       onMouseUp={() => props.onSelection(props.pageNumber, textLayer.current)}
       onTouchEnd={() => props.onSelection(props.pageNumber, textLayer.current)}
     >
-      <canvas ref={canvas} />
+      <div class="pdf-surface" ref={surface} />
       <div class="pdf-text-layer" ref={textLayer} />
       <div class="pdf-overlay" style={{ width: `${width}px`, height: `${height}px` }}>
         {props.marks.map((mark) =>
@@ -614,7 +651,17 @@ function PdfPage(props: PdfPageProps) {
           }),
         )}
       </div>
-      {!drawn && <span class="pdf-placeholder muted">{props.pageNumber}</span>}
+      {failure !== null ? (
+        <div class="pdf-placeholder failed" role="alert">
+          <span>Page {props.pageNumber} could not be drawn.</span>
+          <span class="muted">{failure}</span>
+          <button type="button" onClick={() => setAttempt((count) => count + 1)}>
+            Try again
+          </button>
+        </div>
+      ) : (
+        !drawn && <span class="pdf-placeholder muted">{props.pageNumber}</span>
+      )}
     </div>
   )
 }

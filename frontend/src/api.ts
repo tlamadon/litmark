@@ -5,8 +5,42 @@
  * injected into this page, so an unrelated website cannot drive the API.
  */
 
-export const SESSION_TOKEN =
-  document.querySelector<HTMLMetaElement>('meta[name="litmark-token"]')?.content ?? ''
+const TOKEN_META = 'meta[name="litmark-token"]'
+
+let sessionToken = document.querySelector<HTMLMetaElement>(TOKEN_META)?.content ?? ''
+
+/** The credential to send now. It changes when the server restarts. */
+export const getSessionToken = (): string => sessionToken
+
+let refreshing: Promise<boolean> | null = null
+
+/**
+ * Pick up the server's current credential by reading the page again.
+ *
+ * The credential is made afresh each time the server starts, so a page left
+ * open across a restart holds one the server no longer accepts: every request
+ * is refused, and the page looks frozen though the server is fine. The page
+ * the server serves carries the current one — reading it is what a reload
+ * would do, without losing what is on screen. Resolves to whether it changed.
+ */
+export function refreshSessionToken(): Promise<boolean> {
+  refreshing ??= (async () => {
+    try {
+      const response = await fetch('/', { cache: 'no-store', headers: { accept: 'text/html' } })
+      if (!response.ok) return false
+      const page = new DOMParser().parseFromString(await response.text(), 'text/html')
+      const fresh = page.querySelector<HTMLMetaElement>(TOKEN_META)?.content ?? ''
+      if (!fresh || fresh === sessionToken) return false
+      sessionToken = fresh
+      return true
+    } catch {
+      return false // The server is not there to ask; the caller reports that.
+    } finally {
+      refreshing = null
+    }
+  })()
+  return refreshing
+}
 
 export interface ApiErrorBody {
   code: string
@@ -32,9 +66,9 @@ export class ApiError extends Error {
   }
 }
 
-async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
+async function request<T>(path: string, init: RequestInit = {}, retried = false): Promise<T> {
   const headers = new Headers(init.headers)
-  headers.set('x-litmark-token', SESSION_TOKEN)
+  headers.set('x-litmark-token', sessionToken)
   if (init.body && !(init.body instanceof FormData)) {
     headers.set('content-type', 'application/json')
   }
@@ -46,6 +80,11 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
     const body: ApiErrorBody = payload?.error ?? {
       code: 'http_error',
       message: `${response.status} ${response.statusText}`,
+    }
+    // Refused for its credential: the server has restarted since this page
+    // loaded. Fetch the new one and ask again, once.
+    if (response.status === 401 && body.code === 'unauthorized' && !retried) {
+      if (await refreshSessionToken()) return request<T>(path, init, true)
     }
     throw new ApiError(response.status, body)
   }
@@ -76,6 +115,8 @@ export interface DocumentRecord {
   page_count: number | null
   byte_size: number
   imported_at: string
+  /** The user's own labels; `group:value` by convention, e.g. `field:labor`. */
+  tags: string[]
   searchable: boolean
   extraction: {
     status: 'pending' | 'running' | 'ok' | 'failed'
@@ -95,6 +136,12 @@ export interface DocumentRecord {
   summary_revision?: string
 }
 
+export interface TagCount {
+  tag: string
+  /** How many papers carry it. */
+  count: number
+}
+
 export interface AgentStatus {
   backend: string
   installed: boolean
@@ -108,6 +155,7 @@ export interface ProjectState {
   project: { name: string; root: string; schema_version: number }
   agent: AgentStatus
   documents: DocumentRecord[]
+  tags: TagCount[]
   notes: NoteSummary[]
   conversations: ConversationSummary[]
   latest_seq: number
@@ -188,11 +236,59 @@ export interface SearchHit {
   score: number
 }
 
+export type RunStatus =
+  | 'queued'
+  | 'running'
+  | 'succeeded'
+  | 'failed'
+  | 'cancelled'
+  | 'interrupted'
+
 export interface ConversationSummary {
   conversation_id: string
   title: string
+  /** 'chat' is the user's own; 'system' collects background work (summaries). */
+  kind: 'chat' | 'system'
+  created_at: string
   updated_at: string
+  /** How many runs it has had, whatever became of them. */
+  turn_count: number
+  status: 'running' | 'queued' | 'idle'
+  last_run_status: RunStatus | null
+  resumable: boolean
 }
+
+export interface RunUsage {
+  duration_ms?: number
+  num_turns?: number
+  /** What this turn cost. */
+  cost_usd?: number
+  /** What the agent's session has cost so far, this turn included. */
+  session_cost_usd?: number
+}
+
+/** One run as the server kept it: what was asked, and every durable event. */
+export interface TurnRecord {
+  run_id: string
+  status: RunStatus
+  kind: string
+  label: string | null
+  error: string | null
+  usage: RunUsage | null
+  started_at: string
+  ended_at: string | null
+  message: ChatMessage | null
+  reply: string | null
+  events: RunEvent[]
+}
+
+export type RunEvent = {
+  seq?: number
+  type: string
+  conversation_id: string | null
+  run_id: string | null
+  created_at?: string
+} & Record<string, unknown>
 
 export interface ChatMessage {
   message_id: string
@@ -212,12 +308,13 @@ export interface RunRecord {
   ended_at: string | null
 }
 
-export interface Conversation {
-  conversation_id: string
-  title: string
+export interface Conversation extends ConversationSummary {
   backend_session_id: string | null
   messages: ChatMessage[]
   runs: RunRecord[]
+  turns: TurnRecord[]
+  /** The newest event when this was read; anything later arrives on the stream. */
+  latest_seq: number
 }
 
 export interface ChangeRecord {
@@ -242,6 +339,37 @@ export interface MessageContext {
   page_number?: number | null
 }
 
+/** Where the text stands with git, and the papers with storage. */
+export interface SyncState {
+  git: {
+    enabled: boolean
+    automatic?: boolean
+    /** 'off' when the project is not a repository litmark manages. */
+    state: 'off' | 'synced' | 'local' | 'dirty' | 'ahead' | 'behind' | 'conflict' | 'error'
+    message: string | null
+    branch?: string
+    remote?: string | null
+    dirty?: number
+    ahead?: number
+    behind?: number
+    conflict?: { files: string[]; side_branch: string | null; message: string } | null
+    last_commit?: { sha: string; subject: string; committed_at: string } | null
+    synced_at?: string | null
+  }
+  storage: {
+    enabled: boolean
+    backend: string | null
+    where: string | null
+    problem: string | null
+    prefetch: boolean
+    documents: number
+    pdfs_here: number
+    synced_at: string | null
+    error: string | null
+  }
+  running: boolean
+}
+
 // ------------------------------------------------------------------- api
 
 export const api = {
@@ -264,16 +392,28 @@ export const api = {
 
   listDocuments: () => request<{ documents: DocumentRecord[] }>('/documents'),
   getDocument: (id: string) => request<DocumentRecord>(`/documents/${encodeURIComponent(id)}`),
-  uploadDocuments: (files: File[]) => {
+  uploadDocuments: (files: File[], tags: string[] = []) => {
     const form = new FormData()
     for (const file of files) form.append('files', file, file.name)
+    // Papers imported into a collection arrive already carrying its tags.
+    const query = tags.map((tag) => `tags=${encodeURIComponent(tag)}`).join('&')
     return request<{
       imported: { document: DocumentRecord; duplicate: boolean }[]
       errors: { filename: string; message: string }[]
-    }>('/documents', { method: 'POST', body: form })
+    }>(`/documents${query ? `?${query}` : ''}`, { method: 'POST', body: form })
   },
+  setTags: (id: string, tags: string[]) =>
+    request<DocumentRecord>(`/documents/${encodeURIComponent(id)}/tags`, {
+      method: 'PUT',
+      body: JSON.stringify({ tags }),
+    }),
+  tagDocuments: (document_ids: string[], add: string[], remove: string[] = []) =>
+    request<{ changed: string[]; tags: TagCount[] }>('/documents/tags', {
+      method: 'POST',
+      body: JSON.stringify({ document_ids, add, remove }),
+    }),
   pdfUrl: (id: string) =>
-    `/api/documents/${encodeURIComponent(id)}/pdf?token=${encodeURIComponent(SESSION_TOKEN)}`,
+    `/api/documents/${encodeURIComponent(id)}/pdf?token=${encodeURIComponent(getSessionToken())}`,
   pages: (id: string) =>
     request<{
       document_id: string
@@ -345,14 +485,26 @@ export const api = {
       { method: 'POST', body: JSON.stringify({ cited_only: citedOnly }) },
     ),
   bibliographyUrl: (citedOnly = false) =>
-    `/api/bibliography?format=bibtex&cited_only=${citedOnly}&token=${encodeURIComponent(SESSION_TOKEN)}`,
+    `/api/bibliography?format=bibtex&cited_only=${citedOnly}&token=${encodeURIComponent(getSessionToken())}`,
 
   conversation: (id: string) => request<Conversation>(`/conversations/${encodeURIComponent(id)}`),
-  createConversation: (title = 'Conversation') =>
+  listConversations: () =>
+    request<{ conversations: ConversationSummary[] }>('/conversations'),
+  createConversation: (title?: string) =>
     request<Conversation>('/conversations', {
       method: 'POST',
+      body: JSON.stringify(title ? { title } : {}),
+    }),
+  renameConversation: (id: string, title: string) =>
+    request<ConversationSummary>(`/conversations/${encodeURIComponent(id)}`, {
+      method: 'PATCH',
       body: JSON.stringify({ title }),
     }),
+  deleteConversation: (id: string) =>
+    request<{ conversation_id: string; deleted: boolean }>(
+      `/conversations/${encodeURIComponent(id)}`,
+      { method: 'DELETE' },
+    ),
   sendMessage: (id: string, prompt: string, context: MessageContext) =>
     request<{ run_id: string; conversation_id: string; status: string }>(
       `/conversations/${encodeURIComponent(id)}/messages`,
@@ -363,7 +515,14 @@ export const api = {
       method: 'POST',
     }),
   exportUrl: (id: string, format: 'markdown' | 'json') =>
-    `/api/conversations/${encodeURIComponent(id)}/export?format=${format}&token=${encodeURIComponent(SESSION_TOKEN)}`,
+    `/api/conversations/${encodeURIComponent(id)}/export?format=${format}&token=${encodeURIComponent(getSessionToken())}`,
+
+  syncStatus: () => request<SyncState>('/sync'),
+  syncNow: (resolve?: 'mine' | 'theirs') =>
+    request<SyncState & { pulled: string[]; problems: string[] }>('/sync', {
+      method: 'POST',
+      body: JSON.stringify(resolve ? { resolve } : {}),
+    }),
 
   changes: () => request<{ changes: ChangeRecord[] }>('/changes'),
   undo: (changeId: string, expected_revision?: string) =>

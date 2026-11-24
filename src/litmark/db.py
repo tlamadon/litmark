@@ -25,6 +25,9 @@ CREATE TABLE IF NOT EXISTS meta (
 CREATE TABLE IF NOT EXISTS conversations (
     id                 TEXT PRIMARY KEY,
     title              TEXT NOT NULL DEFAULT 'Conversation',
+    -- 'chat' is a conversation the user holds; 'system' collects background
+    -- work (automatic summaries) so it never clutters the list of chats.
+    kind               TEXT NOT NULL DEFAULT 'chat',
     backend_session_id TEXT,
     created_at         TEXT NOT NULL,
     updated_at         TEXT NOT NULL
@@ -49,6 +52,10 @@ CREATE TABLE IF NOT EXISTS runs (
     kind               TEXT NOT NULL DEFAULT 'chat',
     backend_session_id TEXT,
     error              TEXT,
+    -- What a run without a user message is for ("Summary of <title>").
+    label              TEXT,
+    -- Duration, turns, and cost as the backend reported them.
+    usage_json         TEXT,
     started_at         TEXT NOT NULL,
     ended_at           TEXT
 );
@@ -95,6 +102,15 @@ CREATE TABLE IF NOT EXISTS changes (
 CREATE INDEX IF NOT EXISTS changes_by_target ON changes(target_kind, target_id, created_at);
 """
 
+# Columns added after the first release. `CREATE TABLE IF NOT EXISTS` leaves an
+# existing table as it was, so a project created by an older version gets them
+# here, and its conversations and runs carry on.
+ADDED_COLUMNS = (
+    ("conversations", "kind", "TEXT NOT NULL DEFAULT 'chat'"),
+    ("runs", "label", "TEXT"),
+    ("runs", "usage_json", "TEXT"),
+)
+
 
 class Database:
     """Thin SQLite wrapper shared by the whole process.
@@ -115,6 +131,10 @@ class Database:
         self._conn.execute("PRAGMA synchronous=NORMAL")
         with self._lock:
             self._conn.executescript(SCHEMA)
+            for table, column, declaration in ADDED_COLUMNS:
+                present = {row["name"] for row in self._conn.execute(f"PRAGMA table_info({table})")}
+                if column not in present:
+                    self._conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {declaration}")
             self._conn.commit()
 
     def close(self) -> None:
@@ -197,6 +217,13 @@ class Database:
                 "(conversation_id = ? OR conversation_id IS NULL) ORDER BY seq LIMIT ?",
                 (seq, conversation_id, limit),
             )
+        return [_event_row_to_dict(row) for row in rows]
+
+    def events_of_conversation(self, conversation_id: str) -> list[dict[str, Any]]:
+        """Every durable event of one conversation, oldest first."""
+        rows = self.query(
+            "SELECT * FROM events WHERE conversation_id = ? ORDER BY seq", (conversation_id,)
+        )
         return [_event_row_to_dict(row) for row in rows]
 
     def latest_seq(self) -> int:

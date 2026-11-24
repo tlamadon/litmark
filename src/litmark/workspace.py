@@ -174,7 +174,9 @@ class Workspace:
         return self.project_file.is_file()
 
     @classmethod
-    def initialize(cls, root: Path, *, name: str | None = None) -> Workspace:
+    def initialize(
+        cls, root: Path, *, name: str | None = None, extra_settings: str = ""
+    ) -> Workspace:
         """Create a project directory. Never overwrites existing material."""
         workspace = cls(root)
         if workspace.project_file.exists():
@@ -197,7 +199,9 @@ class Workspace:
             "\n"
             "[agent]\n"
             'backend = "claude"\n'
-            "auto_summary = true\n",
+            "auto_summary = true\n"
+            # Non-secret settings chosen at creation, such as where papers are stored.
+            + (f"\n{extra_settings}" if extra_settings else ""),
         )
         if not workspace.references_file.exists():
             atomic_write_text(

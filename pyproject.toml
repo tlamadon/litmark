@@ -4,7 +4,8 @@ build-backend = "hatchling.build"
 
 [project]
 name = "litmark"
-version = "0.1.0"
+# The version is written once, in src/litmark/__init__.py, and read from there.
+dynamic = ["version"]
 description = "Local research workspace: import papers, read cited summaries, write sourced Markdown notes, chat with a coding agent."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -35,6 +36,8 @@ dependencies = [
 # Verified against 0.2.157: earlier releases lack StreamEvent and
 # include_partial_messages, which the adapter relies on for streaming.
 claude = ["claude-agent-sdk>=0.2,<1.0"]
+# Papers in any S3-compatible store. Not needed for the directory backend.
+s3 = ["boto3>=1.34,<2.0"]
 
 [project.scripts]
 litmark = "litmark.cli:main"
@@ -50,7 +53,13 @@ dev = [
   "pytest-asyncio>=0.23",
   "httpx>=0.27",
   "reportlab>=4.2",
+  # The S3 backend is tested against an emulator, through the real client.
+  "boto3>=1.34,<2.0",
+  "moto[s3]>=5.0",
 ]
+
+[tool.hatch.version]
+path = "src/litmark/__init__.py"
 
 [tool.hatch.build]
 # The compiled browser assets are build output, so they are VCS-ignored — but

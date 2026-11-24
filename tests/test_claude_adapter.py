@@ -106,6 +106,12 @@ def test_built_in_file_and_shell_tools_are_disabled(services, monkeypatch):
     assert captured.get("cwd") == str(services.workspace.root)
     assert captured.get("include_partial_messages") is True
     assert MCP_SERVER_NAME in (captured.get("mcp_servers") or {})
+    # Hermetic: none of the user's own MCP servers, settings, hooks or skills.
+    # A PDF is untrusted text, and this agent runs with permission checks off.
+    assert list((captured.get("mcp_servers") or {})) == [MCP_SERVER_NAME]
+    assert captured.get("strict_mcp_config") is True
+    assert captured.get("setting_sources") == []
+    assert captured.get("skills") == []
 
 
 @requires_sdk
@@ -125,6 +131,10 @@ def test_adapter_uses_options_the_installed_sdk_accepts():
         "include_partial_messages",
         "resume",
         "max_turns",
+        "tools",
+        "strict_mcp_config",
+        "setting_sources",
+        "skills",
     }
     assert used <= fields, f"the installed SDK lacks: {sorted(used - fields)}"
 
@@ -156,7 +166,7 @@ def test_missing_sdk_is_reported_as_unavailable(services, monkeypatch):
 
 def test_missing_runtime_is_reported_as_unavailable(services, monkeypatch):
     monkeypatch.setattr(claude_sdk, "sdk_available", lambda: (True, None))
-    monkeypatch.setattr(claude_sdk.shutil, "which", lambda _name: None)
+    monkeypatch.setattr(claude_sdk, "_runtime_path", lambda: None)
     availability = backend(services).availability()
     assert availability.installed is True
     assert availability.authenticated is False
@@ -167,9 +177,10 @@ def test_missing_credentials_are_reported_without_printing_them(
     services, monkeypatch, tmp_path
 ):
     monkeypatch.setattr(claude_sdk, "sdk_available", lambda: (True, None))
-    monkeypatch.setattr(claude_sdk.shutil, "which", lambda _name: "/usr/bin/claude")
+    monkeypatch.setattr(claude_sdk, "_runtime_path", lambda: "/usr/bin/claude")
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     monkeypatch.delenv("ANTHROPIC_AUTH_TOKEN", raising=False)
+    monkeypatch.delenv("CLAUDE_CODE_OAUTH_TOKEN", raising=False)
     monkeypatch.setattr(claude_sdk.os.path, "isdir", lambda _path: False)
 
     availability = backend(services).availability()
@@ -180,7 +191,7 @@ def test_missing_credentials_are_reported_without_printing_them(
 
 def test_configured_credentials_are_never_echoed(services, monkeypatch):
     monkeypatch.setattr(claude_sdk, "sdk_available", lambda: (True, None))
-    monkeypatch.setattr(claude_sdk.shutil, "which", lambda _name: "/usr/bin/claude")
+    monkeypatch.setattr(claude_sdk, "_runtime_path", lambda: "/usr/bin/claude")
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-secret-value-do-not-print")
 
     availability = backend(services).availability()
@@ -214,3 +225,137 @@ def test_session_id_is_found_wherever_the_sdk_reports_it():
     assert _session_id_of(Direct()) == "abc"
     assert _session_id_of(Nested()) == "def"
     assert _session_id_of(Neither()) is None
+
+
+# ------------------------------------------------- what the SDK sends, translated
+
+
+@requires_sdk
+def test_a_reply_streams_from_the_sdks_raw_events(services):
+    """The text of a reply arrives as the provider's own `content_block_delta`."""
+    from claude_agent_sdk import StreamEvent
+
+    adapter = backend(services)
+
+    def stream(event: dict, **extra: object) -> list:
+        return adapter._translate(StreamEvent(uuid="u", session_id="s", event=event, **extra))
+
+    (delta,) = stream(
+        {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "Hello"}}
+    )
+    assert delta.type == "text_delta"
+    assert delta.data == {"text": "Hello", "partial": True}
+
+    # Tool arguments being written, thinking, and bookkeeping are not prose.
+    assert stream({"type": "content_block_delta", "delta": {"type": "input_json_delta", "partial_json": "{"}}) == []
+    assert stream({"type": "content_block_delta", "delta": {"type": "thinking_delta", "thinking": "hm"}}) == []
+    assert stream({"type": "message_start"}) == []
+    # Nor is anything a sub-agent says part of this reply.
+    assert stream(
+        {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "aside"}},
+        parent_tool_use_id="toolu_1",
+    ) == []
+
+
+@requires_sdk
+def test_a_tool_result_is_matched_to_its_call_and_trimmed(services):
+    """The record of a run says what came back, not all of it."""
+    import json
+
+    from claude_agent_sdk import AssistantMessage, ToolResultBlock, ToolUseBlock, UserMessage
+
+    adapter = backend(services)
+    state: dict = {"tools": {}, "usage": None}
+    (started,) = adapter._translate(
+        AssistantMessage(
+            content=[
+                ToolUseBlock(
+                    id="toolu_1",
+                    name="mcp__research__read_pages",
+                    input={"document_id": "doc-001", "pages": [1]},
+                )
+            ],
+            model="m",
+        ),
+        state,
+    )
+    assert started.type == "tool_started"
+    assert started.data["tool"] == "read_pages" and started.data["tool_use_id"] == "toolu_1"
+
+    page = {"document_id": "doc-001", "pages": [{"page_number": 1, "text": "x" * 5000}]}
+    (finished,) = adapter._translate(
+        UserMessage(
+            content=[
+                ToolResultBlock(
+                    tool_use_id="toolu_1",
+                    content=[{"type": "text", "text": json.dumps(page)}],
+                    is_error=False,
+                )
+            ]
+        ),
+        state,
+    )
+    assert finished.type == "tool_finished"
+    assert finished.data["tool"] == "read_pages"
+    assert finished.data["tool_use_id"] == "toolu_1"
+    assert finished.data["is_error"] is False
+    kept = finished.data["result"]
+    assert kept["document_id"] == "doc-001"
+    assert kept["pages"][0]["page_number"] == 1
+    assert len(kept["pages"][0]["text"]) < 400
+
+    # The user's own message is a string, not a list of blocks; it is no event.
+    assert adapter._translate(UserMessage(content="hello"), state) == []
+
+
+@requires_sdk
+def test_the_result_reports_usage_and_an_error_only_when_there_is_one(services):
+    from claude_agent_sdk import ResultMessage
+
+    adapter = backend(services)
+
+    def result(**fields: object) -> ResultMessage:
+        base: dict = {
+            "subtype": "success",
+            "duration_ms": 5600,
+            "duration_api_ms": 5000,
+            "is_error": False,
+            "num_turns": 3,
+            "session_id": "s",
+            "total_cost_usd": 0.0425,
+        }
+        return ResultMessage(**{**base, **fields})
+
+    state: dict = {"tools": {}, "usage": None}
+    assert adapter._translate(result(), state) == []
+    assert state["usage"] == {"duration_ms": 5600, "num_turns": 3, "cost_usd": 0.0425}
+
+    (limit,) = adapter._translate(result(subtype="error_max_turns", is_error=True))
+    assert limit.type == "error" and "limit of steps" in limit.data["message"]
+
+    (failed,) = adapter._translate(
+        result(subtype="error_during_execution", is_error=True, errors=["Overloaded"])
+    )
+    assert failed.data["message"] == "Overloaded"
+
+
+def test_a_subscription_token_counts_as_a_credential(services, monkeypatch):
+    """What `claude setup-token` issues is how a container signs in."""
+    monkeypatch.setattr(claude_sdk, "sdk_available", lambda: (True, None))
+    monkeypatch.setattr(claude_sdk, "_runtime_path", lambda: "/usr/bin/claude")
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.delenv("ANTHROPIC_AUTH_TOKEN", raising=False)
+    monkeypatch.setattr(claude_sdk.os.path, "isdir", lambda _path: False)
+    monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "sk-ant-oat-do-not-print")
+
+    availability = backend(services).availability()
+    assert availability.ready is True
+    assert "sk-ant-oat-do-not-print" not in str(availability.to_json())
+
+
+@requires_sdk
+def test_the_runtime_shipped_with_the_sdk_is_enough(monkeypatch):
+    """A container that installs the package has a runtime without a second install."""
+    monkeypatch.setattr(claude_sdk.shutil, "which", lambda _name: None)
+    found = claude_sdk._runtime_path()
+    assert found is not None and found.endswith("claude")

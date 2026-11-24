@@ -11,12 +11,15 @@ Reference: https://code.claude.com/docs/en/agent-sdk/python
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 import shutil
 from collections.abc import AsyncIterator
+from pathlib import Path
 from typing import Any
 
+from .. import __version__
 from .base import (
     DONE,
     ERROR,
@@ -30,7 +33,7 @@ from .base import (
     RunRequest,
 )
 from .prompts import SYSTEM_PROMPT
-from .tools import TOOL_SCHEMAS, ProjectTools, as_text, dispatch
+from .tools import TOOL_SCHEMAS, ProjectTools, as_text, dispatch, trim_result
 
 log = logging.getLogger(__name__)
 
@@ -59,6 +62,29 @@ DISALLOWED_TOOLS = [
     "Task",
     "SlashCommand",
 ]
+
+
+# Any of these in the environment is a credential the runtime will use. The
+# last is what `claude setup-token` issues: the way to use a subscription
+# somewhere a browser sign-in is not possible, such as a container.
+CREDENTIAL_VARIABLES = ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN")
+
+
+def _runtime_path() -> str | None:
+    """The `claude` runtime the SDK will run: its own bundled copy, else PATH.
+
+    The SDK's wheel ships the runtime, so a container that installs this
+    package needs nothing else. An installed one on PATH serves otherwise.
+    """
+    try:
+        import claude_agent_sdk
+
+        bundled = Path(claude_agent_sdk.__file__).parent / "_bundled" / "claude"
+        if bundled.is_file():
+            return str(bundled)
+    except ImportError:
+        pass
+    return shutil.which("claude")
 
 
 def sdk_available() -> tuple[bool, str | None]:
@@ -103,7 +129,7 @@ class ClaudeAgentBackend(AgentBackend):
                 detail=error,
             )
 
-        runtime = shutil.which("claude")
+        runtime = _runtime_path()
         if runtime is None:
             return Availability(
                 backend=self.name,
@@ -116,7 +142,7 @@ class ClaudeAgentBackend(AgentBackend):
             )
 
         # Credentials are checked by presence only; never read or printed.
-        has_key = bool(os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("ANTHROPIC_AUTH_TOKEN"))
+        has_key = any(os.environ.get(name) for name in CREDENTIAL_VARIABLES)
         has_profile = any(
             os.path.isdir(os.path.expanduser(path))
             for path in ("~/.config/anthropic", "~/.claude")
@@ -163,6 +189,17 @@ class ClaudeAgentBackend(AgentBackend):
             model=self._model,
             cwd=self._cwd,
             mcp_servers={MCP_SERVER_NAME: self._build_mcp_server(request)},
+            # The research agent is hermetic. Left to its defaults the runtime
+            # loads whatever the user has set up for their own coding sessions
+            # — personal MCP servers (mail, calendar, a browser), plugins,
+            # hooks, skills, memory. None of that belongs here: with permission
+            # checks bypassed, text in a PDF could talk the agent into using
+            # those tools, and their descriptions alone add tens of thousands
+            # of tokens to every new conversation. Credentials are not
+            # settings; signing in with the CLI still works.
+            strict_mcp_config=True,
+            setting_sources=[],
+            skills=[],
             # `tools` is an explicit allowlist: the project tools are the only
             # ones loaded. That keeps the built-in file, shell, and web tools
             # out of research mode entirely — edits must be version-checked, and
@@ -179,6 +216,9 @@ class ClaudeAgentBackend(AgentBackend):
         )
 
         session_id: str | None = request.backend_session_id
+        # What the translator learns along the way: which tool each result
+        # answers, and the backend's own account of the run.
+        state: dict[str, Any] = {"tools": {}, "usage": None}
         client = ClaudeSDKClient(options=options)
         self._clients[request.run_id] = client
         try:
@@ -188,18 +228,22 @@ class ClaudeAgentBackend(AgentBackend):
                 found = _session_id_of(message)
                 if found:
                     session_id = found
-                for event in self._translate(message):
+                for event in self._translate(message, state):
                     yield event
-                for change in self._tools.drain_changes():
+                for change in self._tools.drain_changes(request.run_id):
                     yield AgentEvent(FILE_CHANGED, change)
         except asyncio.CancelledError:
             await self._safe_interrupt(request.run_id)
+            for change in self._tools.drain_changes(request.run_id):
+                yield AgentEvent(FILE_CHANGED, change)
             yield AgentEvent(
                 DONE, {"terminal_reason": "cancelled", "backend_session_id": session_id}
             )
             raise
         except Exception as exc:  # noqa: BLE001 - reported verbatim, never simulated
             log.exception("Claude Agent SDK run failed")
+            for change in self._tools.drain_changes(request.run_id):
+                yield AgentEvent(FILE_CHANGED, change)
             yield AgentEvent.error(f"{type(exc).__name__}: {exc}")
             yield AgentEvent(DONE, {"terminal_reason": "error", "backend_session_id": session_id})
             return
@@ -210,9 +254,14 @@ class ClaudeAgentBackend(AgentBackend):
             except Exception:  # noqa: BLE001 - disconnect is best-effort
                 pass
 
-        yield AgentEvent(
-            DONE, {"terminal_reason": "endTurn", "backend_session_id": session_id}
-        )
+        done: dict[str, Any] = {
+            "terminal_reason": "cancelled" if request.run_id in self._cancelled else "endTurn",
+            "backend_session_id": session_id,
+        }
+        if state["usage"]:
+            done["usage"] = state["usage"]
+        self._cancelled.discard(request.run_id)
+        yield AgentEvent(DONE, done)
 
     async def cancel_run(self, run_id: str) -> None:
         """Interrupt the backend. Hiding output would not be cancellation."""
@@ -242,7 +291,7 @@ class ClaudeAgentBackend(AgentBackend):
         for schema in TOOL_SCHEMAS:
             handlers.append(self._make_tool(tool, schema, request.run_id))
         return create_sdk_mcp_server(
-            name=MCP_SERVER_NAME, version="0.1.0", tools=handlers
+            name=MCP_SERVER_NAME, version=__version__, tools=handlers
         )
 
     def _make_tool(self, tool_decorator: Any, schema: dict[str, Any], run_id: str) -> Any:
@@ -262,15 +311,25 @@ class ClaudeAgentBackend(AgentBackend):
 
         return handler
 
-    def _translate(self, message: Any) -> list[AgentEvent]:
+    def _translate(
+        self, message: Any, state: dict[str, Any] | None = None
+    ) -> list[AgentEvent]:
         """Map SDK messages onto the normalized event vocabulary."""
+        state = state if state is not None else {"tools": {}, "usage": None}
         events: list[AgentEvent] = []
         kind = type(message).__name__
 
         if kind == "StreamEvent":
-            delta = getattr(message, "delta", None)
-            if isinstance(delta, str) and delta:
-                events.append(AgentEvent(TEXT_DELTA, {"text": delta, "partial": True}))
+            # The SDK hands over the provider's raw stream event; the text of a
+            # reply arrives as `content_block_delta` fragments.
+            raw = getattr(message, "event", None)
+            if getattr(message, "parent_tool_use_id", None) or not isinstance(raw, dict):
+                return events
+            if raw.get("type") == "content_block_delta":
+                delta = raw.get("delta") or {}
+                text = delta.get("text") if delta.get("type") == "text_delta" else None
+                if isinstance(text, str) and text:
+                    events.append(AgentEvent(TEXT_DELTA, {"text": text, "partial": True}))
             return events
 
         if kind == "AssistantMessage":
@@ -283,11 +342,13 @@ class ClaudeAgentBackend(AgentBackend):
                         AgentEvent(TEXT_DELTA, {"text": block.text, "final": True})
                     )
                 elif block_kind == "ToolUseBlock":
+                    name = _short_tool_name(block.name)
+                    state["tools"][block.id] = name
                     events.append(
                         AgentEvent(
                             TOOL_STARTED,
                             {
-                                "tool": _short_tool_name(block.name),
+                                "tool": name,
                                 "tool_use_id": block.id,
                                 "input": _safe_input(block.input),
                             },
@@ -296,22 +357,27 @@ class ClaudeAgentBackend(AgentBackend):
             return events
 
         if kind == "UserMessage":
-            for block in getattr(message, "content", []) or []:
+            content = getattr(message, "content", None)
+            for block in content if isinstance(content, list) else []:
                 if type(block).__name__ == "ToolResultBlock":
                     events.append(
                         AgentEvent(
                             TOOL_FINISHED,
                             {
+                                "tool": state["tools"].get(block.tool_use_id, "tool"),
                                 "tool_use_id": block.tool_use_id,
                                 "is_error": bool(getattr(block, "is_error", False)),
+                                "result": _safe_result(getattr(block, "content", None)),
                             },
                         )
                     )
             return events
 
         if kind == "ResultMessage":
-            if getattr(message, "subtype", "") == "error":
-                events.append(AgentEvent.error(str(getattr(message, "result", "Run failed."))))
+            state["usage"] = _usage_of(message)
+            subtype = str(getattr(message, "subtype", "") or "")
+            if getattr(message, "is_error", False) or subtype.startswith("error"):
+                events.append(AgentEvent.error(_result_error(message, subtype)))
         return events
 
 
@@ -330,6 +396,51 @@ def _safe_input(value: Any) -> dict[str, Any]:
         else:
             trimmed[key] = item
     return trimmed
+
+
+def _safe_result(content: Any) -> dict[str, Any]:
+    """A tool result, trimmed: enough to say what came back, not all of it.
+
+    A page read returns the page; the transcript wants its number, not its
+    text. The project tools answer in JSON, so the structure survives.
+    """
+    if isinstance(content, list):
+        parts = []
+        for block in content:
+            if isinstance(block, dict):
+                parts.append(str(block.get("text") or ""))
+            else:
+                parts.append(str(getattr(block, "text", "") or ""))
+        content = "\n".join(part for part in parts if part)
+    if not isinstance(content, str):
+        return {}
+    try:
+        parsed = json.loads(content)
+    except ValueError:
+        return {"text": trim_result(content)}
+    return trim_result(parsed) if isinstance(parsed, dict) else {"value": trim_result(parsed)}
+
+
+def _usage_of(message: Any) -> dict[str, Any]:
+    """The backend's own account of a run: how long, how many steps, what cost."""
+    usage = {
+        "duration_ms": getattr(message, "duration_ms", None),
+        "num_turns": getattr(message, "num_turns", None),
+        "cost_usd": getattr(message, "total_cost_usd", None),
+    }
+    return {key: value for key, value in usage.items() if value is not None}
+
+
+def _result_error(message: Any, subtype: str) -> str:
+    if subtype == "error_max_turns":
+        return "The agent stopped at its limit of steps for one reply. Ask it to continue."
+    errors = getattr(message, "errors", None)
+    if errors:
+        return "; ".join(str(error) for error in errors)
+    result = getattr(message, "result", None)
+    if result:
+        return str(result)
+    return f"The run failed ({subtype or 'error'})."
 
 
 def _session_id_of(message: Any) -> str | None:

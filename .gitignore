@@ -13,3 +13,7 @@ src/litmark/static/
 my-research/
 *.sqlite*
 frontend/test/bundle/
+
+# Local deployment files hold secrets.
+.env
+compose.yaml

@@ -113,3 +113,36 @@ def test_default_serve_arguments_stay_loopback():
     args = build_parser().parse_args(["serve", "/tmp/x"])
     assert args.host == "127.0.0.1"
     assert args.allow_host == []
+
+
+# ------------------------------------------------------------- a password
+
+
+def test_a_password_is_asked_for_before_anything_is_served(services):
+    """The page carries the session credential, so the page is protected too."""
+    import base64
+
+    from fastapi.testclient import TestClient
+
+    from litmark.api.app import TOKEN_HEADER, create_app
+
+    app = create_app(services, password="correct horse")
+    basic = lambda secret: {  # noqa: E731
+        "authorization": "Basic " + base64.b64encode(f"me:{secret}".encode()).decode()
+    }
+    with TestClient(app, base_url="http://127.0.0.1:8765") as client:
+        for path in ("/", "/api/state", "/assets/nothing.js"):
+            refused = client.get(path)
+            assert refused.status_code == 401, path
+            assert refused.headers["www-authenticate"].startswith("Basic")
+        assert client.get("/api/state", headers=basic("wrong")).status_code == 401
+        assert client.get("/api/state", headers={"authorization": "Basic !!!"}).status_code == 401
+        # The password alone is not the session credential…
+        assert client.get("/api/state", headers=basic("correct horse")).status_code == 401
+        # …and with both, the API answers.
+        both = {**basic("correct horse"), TOKEN_HEADER: services.session_token}
+        assert client.get("/api/state", headers=both).status_code == 200
+
+
+def test_without_a_password_none_is_asked_for(client):
+    assert client.get("/api/state").status_code == 200

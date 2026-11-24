@@ -15,6 +15,7 @@ from typing import Any
 from .base import (
     DONE,
     FILE_CHANGED,
+    TEXT_DELTA,
     TOOL_FINISHED,
     TOOL_STARTED,
     AgentBackend,
@@ -22,7 +23,7 @@ from .base import (
     Availability,
     RunRequest,
 )
-from .tools import ProjectTools, dispatch
+from .tools import ProjectTools, dispatch, trim_result
 
 # Set by tests: a list of scripted steps per run, consumed in order.
 # Each step is ("text", "...") or ("tool", name, arguments).
@@ -44,6 +45,8 @@ class FakeBackend(AgentBackend):
         self.summary_script: list[Step] | None = None
         self._cancelled: set[str] = set()
         self.delay = 0.0
+        # Between the fragments of a text step, to watch a reply stream.
+        self.chunk_delay = 0.0
 
     def _default_summary_steps(self, request: RunRequest) -> list[Step]:
         document_id = request.context.document_ids[0] if request.context.document_ids else None
@@ -100,15 +103,20 @@ class FakeBackend(AgentBackend):
             script = self.summary_script or []
 
         last_reference: str | None = None
-        for step in list(script):
+        for index, step in enumerate(list(script)):
             if request.run_id in self._cancelled:
                 yield AgentEvent(DONE, {"terminal_reason": "cancelled"})
                 return
             if self.delay:
                 await asyncio.sleep(self.delay)
             if step[0] == "text":
+                # As the live backend does it: fragments while the block is
+                # being written, then the block whole.
                 for chunk in _chunks(step[1]):
-                    yield AgentEvent.text(chunk)
+                    if self.chunk_delay:
+                        await asyncio.sleep(self.chunk_delay)
+                    yield AgentEvent(TEXT_DELTA, {"text": chunk, "partial": True})
+                yield AgentEvent(TEXT_DELTA, {"text": step[1], "final": True})
             elif step[0] == "tool":
                 name, arguments = step[1], dict(step[2])
                 if name == WRITE_SUMMARY_STEP:
@@ -116,12 +124,23 @@ class FakeBackend(AgentBackend):
                     arguments = self._summary_arguments(arguments["document_id"], last_reference)
                 if name in {"write_note", "patch_note", "write_summary"}:
                     arguments.setdefault("run_id", request.run_id)
-                yield AgentEvent(TOOL_STARTED, {"tool": name, "input": arguments})
+                tool_use_id = f"fake-{request.run_id}-{index}"
+                yield AgentEvent(
+                    TOOL_STARTED, {"tool": name, "tool_use_id": tool_use_id, "input": arguments}
+                )
                 result = dispatch(self._tools, name, arguments)
                 if name == "resolve_source" and result.get("reference_id"):
                     last_reference = str(result["reference_id"])
-                yield AgentEvent(TOOL_FINISHED, {"tool": name, "result": result})
-                for change in self._tools.drain_changes():
+                yield AgentEvent(
+                    TOOL_FINISHED,
+                    {
+                        "tool": name,
+                        "tool_use_id": tool_use_id,
+                        "is_error": result.get("ok") is False,
+                        "result": trim_result(result),
+                    },
+                )
+                for change in self._tools.drain_changes(request.run_id):
                     yield AgentEvent(FILE_CHANGED, change)
         yield AgentEvent(
             DONE,

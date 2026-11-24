@@ -6,14 +6,15 @@
  * events that were missed — no duplicated messages, no lost edits.
  */
 
-import { SESSION_TOKEN } from './api'
+import { getSessionToken, refreshSessionToken } from './api'
 
 export type ServerEvent = {
-  seq: number
+  /** Absent on live-only events (the fragments of a reply as it streams). */
+  seq?: number
   type: string
   conversation_id: string | null
   run_id: string | null
-  created_at: string
+  created_at?: string
 } & Record<string, unknown>
 
 type Listener = (event: ServerEvent) => void
@@ -49,7 +50,7 @@ export class EventStream {
     if (this.closed) return
     this.source?.close()
 
-    const url = `/api/events?since=${this.lastSeq}&token=${encodeURIComponent(SESSION_TOKEN)}`
+    const url = `/api/events?since=${this.lastSeq}&token=${encodeURIComponent(getSessionToken())}`
     const source = new EventSource(url)
     this.source = source
 
@@ -72,7 +73,13 @@ export class EventStream {
       // browser's own Last-Event-ID handling, so nothing is lost meanwhile.
       this.retry = Math.min(this.retry + 1, 6)
       const delay = Math.min(500 * 2 ** (this.retry - 1), 10_000)
-      this.timer = window.setTimeout(() => this.connect(), delay)
+      // A stream refused for its credential fails just like one that dropped,
+      // and would be refused again for ever: the server restarted and has a
+      // new one. Pick that up before trying again.
+      void refreshSessionToken().finally(() => {
+        if (this.closed) return
+        this.timer = window.setTimeout(() => this.connect(), delay)
+      })
     }
   }
 
@@ -100,9 +107,13 @@ const KNOWN_EVENTS = [
   'file_changed',
   'error',
   'done',
+  'notice',
+  'run_queued',
   'run_started',
+  'conversation_updated',
   'message_added',
   'document_updated',
   'job_updated',
+  'sync_updated',
   'ping',
 ]

@@ -11,12 +11,13 @@ import uuid
 from typing import Annotated, Any
 
 from fastapi import APIRouter, File, Query, Request, Response, UploadFile
+from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import JSONResponse, PlainTextResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
 from ..agent.base import RunContext
 from ..agent.tools import dispatch
-from ..documents import QUEUED
+from ..documents import QUEUED, normalize_tags
 from ..errors import InvalidInput, NotFound, RevisionConflict
 from ..events import format_sse
 from ..references import (
@@ -60,7 +61,12 @@ class MessageSend(BaseModel):
 
 
 class ConversationCreate(BaseModel):
-    title: str = "Conversation"
+    # Unnamed until something is asked in it: the first message is its title.
+    title: str | None = Field(default=None, max_length=200)
+
+
+class ConversationRename(BaseModel):
+    title: str = Field(max_length=200)
 
 
 class ManualReference(BaseModel):
@@ -93,6 +99,23 @@ class UndoRequest(BaseModel):
 
 class BibliographyWrite(BaseModel):
     cited_only: bool = False
+
+
+class TagsSet(BaseModel):
+    tags: list[str] = Field(default_factory=list)
+
+
+class TagsChange(BaseModel):
+    """Add and remove tags across several documents at once."""
+
+    document_ids: list[str]
+    add: list[str] = Field(default_factory=list)
+    remove: list[str] = Field(default_factory=list)
+
+
+class SyncRequest(BaseModel):
+    # Settles a conflict by keeping one side: "mine" or "theirs".
+    resolve: str | None = None
 
 
 def build_router() -> APIRouter:
@@ -178,8 +201,12 @@ def build_router() -> APIRouter:
     async def upload_documents(
         request: Request,
         files: Annotated[list[UploadFile], File()],
+        tags: Annotated[list[str] | None, Query()] = None,
     ) -> dict[str, Any]:
         services = services_of(request)
+        # Checked before anything is stored: a bad tag fails the request, not
+        # half of it.
+        wanted = normalize_tags(tags or [])
         imported: list[dict[str, Any]] = []
         errors: list[dict[str, Any]] = []
         for upload in files:
@@ -191,6 +218,10 @@ def build_router() -> APIRouter:
             except InvalidInput as exc:
                 errors.append({"filename": upload.filename, "message": exc.message})
                 continue
+            if wanted:
+                # A paper already here is gathered with the others all the same.
+                services.documents.tag([document.document_id], add=wanted)
+                document = services.documents.get(document.document_id)
             if not duplicate:
                 # The PDF is readable immediately; extraction runs in the background.
                 services.enqueue_extraction(document.document_id)
@@ -222,15 +253,35 @@ def build_router() -> APIRouter:
         document = services.documents.get(document_id)
         return document.api_json(summary_text=services.documents.summary_text(document_id))
 
+    @router.get("/tags")
+    async def list_tags(request: Request) -> dict[str, Any]:
+        return {"tags": services_of(request).documents.all_tags()}
+
+    @router.post("/documents/tags")
+    async def change_tags(request: Request, body: TagsChange) -> dict[str, Any]:
+        services = services_of(request)
+        changed = services.documents.tag(body.document_ids, add=body.add, remove=body.remove)
+        services.announce_documents([document.document_id for document in changed])
+        return {
+            "changed": [document.document_id for document in changed],
+            "tags": services.documents.all_tags(),
+        }
+
+    @router.put("/documents/{document_id}/tags")
+    async def set_tags(request: Request, document_id: str, body: TagsSet) -> dict[str, Any]:
+        services = services_of(request)
+        document = services.documents.set_tags(document_id, body.tags)
+        services.announce_documents([document_id])
+        return document.api_json(summary_text=services.documents.summary_text(document_id))
+
     @router.get("/documents/{document_id}/pdf")
     async def get_pdf(request: Request, document_id: str) -> Response:
         services = services_of(request)
         document = services.documents.get(document_id)
-        path = services.workspace.resolve_inside(services.documents.pdf_path(document_id))
-        if not path.is_file():
-            raise NotFound(f"The stored PDF for {document_id!r} is missing.")
+        # Here already, or fetched from the project's storage on first opening.
+        path = await run_in_threadpool(services.papers.ensure_pdf, document_id)
         return Response(
-            content=path.read_bytes(),
+            content=await run_in_threadpool(path.read_bytes),
             media_type="application/pdf",
             headers={
                 "content-disposition": f'inline; filename="{document.original_filename}"',
@@ -246,7 +297,7 @@ def build_router() -> APIRouter:
         page: Annotated[list[int] | None, Query()] = None,
     ) -> dict[str, Any]:
         services = services_of(request)
-        extraction = services.documents.extraction(document_id)
+        extraction = await run_in_threadpool(services.documents.extraction, document_id)
         wanted = set(page or [])
         pages = [
             {
@@ -491,6 +542,20 @@ def build_router() -> APIRouter:
         """Write ``references.bib`` into the project directory."""
         return services_of(request).write_bibliography(cited_only=body.cited_only)
 
+    # ----------------------------------------------------------------- sync
+
+    @router.get("/sync")
+    async def sync_status(request: Request) -> dict[str, Any]:
+        return await run_in_threadpool(services_of(request).sync_status)
+
+    @router.post("/sync")
+    async def sync_now(request: Request, body: SyncRequest | None = None) -> dict[str, Any]:
+        services = services_of(request)
+        if body is not None and body.resolve not in (None, "mine", "theirs"):
+            raise InvalidInput("Choose which side to keep: mine or theirs.")
+        resolve = body.resolve if body is not None else None
+        return await run_in_threadpool(lambda: services.sync_now(resolve=resolve))
+
     # -------------------------------------------------------- conversations
 
     @router.get("/conversations")
@@ -508,6 +573,16 @@ def build_router() -> APIRouter:
     @router.get("/conversations/{conversation_id}")
     async def get_conversation(request: Request, conversation_id: str) -> dict[str, Any]:
         return services_of(request).runner.conversation(conversation_id)
+
+    @router.patch("/conversations/{conversation_id}")
+    async def rename_conversation(
+        request: Request, conversation_id: str, body: ConversationRename
+    ) -> dict[str, Any]:
+        return services_of(request).runner.rename_conversation(conversation_id, body.title)
+
+    @router.delete("/conversations/{conversation_id}")
+    async def delete_conversation(request: Request, conversation_id: str) -> dict[str, Any]:
+        return services_of(request).runner.delete_conversation(conversation_id)
 
     @router.get("/conversations/{conversation_id}/export")
     async def export_conversation(
@@ -533,7 +608,8 @@ def build_router() -> APIRouter:
         request: Request, conversation_id: str, body: MessageSend
     ) -> dict[str, Any]:
         services = services_of(request)
-        services.runner.conversation(conversation_id)  # Confirms it exists.
+        if services.runner.kind_of(conversation_id) != "chat":
+            raise InvalidInput("Background work is read-only; ask in a conversation of your own.")
         return services.runner.submit(
             conversation_id=conversation_id,
             prompt=body.prompt,

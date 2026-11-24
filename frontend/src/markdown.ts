@@ -96,6 +96,17 @@ function inline(text: string): string {
   )
 }
 
+/** The cells of a pipe-table row, or null when the line is not one. */
+function tableCells(line: string): string[] | null {
+  const trimmed = line.trim()
+  if (!trimmed.includes('|')) return null
+  const inner = trimmed.replace(/^\|/, '').replace(/\|$/, '')
+  // `\|` is a literal bar inside a cell, not the end of one.
+  return inner.split(/(?<!\\)\|/).map((cell) => cell.trim().replace(/\\\|/g, '|'))
+}
+
+const TABLE_RULE = /^\s*\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)*\|?\s*$/
+
 export function renderMarkdown(source: string): string {
   const escaped = escapeHtml(source)
   const lines = escaped.split('\n')
@@ -118,7 +129,8 @@ export function renderMarkdown(source: string): string {
     }
   }
 
-  for (const line of lines) {
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index]!
     if (/^```/.test(line.trim())) {
       if (inFence) {
         html.push(`<pre><code>${fence.join('\n')}</code></pre>`)
@@ -139,6 +151,30 @@ export function renderMarkdown(source: string): string {
     if (line.trim() === '') {
       closeParagraph()
       closeList()
+      continue
+    }
+
+    // A table: a row of cells, then a rule of dashes, then the rows.
+    const header = tableCells(line)
+    const rule = lines[index + 1]
+    if (header && rule !== undefined && TABLE_RULE.test(rule) && rule.includes('-')) {
+      closeParagraph()
+      closeList()
+      const rows: string[][] = []
+      index += 2
+      while (index < lines.length && lines[index]!.trim() !== '' && tableCells(lines[index]!)) {
+        rows.push(tableCells(lines[index]!)!)
+        index += 1
+      }
+      index -= 1
+      const cellsOf = (cells: string[], tag: 'th' | 'td'): string =>
+        header.map((_, column) => `<${tag}>${inline(cells[column] ?? '')}</${tag}>`).join('')
+      html.push(
+        '<div class="table-wrap"><table>' +
+          `<thead><tr>${cellsOf(header, 'th')}</tr></thead>` +
+          `<tbody>${rows.map((row) => `<tr>${cellsOf(row, 'td')}</tr>`).join('')}</tbody>` +
+          '</table></div>',
+      )
       continue
     }
 

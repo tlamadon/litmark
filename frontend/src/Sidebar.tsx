@@ -6,12 +6,22 @@
  * failed never makes a readable PDF look unavailable.
  */
 
-import { useState } from 'preact/hooks'
+import { useEffect, useMemo, useState } from 'preact/hooks'
 
-import { api, type ChangeRecord, type DocumentRecord, type NoteSummary, type SearchHit } from './api'
+import {
+  api,
+  type ChangeRecord,
+  type DocumentRecord,
+  type NoteSummary,
+  type SearchHit,
+  type TagCount,
+} from './api'
+import { filterByTags, TagFilter, TagInput, UNTAGGED } from './Tags'
 
 export interface SidebarProps {
   documents: DocumentRecord[]
+  /** Every tag in use, with how many papers carry it. */
+  tags: TagCount[]
   notes: NoteSummary[]
   changes: ChangeRecord[]
   activeTarget: { kind: string; noteId?: string; documentId?: string }
@@ -19,7 +29,10 @@ export interface SidebarProps {
   onOpenSummary: (documentId: string) => void
   onOpenDocument: (documentId: string) => void
   onNewNote: () => void
-  onImport: (files: File[]) => void
+  /** Import PDFs; `tags` are given to each, so they arrive in the collection on screen. */
+  onImport: (files: File[], tags: string[]) => void
+  onSetTags: (documentId: string, tags: string[]) => void
+  onTagDocuments: (documentIds: string[], add: string[]) => void
   onSearchJump: (hit: SearchHit) => void
   onSummarize: (documentId: string) => Promise<void>
   onReextract: (documentId: string) => void
@@ -36,6 +49,39 @@ export function Sidebar(props: SidebarProps) {
   )
   const [dragging, setDragging] = useState(false)
   const [searching, setSearching] = useState(false)
+  // The tags the list is narrowed to; a paper must carry all of them.
+  const [selected, setSelected] = useState<string[]>([])
+  const [editingTags, setEditingTags] = useState<string | null>(null)
+  const [taggingShown, setTaggingShown] = useState(false)
+
+  const untagged = useMemo(
+    () => props.documents.filter((document) => document.tags.length === 0).length,
+    [props.documents],
+  )
+  const shown = useMemo(
+    () => filterByTags(props.documents, selected),
+    [props.documents, selected],
+  )
+  // A tag whose last paper lost it is no longer something to filter by.
+  useEffect(() => {
+    const live = new Set(props.tags.map(({ tag }) => tag.toLocaleLowerCase()))
+    setSelected((current) => {
+      const kept = current.filter(
+        (tag) => (tag === UNTAGGED ? untagged > 0 : live.has(tag.toLocaleLowerCase())),
+      )
+      return kept.length === current.length ? current : kept
+    })
+  }, [props.tags, untagged])
+
+  const toggleTag = (tag: string): void =>
+    setSelected((current) =>
+      current.some((own) => own.toLocaleLowerCase() === tag.toLocaleLowerCase())
+        ? current.filter((own) => own.toLocaleLowerCase() !== tag.toLocaleLowerCase())
+        : [...current, tag],
+    )
+  // What a paper imported now is tagged with: the collection on screen.
+  const importTags = selected.filter((tag) => tag !== UNTAGGED)
+  const importFiles = (files: File[]): void => props.onImport(files, importTags)
 
   const runSearch = async (value: string): Promise<void> => {
     setQuery(value)
@@ -66,7 +112,7 @@ export function Sidebar(props: SidebarProps) {
         event.preventDefault()
         setDragging(false)
         const files = Array.from(event.dataTransfer?.files ?? [])
-        if (files.length > 0) props.onImport(files)
+        if (files.length > 0) importFiles(files)
       }}
     >
       <div class="sidebar-tools">
@@ -86,7 +132,7 @@ export function Sidebar(props: SidebarProps) {
             onChange={(event) => {
               const input = event.target as HTMLInputElement
               const files = Array.from(input.files ?? [])
-              if (files.length > 0) props.onImport(files)
+              if (files.length > 0) importFiles(files)
               input.value = ''
             }}
           />
@@ -155,8 +201,55 @@ export function Sidebar(props: SidebarProps) {
             No papers yet. Drag PDFs here, or use Import.
           </p>
         )}
+
+        <TagFilter
+          tags={props.tags}
+          untagged={untagged}
+          selected={selected}
+          onToggle={toggleTag}
+          onClear={() => setSelected([])}
+        />
+        {props.documents.length > 0 && (
+          <div class="tag-bar">
+            <span class="muted">
+              {selected.length > 0
+                ? `${shown.length} of ${props.documents.length} papers`
+                : `${props.documents.length} paper${props.documents.length === 1 ? '' : 's'}`}
+              {importTags.length > 0 && ` · imports are tagged ${importTags.join(', ')}`}
+            </span>
+            {shown.length > 0 && !taggingShown && (
+              <button
+                type="button"
+                class="link"
+                title="Give a tag to every paper listed below"
+                onClick={() => setTaggingShown(true)}
+              >
+                Tag {shown.length === 1 ? 'it' : `these ${shown.length}`}…
+              </button>
+            )}
+          </div>
+        )}
+        {taggingShown && (
+          <TagInput
+            known={props.tags}
+            autoFocus
+            label={`Tag the ${shown.length} papers listed`}
+            placeholder="field:labor, jmp:2026…"
+            onAdd={(tags) => {
+              props.onTagDocuments(
+                shown.map((document) => document.document_id),
+                tags,
+              )
+              // Done in one go. Left open, the list it applies to can change
+              // underneath it — tagging the untagged empties that very filter.
+              setTaggingShown(false)
+            }}
+            onDone={() => setTaggingShown(false)}
+          />
+        )}
+
         <ul class="list">
-          {props.documents.map((document) => (
+          {shown.map((document) => (
             <li key={document.document_id}>
               <button
                 type="button"
@@ -172,6 +265,53 @@ export function Sidebar(props: SidebarProps) {
                 <SummaryPreview document={document} />
                 <IngestionStatus document={document} />
               </button>
+              {(document.tags.length > 0 || editingTags === document.document_id) && (
+                <div class="entry-tags">
+                  {document.tags.map((tag) =>
+                    editingTags === document.document_id ? (
+                      <span key={tag} class="tag">
+                        {tag}
+                        <button
+                          type="button"
+                          aria-label={`Remove the tag ${tag}`}
+                          onClick={() =>
+                            props.onSetTags(
+                              document.document_id,
+                              document.tags.filter((own) => own !== tag),
+                            )
+                          }
+                        >
+                          ×
+                        </button>
+                      </span>
+                    ) : (
+                      <button
+                        key={tag}
+                        type="button"
+                        class={
+                          selected.some((own) => own.toLocaleLowerCase() === tag.toLocaleLowerCase())
+                            ? 'tag on'
+                            : 'tag'
+                        }
+                        title={`Show only papers tagged ${tag}`}
+                        onClick={() => toggleTag(tag)}
+                      >
+                        {tag}
+                      </button>
+                    ),
+                  )}
+                </div>
+              )}
+              {editingTags === document.document_id && (
+                <TagInput
+                  known={props.tags}
+                  autoFocus
+                  label={`Add a tag to ${document.display_title}`}
+                  placeholder="Add a tag…"
+                  onAdd={(tags) => props.onSetTags(document.document_id, [...document.tags, ...tags])}
+                  onDone={() => setEditingTags(null)}
+                />
+              )}
               <div class="entry-actions">
                 <button
                   type="button"
@@ -180,6 +320,15 @@ export function Sidebar(props: SidebarProps) {
                 >
                   Read PDF
                 </button>
+                {editingTags !== document.document_id && (
+                  <button
+                    type="button"
+                    class="link"
+                    onClick={() => setEditingTags(document.document_id)}
+                  >
+                    {document.tags.length > 0 ? 'Edit tags' : 'Tag'}
+                  </button>
+                )}
                 {document.extraction.status === 'failed' && (
                   <button
                     type="button"

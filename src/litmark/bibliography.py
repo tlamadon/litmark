@@ -246,6 +246,10 @@ def _entry_for(
     else:
         unknown.append("year")
 
+    # The user's own labels, where a reference manager looks for them.
+    if document.tags:
+        fields.append(("keywords", escape_bibtex(", ".join(document.tags))))
+
     # A project-relative path, so the file stays valid when the project moves.
     fields.append(("file", escape_bibtex(f"documents/{document.document_id}/original.pdf")))
 

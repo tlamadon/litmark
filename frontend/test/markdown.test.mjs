@@ -93,3 +93,26 @@ test('a bare dollar amount is not math', () => {
   assert.ok(!html.includes('katex'), html)
   assert.ok(html.includes('$5'), html)
 })
+
+test('a pipe table becomes a table, with its cells rendered inline', () => {
+  const html = renderMarkdown(
+    ['| Paper | Claim |', '| --- | :---: |', '| **One** | restricts [p. 2](source:ref-001) |', '| Two | a \\| b |'].join('\n'),
+  )
+  assert.match(html, /<table>/)
+  assert.match(html, /<th>Paper<\/th><th>Claim<\/th>/)
+  assert.match(html, /<td><strong>One<\/strong><\/td>/)
+  assert.match(html, /data-source-ref="ref-001"/)
+  assert.match(html, /<td>a \| b<\/td>/)
+})
+
+test('a line with a bar but no rule under it stays a paragraph', () => {
+  const html = renderMarkdown('Either a | or b, it depends.\n\nNext paragraph.')
+  assert.doesNotMatch(html, /<table>/)
+  assert.match(html, /<p>Either a \| or b, it depends\.<\/p>/)
+})
+
+test('markup inside a table cell cannot escape it', () => {
+  const html = renderMarkdown('| a |\n| --- |\n| <img src=x onerror=alert(1)> |')
+  assert.doesNotMatch(html, /<img/)
+  assert.match(html, /&lt;img/)
+})
