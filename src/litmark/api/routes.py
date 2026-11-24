@@ -20,6 +20,7 @@ from ..agent.tools import USER, dispatch
 from ..documents import QUEUED, normalize_tags
 from ..errors import InvalidInput, NotFound, RevisionConflict
 from ..events import format_sse
+from ..related import related_to_document, related_to_note
 from ..references import (
     PAGE_ONLY,
     RESOLVED,
@@ -426,6 +427,22 @@ def build_router() -> APIRouter:
                         }
                     )
         return {"query": q, "passages": [hit.to_json() for hit in hits], "notes": notes}
+
+    @router.get("/related")
+    async def related(
+        request: Request, note_id: str | None = None, document_id: str | None = None
+    ) -> dict[str, Any]:
+        """What goes with the note or the paper on screen."""
+        services = services_of(request)
+        if note_id:
+            return related_to_note(
+                services.workspace, services.documents, services.references, note_id
+            )
+        if document_id:
+            return related_to_document(
+                services.workspace, services.documents, services.references, document_id
+            )
+        raise InvalidInput("Name a note (note_id) or a paper (document_id).")
 
     # ----------------------------------------------------------- references
 

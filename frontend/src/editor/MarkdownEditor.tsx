@@ -21,6 +21,7 @@ import {
 import { useEffect, useRef, useState } from 'preact/hooks'
 
 import { ApiError } from '../api'
+import { headingsOf } from '../outline'
 import type { KnownPaper } from '../papers'
 import {
   citationsOf,
@@ -72,6 +73,13 @@ export interface MarkdownEditorProps {
    * it was. Called again for the same reference, it shows the next place.
    */
   registerReveal?: (reveal: (referenceId: string) => RevealResult) => void
+  /**
+   * Hands out a way to go to a heading, by its place among the headings of
+   * the text as it now stands: brought to the top of the view, cursor left be.
+   */
+  registerGoto?: (goto: (headingIndex: number) => void) => void
+  /** What is open, named in the bar itself rather than on a line of its own. */
+  title?: string
 }
 
 export interface RevealResult {
@@ -317,6 +325,15 @@ export function MarkdownEditor(props: MarkdownEditorProps) {
       return { found: true, wrapped: again && index === 0 }
     })
 
+    props.registerGoto?.((headingIndex: number): void => {
+      const target = view.current
+      if (!target) return
+      const heading = headingsOf(target.state.doc.toString())[headingIndex]
+      if (!heading) return
+      const line = target.state.doc.line(Math.min(heading.line, target.state.doc.lines))
+      target.dispatch({ effects: EditorView.scrollIntoView(line.from, { y: 'start', yMargin: 8 }) })
+    })
+
     // A tab put away is often a tab about to be closed: save without waiting
     // out the delay.
     const onHidden = (): void => {
@@ -444,6 +461,11 @@ export function MarkdownEditor(props: MarkdownEditorProps) {
   return (
     <div class={reading ? 'editor reading' : 'editor'}>
       <div class="editor-bar">
+        {props.title && (
+          <h2 class="editor-title" title={props.title}>
+            {props.title}
+          </h2>
+        )}
         <SaveIndicator state={state} />
         {reading && !props.readOnly && (
           <span class="mode-hint">Double-click the text to edit it</span>

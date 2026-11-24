@@ -162,7 +162,11 @@ function buildDom({ serverToken = 'test-token', routes = ROUTES } = {}) {
       })
       return { ok: true, status: 204, text: async () => '' }
     }
-    const body = routes.get(path)
+    // What goes with a note, and what goes with a paper, are asked at one address.
+    const body =
+      path === '/api/related'
+        ? routes.get(url.includes('note_id=') ? '/api/related?note' : '/api/related?paper')
+        : routes.get(path)
     if (body === undefined) {
       return { ok: false, status: 404, text: async () => JSON.stringify({ error: { code: 'not_found', message: path } }) }
     }
@@ -243,8 +247,15 @@ test('the built application bundle runs and renders without throwing', async (t)
   const groups = [...filter.querySelectorAll('.tag-group-name')].map((node) => node.textContent)
   assert.deepEqual(groups, ['field', 'jmp'])
   assert.ok((filter.textContent ?? '').includes('labor1'), filter.textContent)
-  const own = [...root.querySelectorAll('.entry-tags .tag')].map((node) => node.textContent)
+  const own = [...root.querySelectorAll('.card.paper .card-tags .tag')].map((node) => node.textContent)
   assert.deepEqual(own, ['field:labor', 'jmp:2026'])
+  // Nothing is open yet: what is on the page is the library, papers first.
+  assert.ok(root.querySelector('.library'), 'the library is not where one starts')
+  assert.equal(root.querySelector('.cm-content'), null, 'something was opened unasked')
+  assert.deepEqual(
+    [...root.querySelectorAll('.library .mode-tabs button')].map((node) => node.textContent),
+    ['Papers 1', 'Notes 1'],
+  )
 
   // Where the project stands with git is said in the top bar.
   const syncButton = root.querySelector('.sync-button')
@@ -282,7 +293,7 @@ test('a page left open across a server restart picks up the new credential', asy
   )
 })
 
-test('papers go by author and year, a link to one opens it, and a note can be deleted', async (t) => {
+test('the library, what is open, and the panel about it', async (t) => {
   // Two papers whose authors someone has said, and one still known only by its title.
   const named = (id, label, year, title) => ({
     ...STATE.documents[0],
@@ -306,12 +317,25 @@ test('papers go by author and year, a link to one opens it, and a note can be de
     '',
     'This extends [Olley–Pakes (1996)](paper:doc-002), as Levinsohn and Petrin (2003) do.',
     '',
+    '## What is missing',
+    '',
     'See also [one that is gone](paper:doc-404).',
+    '',
+    '```',
+    '# not a heading',
+    '```',
     '',
   ].join('\n')
   const routes = new Map(ROUTES)
   routes.set('/api/state', state)
   routes.set('/api/notes/welcome', { ...ROUTES.get('/api/notes/welcome'), text })
+  routes.set('/api/related?note', { papers: [{ document_id: 'doc-002', count: 2 }] })
+  routes.set('/api/related?paper', {
+    notes: [{ note_id: 'welcome', title: 'Welcome', count: 1 }],
+    mentions: [],
+    mentioned_by: [{ document_id: 'doc-003', count: 1 }],
+    same_tags: [],
+  })
   const dom = buildDom({ routes })
   const { window } = dom
   t.after(() => window.close())
@@ -319,19 +343,62 @@ test('papers go by author and year, a link to one opens it, and a note can be de
   window.addEventListener('error', (event) => errors.push(event.error ?? event.message))
   window.addEventListener('unhandledrejection', (event) => errors.push(event.reason))
   window.eval(readFileSync(join(here, 'bundle', 'app.mjs'), 'utf8'))
-  await new Promise((resolve) => setTimeout(resolve, 300))
+  const settle = (ms = 200) => new Promise((resolve) => setTimeout(resolve, ms))
+  const click = (node) => node.dispatchEvent(new window.MouseEvent('click', { bubbles: true }))
+  const type = (input, value) => {
+    input.value = value
+    input.dispatchEvent(new window.Event('input', { bubbles: true }))
+  }
+  await settle(300)
   const root = window.document.getElementById('app')
+  const cards = (kind) =>
+    [...root.querySelectorAll(`.library .card.${kind}`)].map((card) => [
+      card.querySelector('strong')?.textContent,
+      card.querySelector('.card-title')?.textContent ?? null,
+    ])
+  const sections = () =>
+    Object.fromEntries(
+      [...root.querySelectorAll('.sidebar section')]
+        .filter((section) => section.querySelector('h3'))
+        .map((section) => [
+          section.querySelector('h3').textContent,
+          [...section.querySelectorAll('li')].map((item) => item.textContent),
+        ]),
+    )
 
-  // In the list, a paper is named as it is cited, with its title beneath.
-  const entries = [...root.querySelectorAll('.sidebar .list .entry')].map((entry) => [
-    entry.querySelector('strong')?.textContent,
-    entry.querySelector('.paper-title')?.textContent ?? null,
-  ])
-  assert.deepEqual(entries.slice(0, 3), [
+  // ---- the library: a paper is named as it is cited, with its title beneath.
+  // Most recently added first, which for papers added together is as they came.
+  assert.deepEqual(cards('paper'), [
     ['A Paper', null],
     ['Olley & Pakes (1992)', 'The Dynamics of Productivity'],
     ['Levinsohn & Petrin (2003)', 'Estimating Production Functions'],
   ])
+  assert.deepEqual(cards('note'), [], 'notes are on their own tab')
+  // What is typed narrows both at once, by whatever a paper is known by.
+  type(root.querySelector('.library-tools input'), 'pakes 1992')
+  await settle(50)
+  assert.deepEqual(cards('paper'), [['Olley & Pakes (1992)', 'The Dynamics of Productivity']])
+  type(root.querySelector('.library-tools input'), 'welc')
+  await settle(50)
+  assert.deepEqual([cards('paper'), cards('note')], [[], [['Welcome', null]]])
+  type(root.querySelector('.library-tools input'), '')
+  // A tag in the panel narrows the papers to those carrying it.
+  click([...root.querySelectorAll('.sidebar .tag-filter .tag')].find((tag) => tag.textContent.startsWith('labor')))
+  await settle(50)
+  assert.deepEqual(cards('paper'), [['A Paper', null]])
+  click(root.querySelector('.library-head .tag.on'))
+  await settle(50)
+  assert.equal(cards('paper').length, 3)
+
+  // ---- a note, opened from its card
+  click(root.querySelector('.library [data-show="notes"]'))
+  await settle(50)
+  click(root.querySelector('.card.note[data-note="welcome"] .card-open'))
+  await settle()
+  assert.equal(root.querySelector('.library'), null, 'the library stayed in the way')
+  // It is named in the editor's own bar: no line is spent on a heading above it.
+  assert.equal(root.querySelector('.editor-bar .editor-title')?.textContent, 'Welcome')
+  assert.equal(root.querySelector('.main-head'), null)
 
   // A link written into the note names its paper, and says so when the paper
   // is gone. Words that merely read like a citation are left as words.
@@ -347,27 +414,51 @@ test('papers go by author and year, a link to one opens it, and a note can be de
   const line = root.querySelector('.cm-content')?.textContent ?? ''
   assert.ok(line.includes('as Levinsohn and Petrin (2003) do.'), line)
 
-  // A click on the link opens the paper beside the note.
+  // The panel is about the note: its headings, and the papers it is tied to.
+  assert.deepEqual(sections(), {
+    Contents: ['Welcome', 'What is missing'],
+    'Papers in this note': ['Olley & Pakes (1992)×2'],
+  })
+
+  // ---- a click on the link opens the paper beside the note, under one line of header
   root
     .querySelector('.cm-paper-link:not(.missing)')
     .dispatchEvent(new window.MouseEvent('mousedown', { bubbles: true, cancelable: true }))
-  await new Promise((resolve) => setTimeout(resolve, 100))
-  assert.ok(
-    (root.querySelector('aside.source')?.textContent ?? '').includes('The Dynamics of Productivity'),
-    'the paper did not open',
-  )
+  await settle(100)
+  const bar = root.querySelector('aside.source .pdf-bar')
+  assert.ok(bar, 'the paper did not open')
+  assert.equal(bar.querySelector('.pdf-title').textContent, 'Olley & Pakes (1992)')
+  assert.ok(bar.querySelector('input[aria-label="Page number"]'), 'the page is not in the same bar')
+  assert.ok(bar.querySelector('.close'), 'the way out is not in the same bar')
+  assert.equal(root.querySelectorAll('aside.source header').length, 1)
 
-  // Deleting is asked for, confirmed, and then the note is gone from the list
-  // and from the page.
-  const click = (node) => node.dispatchEvent(new window.MouseEvent('click', { bubbles: true }))
-  click(root.querySelector('[data-action="delete-note"]'))
-  await new Promise((resolve) => setTimeout(resolve, 20))
+  // ---- the library again, and back: what was open kept its place
+  click(root.querySelector('[data-action="library"]'))
+  await settle(50)
+  assert.ok(root.querySelector('.library') && !root.querySelector('.cm-content'))
+  click(root.querySelector('[data-action="library"]'))
+  await settle(100)
+  assert.ok(root.querySelector('.cm-content') && root.querySelector('aside.source .pdf-bar'))
+
+  // ---- deleting is asked for, confirmed, and then the note is gone from the
+  // page; the paper that was beside it is what is left, and the panel is about it.
+  click(root.querySelector('.sidebar [data-action="delete-note"]'))
+  await settle(20)
   assert.ok(!window.requests.some((request) => request.startsWith('DELETE')), 'deleted unasked')
   assert.ok((root.querySelector('.entry-confirm')?.textContent ?? '').includes('Recent edits'))
   click(root.querySelector('[data-action="confirm-delete-note"]'))
-  await new Promise((resolve) => setTimeout(resolve, 200))
+  await settle()
   assert.ok(window.requests.includes('DELETE /api/notes/welcome'), window.requests.join('\n'))
-  assert.equal(root.querySelector('[data-action="delete-note"]'), null, 'the note is still listed')
   assert.equal(root.querySelector('.cm-content'), null, 'the deleted note is still on the page')
+  assert.equal(root.querySelector('.sidebar .about strong')?.textContent, 'Olley & Pakes (1992)')
+  assert.deepEqual(sections(), {
+    'Notes about it': ['Welcome'],
+    'Mentioned by': ['Levinsohn & Petrin (2003)'],
+  })
+  click(root.querySelector('[data-action="library"]'))
+  await settle(50)
+  click(root.querySelector('.library [data-show="notes"]'))
+  await settle(50)
+  assert.deepEqual(cards('note'), [], 'the note is still listed')
   assert.deepEqual(errors, [], `runtime errors: ${errors.map((e) => e?.stack ?? e).join('\n')}`)
 })

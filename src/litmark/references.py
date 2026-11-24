@@ -422,6 +422,16 @@ def paper_ids_in_markdown(text: str) -> set[str]:
     return set(_PAPER_LINK_RE.findall(strip_code(text)))
 
 
+def links_in_markdown(text: str) -> tuple[list[str], list[str]]:
+    """Every ``source:`` and every ``paper:`` link, in order and with repeats.
+
+    For counting how much a text leans on something, where the sets above
+    only say whether it does.
+    """
+    plain = strip_code(text)
+    return _SOURCE_LINK_RE.findall(plain), _PAPER_LINK_RE.findall(plain)
+
+
 def citations_by_reference(
     workspace: Workspace, documents: Any
 ) -> dict[str, list[dict[str, str]]]:

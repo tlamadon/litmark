@@ -349,8 +349,13 @@ select {
 }
 
 .body > .sidebar {
-  flex: 0 1 17rem;
-  min-width: 230px;
+  flex: 0 1 15rem;
+  min-width: 200px;
+}
+
+.body > .library {
+  flex: 1 1 0;
+  min-width: 0;
 }
 
 /* The note takes what the others leave, and never less than a readable line. */
@@ -524,6 +529,268 @@ select {
 .status.error {
   color: var(--danger);
   border-color: color-mix(in srgb, var(--danger) 40%, transparent);
+}
+
+/* The panel about what is open. */
+.back-to-library {
+  align-self: flex-start;
+  text-decoration: none;
+}
+
+.about {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+}
+
+.about > strong {
+  font-weight: 600;
+  font-size: 0.98rem;
+  line-height: 1.3;
+}
+
+.about .paper-title {
+  font-size: 0.86rem;
+  line-height: 1.3;
+}
+
+.about > .muted {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.about .entry-tags,
+.about .entry-actions,
+.about .entry-confirm,
+.about .details-form {
+  padding-left: 0;
+  padding-right: 0;
+}
+
+.about .entry-actions {
+  flex-wrap: wrap;
+  row-gap: 0.1rem;
+}
+
+.toc,
+.related {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.toc li {
+  padding-left: calc(var(--depth, 0) * 0.7rem);
+}
+
+.toc button,
+.related button {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 0.5rem;
+  width: 100%;
+  text-align: left;
+  background: none;
+  border: 0;
+  border-radius: 5px;
+  padding: 0.15rem 0.35rem;
+  font-size: 0.86rem;
+  line-height: 1.3;
+}
+
+.toc button:hover,
+.related button:hover {
+  background: var(--accent-soft);
+}
+
+.toc button > span:first-child,
+.related button > span:first-child {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.toc .muted,
+.related .muted {
+  flex: none;
+  font-size: 0.76rem;
+}
+
+/* The library: every paper and note, with the width of the page. */
+.library {
+  display: flex;
+  flex-direction: column;
+  gap: 1.1rem;
+  padding: 0.8rem 1.1rem 2rem;
+  overflow: auto;
+}
+
+.library.dropping {
+  outline: 2px dashed var(--accent);
+  outline-offset: -6px;
+}
+
+.library-tools {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.library-tools input[type='search'] {
+  flex: 1;
+  min-width: 0;
+  padding: 0.45rem 0.7rem;
+  border: 1px solid var(--rule);
+  border-radius: 7px;
+  background: var(--panel);
+}
+
+.library-tools .mode-tabs {
+  font-size: 0.86rem;
+  border-radius: 7px;
+  flex: none;
+}
+
+.library-tools .mode-tabs button {
+  padding: 0 0.7rem;
+}
+
+.library-tools .mode-tabs .count {
+  color: var(--muted);
+  font-size: 0.86em;
+}
+
+.library-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.3rem 0.7rem;
+  margin-bottom: 0.5rem;
+}
+
+.library h3 {
+  font-size: 0.74rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin: 0;
+}
+
+.library-head .order {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.3rem;
+}
+
+.library-head select {
+  border: 1px solid var(--rule);
+  border-radius: 5px;
+  background: var(--panel);
+  padding: 0.05rem 0.2rem;
+  font-size: 0.84rem;
+}
+
+.library-empty {
+  margin: 0.3rem 0;
+  color: var(--muted-strong);
+}
+
+.grid {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(13.5rem, 1fr));
+  gap: 0.5rem;
+}
+
+.card {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--rule);
+  border-radius: 8px;
+  background: var(--panel);
+  min-width: 0;
+}
+
+.card:hover {
+  border-color: var(--accent);
+}
+
+.card-open {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  width: 100%;
+  text-align: left;
+  background: none;
+  border: 0;
+  border-radius: 8px;
+  padding: 0.5rem 0.6rem;
+}
+
+.card-open strong {
+  font-weight: 600;
+  font-size: 0.92rem;
+  line-height: 1.3;
+  overflow-wrap: anywhere;
+}
+
+/* A title runs to three lines and no further: the cards stay of a height. */
+.card-title {
+  font-size: 0.84rem;
+  line-height: 1.3;
+  color: var(--muted-strong);
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  line-clamp: 3;
+  overflow: hidden;
+}
+
+.card-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.2rem;
+  padding: 0 0.6rem 0.5rem;
+}
+
+.card.note .card-open {
+  padding-right: 1.6rem;
+}
+
+.card-remove {
+  position: absolute;
+  top: 0.2rem;
+  right: 0.25rem;
+  border: 0;
+  background: none;
+  color: var(--muted);
+  border-radius: 5px;
+  padding: 0 0.3rem;
+  line-height: 1.3;
+  opacity: 0;
+}
+
+.card:hover .card-remove,
+.card-remove:focus-visible {
+  opacity: 1;
+}
+
+.card-remove:hover {
+  color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 12%, transparent);
+}
+
+.card-confirm {
+  margin: 0;
+  padding: 0 0.6rem 0.5rem;
+}
+
+.library .results .result:last-child {
+  border-bottom: 0;
 }
 
 /* Tags: the user's own labels for gathering papers. */
@@ -829,6 +1096,34 @@ button.tag:hover {
   gap: 0.6rem;
 }
 
+/* The hint is worth its room only where there is room. */
+.editor {
+  container-type: inline-size;
+}
+
+@container (max-width: 620px) {
+  .mode-hint {
+    display: none;
+  }
+}
+
+/* What is open, named in the bar rather than on a line of its own. */
+.editor-title {
+  flex: 0 1 auto;
+  min-width: 6ch;
+  margin: 0;
+  font-family: var(--serif);
+  font-size: 1rem;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.editor-bar .editor-actions {
+  margin-left: auto;
+}
+
 .save-state {
   font-size: 0.8rem;
   color: var(--muted);
@@ -1061,42 +1356,52 @@ button.tag:hover {
   flex: 1;
 }
 
+/* One line for the whole of it: the page is what the panel is for. */
 .pdf-bar {
   display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 0.5rem;
-  padding: 0.5rem 0.6rem 0.2rem;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.2rem 0.4rem;
+  border-bottom: 1px solid var(--rule);
+  font-size: 0.84rem;
 }
 
 .pdf-title {
-  display: flex;
-  flex-direction: column;
-  min-width: 0;
-}
-
-.pdf-title strong {
-  font-size: 0.92rem;
+  flex: 0 1 auto;
+  min-width: 3ch;
+  margin-right: 0.35rem;
   font-weight: 550;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.pdf-controls {
-  display: flex;
-  align-items: center;
-  gap: 0.3rem;
-  padding: 0 0.6rem 0.4rem;
-  border-bottom: 1px solid var(--rule);
+.pdf-bar .spacer {
+  min-width: 0.2rem;
 }
 
 .pdf-controls button {
   border: 1px solid var(--rule);
   background: var(--panel);
-  border-radius: 6px;
-  min-width: 1.8rem;
-  padding: 0.1rem 0.4rem;
+  border-radius: 5px;
+  min-width: 1.5rem;
+  padding: 0 0.3rem;
+  line-height: 1.45;
+  flex: none;
+}
+
+.pdf-controls form {
+  flex: none;
+}
+
+.pdf-controls .close {
+  border-color: transparent;
+  background: none;
+  margin-left: 0.15rem;
+}
+
+.pdf-controls .close:hover {
+  border-color: var(--rule);
 }
 
 .pdf-controls button:disabled {
@@ -1105,16 +1410,22 @@ button.tag:hover {
 }
 
 .pdf-controls input {
-  width: 3.2rem;
+  width: 2.6rem;
   text-align: center;
   border: 1px solid var(--rule);
-  border-radius: 6px;
-  padding: 0.1rem 0.2rem;
+  border-radius: 5px;
+  padding: 0 0.15rem;
+  line-height: 1.45;
   background: var(--bg);
 }
 
+.pdf-controls .muted {
+  white-space: nowrap;
+  flex: none;
+}
+
 .pdf-controls .zoom {
-  min-width: 3.2rem;
+  min-width: 2.6rem;
   text-align: center;
 }
 
@@ -1260,13 +1571,14 @@ button.tag:hover {
   }
 }
 
+/* How many passages are marked, by where they are cited: a swatch and a count
+   in the bar, with the meaning said on hover. */
 .pdf-legend {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.6rem;
-  padding: 0.3rem 0.6rem;
-  border-bottom: 1px solid var(--rule);
-  font-size: 0.78rem;
+  display: inline-flex;
+  flex: none;
+  gap: 0.45rem;
+  margin-left: 0.4rem;
+  font-size: 0.76rem;
   color: var(--muted-strong);
 }
 

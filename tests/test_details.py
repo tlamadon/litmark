@@ -214,3 +214,60 @@ def test_a_link_to_a_paper_must_be_to_one_that_is_there(services, client, paper_
         services.tools, "write_summary", {"document_id": document_id, "text": "As in [x](paper:doc-999)."}
     )
     assert refused["ok"] is False and "list_documents" in refused["message"]
+
+
+# ------------------------------------------------------------ what goes with what
+
+
+def test_a_note_and_a_paper_know_what_they_are_tied_to(services, client, paper_one, paper_two):
+    # Brought in without a summary of their own, so the one written below is the only one.
+    first, second = (
+        services.import_paper(data, name, summarize=False, origin="mcp:test")["document_id"]
+        for data, name in ((paper_one, "mobility.pdf"), (paper_two, "search.pdf"))
+    )
+    wait_for_extraction(client, first)
+    wait_for_extraction(client, second)
+    cited = dispatch(
+        services.tools,
+        "resolve_source",
+        {"document_id": first, "page_number": 2, "quote": "Assumption 2 requires that unobserved ability is"},
+    )["reference_id"]
+    dispatch(
+        services.tools,
+        "append_note",
+        {
+            "note_id": "ideas",
+            "text": f"# Ideas\n\nA claim [p. 2](source:{cited}), again [p. 2](source:{cited}), "
+            f"and see [the other](paper:{second}). Not this: `[x](paper:{first})`.",
+        },
+    )
+    dispatch(services.tools, "append_note", {"note_id": "todo", "text": "Buy coffee."})
+    written = dispatch(
+        services.tools,
+        "write_summary",
+        {"document_id": second, "text": f"Contrasts with [Researcher (2019)](paper:{first})."},
+    )
+    assert written["ok"] is True, written
+    dispatch(services.tools, "tag_documents", {"document_ids": [first, second], "add": ["field:labor"]})
+    dispatch(services.tools, "tag_documents", {"document_ids": [second], "add": ["jmp:2026"]})
+
+    note = client.get("/api/related", params={"note_id": "ideas"}).json()
+    assert note["papers"] == [
+        {"document_id": first, "count": 2},
+        {"document_id": second, "count": 1},
+    ]
+    assert client.get("/api/related", params={"note_id": "todo"}).json() == {"papers": []}
+
+    paper = client.get("/api/related", params={"document_id": first}).json()
+    assert paper["notes"] == [{"note_id": "ideas", "title": "Ideas", "count": 2}]
+    assert paper["mentions"] == []
+    assert paper["mentioned_by"] == [{"document_id": second, "count": 1}]
+    assert paper["same_tags"] == [{"document_id": second, "tags": ["field:labor"]}]
+
+    other = client.get("/api/related", params={"document_id": second}).json()
+    assert other["mentions"] == [{"document_id": first, "count": 1}]
+    assert other["notes"] == [{"note_id": "ideas", "title": "Ideas", "count": 1}]
+
+    assert client.get("/api/related").status_code == 422
+    assert client.get("/api/related", params={"note_id": "absent"}).status_code == 404
+    assert client.get("/api/related", params={"document_id": "doc-404"}).status_code == 404

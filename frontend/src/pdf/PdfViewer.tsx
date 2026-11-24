@@ -84,6 +84,51 @@ export interface PdfViewerProps {
   onSelection: (selection: PdfSelection | null) => void
   onActivateMark?: (referenceId: string) => void
   onClose?: () => void
+  /** The paper's own table of contents, when its PDF carries one. */
+  onOutline?: (items: PdfOutlineItem[]) => void
+}
+
+/** One entry of a PDF's bookmarks: a section, and the page it starts on. */
+export interface PdfOutlineItem {
+  title: string
+  page: number
+  level: number
+}
+
+const MAX_OUTLINE_ITEMS = 150
+const MAX_OUTLINE_DEPTH = 3
+
+/**
+ * A PDF's bookmarks, flattened, each with the page it points at.
+ *
+ * Many papers carry them (anything typeset with hyperref does). An entry
+ * whose destination cannot be worked out is left out rather than guessed.
+ */
+async function readOutline(pdf: PDFDocumentProxy): Promise<PdfOutlineItem[]> {
+  const items: PdfOutlineItem[] = []
+  type Node = Awaited<ReturnType<PDFDocumentProxy['getOutline']>>[number]
+  const walk = async (nodes: Node[], level: number): Promise<void> => {
+    for (const node of nodes) {
+      if (items.length >= MAX_OUTLINE_ITEMS) return
+      let page: number | null = null
+      try {
+        const dest = typeof node.dest === 'string' ? await pdf.getDestination(node.dest) : node.dest
+        const target: unknown = Array.isArray(dest) ? dest[0] : null
+        if (typeof target === 'number') page = target + 1
+        else if (target && typeof target === 'object') {
+          page = (await pdf.getPageIndex(target as Parameters<typeof pdf.getPageIndex>[0])) + 1
+        }
+      } catch {
+        page = null
+      }
+      const title = (node.title ?? '').replace(/\s+/g, ' ').trim()
+      if (page !== null && title) items.push({ title, page, level })
+      if (level < MAX_OUTLINE_DEPTH && node.items?.length) await walk(node.items, level + 1)
+    }
+  }
+  const outline = await pdf.getOutline()
+  if (outline) await walk(outline, 1)
+  return items
 }
 
 interface PageSize {
@@ -244,6 +289,27 @@ export function PdfViewer(props: PdfViewerProps) {
     }
   }, [url])
 
+  // --------------------------------------------------------------- outline
+
+  const reportOutline = useRef(props.onOutline)
+  reportOutline.current = props.onOutline
+  useEffect(() => {
+    reportOutline.current?.([])
+    if (!pdf) return
+    let cancelled = false
+    readOutline(pdf).then(
+      (items) => {
+        if (!cancelled) reportOutline.current?.(items)
+      },
+      () => {
+        /* no outline is the ordinary case, and not worth a word */
+      },
+    )
+    return () => {
+      cancelled = true
+    }
+  }, [pdf])
+
   // ---------------------------------------------------------------- sizing
 
   useEffect(() => {
@@ -373,24 +439,14 @@ export function PdfViewer(props: PdfViewerProps) {
 
   return (
     <section class="pdf" aria-label="Source panel">
-      <header class="pdf-bar">
-        <div class="pdf-title" title={props.document.original_filename}>
-          <strong>{props.document.display_title}</strong>
-          <span class="muted">{props.document.original_filename}</span>
-        </div>
-        {props.onClose && (
-          <button
-            type="button"
-            class="ghost"
-            onClick={props.onClose}
-            title="Close the source panel"
-          >
-            ✕
-          </button>
-        )}
-      </header>
-
-      <div class="pdf-controls">
+      {/* One line: what the paper is, where in it, how large, and the way out. */}
+      <header class="pdf-bar pdf-controls">
+        <strong
+          class="pdf-title"
+          title={`${props.document.display_title} — ${props.document.original_filename}`}
+        >
+          {props.document.label ?? props.document.display_title}
+        </strong>
         <button type="button" onClick={() => go(currentPage - 1)} disabled={currentPage <= 1}>
           ‹
         </button>
@@ -409,7 +465,7 @@ export function PdfViewer(props: PdfViewerProps) {
             size={3}
           />
         </form>
-        <span class="muted">of {total}</span>
+        <span class="muted">/ {total}</span>
         <button
           type="button"
           onClick={() => go(currentPage + 1)}
@@ -417,6 +473,28 @@ export function PdfViewer(props: PdfViewerProps) {
         >
           ›
         </button>
+        {(counts.current > 0 || counts.other > 0 || counts.uncited > 0) && (
+          <span class="pdf-legend" aria-label="Highlight key">
+            {counts.current > 0 && (
+              <span class="key current-note" title={`Cited in what is open: ${counts.current}`}>
+                <i />
+                {counts.current}
+              </span>
+            )}
+            {counts.other > 0 && (
+              <span class="key other-note" title={`Cited elsewhere: ${counts.other}`}>
+                <i />
+                {counts.other}
+              </span>
+            )}
+            {counts.uncited > 0 && (
+              <span class="key uncited" title={`Marked, not cited yet: ${counts.uncited}`}>
+                <i />
+                {counts.uncited}
+              </span>
+            )}
+          </span>
+        )}
         <span class="spacer" />
         <button
           type="button"
@@ -443,30 +521,18 @@ export function PdfViewer(props: PdfViewerProps) {
         >
           Fit
         </button>
-      </div>
-
-      {(counts.current > 0 || counts.other > 0 || counts.uncited > 0) && (
-        <div class="pdf-legend" aria-label="Highlight key">
-          {counts.current > 0 && (
-            <span class="key current-note">
-              <i />
-              this note ({counts.current})
-            </span>
-          )}
-          {counts.other > 0 && (
-            <span class="key other-note">
-              <i />
-              elsewhere ({counts.other})
-            </span>
-          )}
-          {counts.uncited > 0 && (
-            <span class="key uncited">
-              <i />
-              not cited yet ({counts.uncited})
-            </span>
-          )}
-        </div>
-      )}
+        {props.onClose && (
+          <button
+            type="button"
+            class="close"
+            onClick={props.onClose}
+            title="Close the paper"
+            aria-label="Close the paper"
+          >
+            ✕
+          </button>
+        )}
+      </header>
 
       {error !== null && <p class="pdf-error">{error}</p>}
       {!pdf && !error && <p class="pdf-loading">Opening the PDF…</p>}

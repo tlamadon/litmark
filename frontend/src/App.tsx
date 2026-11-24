@@ -1,9 +1,13 @@
 /**
- * The application shell: project sidebar, main editor, source panel, chat drawer.
+ * The application shell: the library, and what is open — a panel about it,
+ * the note or summary, the paper, and the chat drawer.
  *
- * Each of the three side regions can collapse, and the chat drawer is capped so
- * it cannot squeeze the editor and the PDF into unreadable columns. On a narrow
- * window the source panel takes over the main view, with an explicit way back.
+ * The library is every paper and note as a grid, and is where one starts. It
+ * is laid over whatever is open rather than replacing it, so going to look
+ * something up and coming back loses no place. Each side region can collapse,
+ * and the chat drawer is capped so it cannot squeeze the editor and the PDF
+ * into unreadable columns. On a narrow window the paper takes over the main
+ * view, with an explicit way back.
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'preact/hooks'
@@ -18,16 +22,26 @@ import {
   type NoteSummary,
   type ProjectState,
   type ReferenceRecord,
+  type RelatedToNote,
+  type RelatedToPaper,
   type SearchHit,
   type SyncState,
 } from './api'
 import { Chat } from './chat/Chat'
 import type { OpenTarget } from './chat/describe'
 import { MarkdownEditor, type RevealResult } from './editor/MarkdownEditor'
-import { nameOf, papersOf } from './papers'
 import { EventStream, type ServerEvent } from './events'
-import { PdfViewer, type PdfMark, type PdfSelection } from './pdf/PdfViewer'
-import { Sidebar } from './Sidebar'
+import { Library } from './Library'
+import { headingsOf } from './outline'
+import { nameOf, papersOf } from './papers'
+import {
+  PdfViewer,
+  type PdfMark,
+  type PdfOutlineItem,
+  type PdfSelection,
+} from './pdf/PdfViewer'
+import { Sidebar, type Subject } from './Sidebar'
+import { UNTAGGED } from './Tags'
 import { SyncStatus } from './SyncStatus'
 
 type MainTarget =
@@ -125,6 +139,18 @@ export function App() {
   const [sync, setSync] = useState<SyncState | null>(null)
   const [changes, setChanges] = useState<ChangeRecord[]>([])
 
+  // The library is laid over what is open, which keeps its place underneath.
+  const [library, setLibrary] = useState(false)
+  // The tags the library is narrowed to; a paper must carry all of them.
+  const [selectedTags, setSelectedTags] = useState<string[]>([])
+  // The open paper's own table of contents, when its PDF carries one.
+  const [outline, setOutline] = useState<PdfOutlineItem[]>([])
+  // What the note or paper on screen is tied to.
+  const [related, setRelated] = useState<{
+    key: string
+    value: RelatedToNote | RelatedToPaper
+  } | null>(null)
+
   const [showSidebar, setShowSidebar] = useState(true)
   const [showChat, setShowChat] = useState(true)
   const [chatWidth, setChatWidth] = useState(storedChatWidth)
@@ -134,6 +160,7 @@ export function App() {
 
   const insertRef = useRef<((markdown: string) => void) | null>(null)
   const revealRef = useRef<((referenceId: string) => RevealResult) | null>(null)
+  const gotoHeadingRef = useRef<((headingIndex: number) => void) | null>(null)
   // A citation to go to once the note that holds it has opened.
   const pendingReveal = useRef<string | null>(null)
   // The note just created, which opens ready to be written in.
@@ -219,8 +246,6 @@ export function App() {
       if (chats.length === 0) void refreshConversations()
       void api.changes().then((payload) => setChanges(payload.changes))
       void refreshSync()
-
-      if (next.notes.length > 0) setTarget({ kind: 'note', noteId: next.notes[0]!.note_id })
 
       source = new EventStream(setConnected)
       source.subscribe((event: ServerEvent) => {
@@ -549,11 +574,6 @@ export function App() {
         messages.push(`${failure.filename}: ${failure.message}`)
       }
       setInsertNotice(messages.length > 0 ? messages.join(' ') : null)
-      const first = result.imported[0]?.document
-      if (first) {
-        setOpenDocument(first)
-        setShowSourcePanel(true)
-      }
     },
     [refreshState],
   )
@@ -742,6 +762,91 @@ export function App() {
 
   // ---------------------------------------------------------------- render
 
+  /** Open a paper from the library: its summary, with the PDF beside it. */
+  const openPaper = useCallback(
+    (documentId: string): void => {
+      setTarget({ kind: 'summary', documentId })
+      setSourceTakesOver(false)
+      openDocumentById(documentId)
+    },
+    [openDocumentById],
+  )
+
+  // Going anywhere — to a note, a summary, a page of a paper — is leaving the
+  // library; it stays one click away, and what was open is still there.
+  useEffect(() => {
+    setLibrary(false)
+  }, [target, gotoNonce])
+
+  useEffect(() => {
+    if (!openDocument) setOutline([])
+  }, [openDocument?.document_id])
+
+  // What the panel on the left is about: the note, or the paper — the one
+  // whose summary is open, or failing that the one being read.
+  const subject = useMemo<Subject>(() => {
+    if (target.kind === 'note') return { kind: 'note', noteId: target.noteId }
+    if (target.kind === 'summary') return { kind: 'paper', documentId: target.documentId }
+    return openDocument ? { kind: 'paper', documentId: openDocument.document_id } : null
+  }, [target, openDocument?.document_id])
+  const subjectKey = subject
+    ? subject.kind === 'note'
+      ? `note:${subject.noteId}`
+      : `paper:${subject.documentId}`
+    : ''
+
+  // What it is tied to is read from the text of the notes and summaries, so
+  // it is asked again whenever one of them is saved or changed from elsewhere.
+  useEffect(() => {
+    if (!subject) {
+      setRelated(null)
+      return
+    }
+    let cancelled = false
+    const asked =
+      subject.kind === 'note'
+        ? api.relatedToNote(subject.noteId)
+        : api.relatedToPaper(subject.documentId)
+    asked.then(
+      (value) => {
+        if (!cancelled) setRelated({ key: subjectKey, value })
+      },
+      () => {
+        if (!cancelled) setRelated(null)
+      },
+    )
+    return () => {
+      cancelled = true
+    }
+  }, [subjectKey, buffer?.revision, fileTick, state?.documents])
+
+  const headings = useMemo(
+    () => (buffer && buffer.key === docKey ? headingsOf(buffer.text) : []),
+    [buffer, docKey],
+  )
+
+  const toggleTag = useCallback((tag: string): void => {
+    const fold = (value: string): string => value.toLocaleLowerCase()
+    setSelectedTags((current) =>
+      current.some((own) => fold(own) === fold(tag))
+        ? current.filter((own) => fold(own) !== fold(tag))
+        : [...current, tag],
+    )
+  }, [])
+
+  // A tag whose last paper lost it is no longer something to filter by.
+  useEffect(() => {
+    if (!state) return
+    const live = new Set(state.tags.map(({ tag }) => tag.toLocaleLowerCase()))
+    const untagged = state.documents.some((document) => document.tags.length === 0)
+    setSelectedTags((current) => {
+      const kept = current.filter((tag) =>
+        tag === UNTAGGED ? untagged : live.has(tag.toLocaleLowerCase()),
+      )
+      return kept.length === current.length ? current : kept
+    })
+  }, [state?.tags, state?.documents])
+
   const marks = useMemo<PdfMark[]>(() => {
     const currentNoteId = target.kind === 'note' ? target.noteId : null
     return documentReferences
@@ -808,8 +913,15 @@ export function App() {
           }`
         : 'Nothing open'
 
-  const showSourceRegion = showSource && openDocument !== null && (!narrow || sourceTakesOver)
-  const showMain = !narrow || !sourceTakesOver
+  // The library shows when it is asked for, and when nothing at all is open.
+  const inLibrary = library || (target.kind === 'empty' && openDocument === null)
+  const showSourceRegion =
+    !inLibrary &&
+    showSource &&
+    openDocument !== null &&
+    (!narrow || sourceTakesOver || target.kind === 'empty')
+  // With no note or summary open, a paper being read has the page to itself.
+  const showMain = !inLibrary && target.kind !== 'empty' && (!narrow || !sourceTakesOver)
 
   return (
     <div
@@ -826,14 +938,25 @@ export function App() {
           type="button"
           class="ghost"
           onClick={() => setShowSidebar(!showSidebar)}
-          title="Toggle the project sidebar"
+          title={inLibrary ? 'Toggle the tag filters' : 'Toggle the panel about what is open'}
         >
           ☰
         </button>
-        <h1>{state.project.name}</h1>
-        <span class="muted path" title={state.project.root}>
-          {state.project.root}
-        </span>
+        <h1 title={state.project.root}>{state.project.name}</h1>
+        <button
+          type="button"
+          class={inLibrary ? 'ghost active' : 'ghost'}
+          data-action="library"
+          aria-pressed={inLibrary}
+          title={
+            inLibrary
+              ? 'Every paper and note — click again to go back to what was open'
+              : 'Every paper and note'
+          }
+          onClick={() => setLibrary(!inLibrary)}
+        >
+          Library
+        </button>
         <span class="spacer" />
         {!connected && <span class="badge warn">Reconnecting…</span>}
         {sync && (
@@ -874,54 +997,90 @@ export function App() {
       <div class="body" style={{ '--chat-width': `${chatWidth}px` }}>
         {showSidebar && (
           <Sidebar
+            library={inLibrary}
             documents={state.documents}
             notes={state.notes}
+            tags={state.tags}
             changes={changes}
-            activeTarget={target}
+            selectedTags={selectedTags}
+            onToggleTag={toggleTag}
+            onClearTags={() => setSelectedTags([])}
+            subject={subject}
+            headings={headings}
+            onGotoHeading={(index) => gotoHeadingRef.current?.(index)}
+            openDocumentId={openDocument?.document_id ?? null}
+            outline={outline}
+            onGotoPage={(page) => {
+              setGotoPage(page)
+              setGotoNonce((value) => value + 1)
+              if (narrow) setSourceTakesOver(true)
+            }}
+            related={related && related.key === subjectKey ? related.value : null}
+            onOpenLibrary={() => setLibrary(true)}
             onOpenNote={(noteId) => {
               setTarget({ kind: 'note', noteId })
               setSourceTakesOver(false)
             }}
+            onOpenPaper={openPaper}
             onOpenSummary={(documentId) => {
               setTarget({ kind: 'summary', documentId })
               setSourceTakesOver(false)
             }}
             onOpenDocument={openDocumentById}
-            onNewNote={() => void createNote()}
             onDeleteNote={deleteNote}
             onSetDetails={async (documentId, details) => {
               await api.setDetails(documentId, details)
               await refreshState()
             }}
-            tags={state.tags}
-            onImport={(files, tags) => void importFiles(files, tags)}
             onSetTags={(documentId, tags) => void changeTags(() => api.setTags(documentId, tags))}
-            onTagDocuments={(ids, add) => void changeTags(() => api.tagDocuments(ids, add))}
-            onSearchJump={(hit) => void jumpToHit(hit)}
             onSummarize={async (documentId) => {
               const result = await api.summarize(documentId)
               if (!result.queued) setInsertNotice(result.reason ?? 'No summary was queued.')
             }}
             onReextract={(documentId) => void api.reextract(documentId)}
-            onWriteBibliography={writeBibliography}
             onUndo={(change) => void undo(change)}
             onLoadChanges={async () => setChanges((await api.changes()).changes)}
           />
         )}
 
+        {inLibrary && (
+          <Library
+            documents={state.documents}
+            notes={state.notes}
+            tags={state.tags}
+            selectedTags={selectedTags}
+            onToggleTag={toggleTag}
+            onClearTags={() => setSelectedTags([])}
+            onOpenPaper={openPaper}
+            onOpenNote={(noteId) => {
+              setTarget({ kind: 'note', noteId })
+              setSourceTakesOver(false)
+            }}
+            onNewNote={() => void createNote()}
+            onDeleteNote={deleteNote}
+            onImport={(files, tags) => void importFiles(files, tags)}
+            onTagDocuments={(ids, add) => void changeTags(() => api.tagDocuments(ids, add))}
+            onSearchJump={(hit) => void jumpToHit(hit)}
+            onWriteBibliography={writeBibliography}
+          />
+        )}
+
         {showMain && (
           <main class="main">
-            <div class="main-head">
-              <h2>{currentTitle}</h2>
-              {narrow && openDocument && (
+            {narrow && openDocument && (
+              <div class="main-head">
                 <button type="button" class="ghost" onClick={() => setSourceTakesOver(true)}>
-                  Show source
+                  Show the paper
                 </button>
-              )}
-            </div>
-            {buffer && buffer.key === docKey && target.kind !== 'empty' ? (
+              </div>
+            )}
+            {buffer && buffer.key === docKey ? (
               <MarkdownEditor
                 docKey={docKey}
+                title={currentTitle}
+                registerGoto={(goto) => {
+                  gotoHeadingRef.current = goto
+                }}
                 text={buffer.text}
                 revision={buffer.revision}
                 save={save}
@@ -948,16 +1107,9 @@ export function App() {
                   if (waiting) reveal(waiting)
                 }}
               />
-            ) : target.kind !== 'empty' ? (
-              <div class="empty">
-                <p>Opening…</p>
-              </div>
             ) : (
               <div class="empty">
-                <p>Open a note, or drag PDFs onto the sidebar to import them.</p>
-                <button type="button" onClick={() => void createNote()}>
-                  New note
-                </button>
+                <p>Opening…</p>
               </div>
             )}
           </main>
@@ -971,7 +1123,7 @@ export function App() {
                 class="ghost back"
                 onClick={() => setSourceTakesOver(false)}
               >
-                ← Back to the note
+                ← Back to the text
               </button>
             )}
             {pdfSelection && (
@@ -1000,6 +1152,7 @@ export function App() {
                 )
                 if (reference) revealCitation(reference)
               }}
+              onOutline={setOutline}
               onClose={() => {
                 setOpenDocument(null)
                 // No passage is on show any more, here or in the note.

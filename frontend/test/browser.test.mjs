@@ -46,11 +46,16 @@ describeOrSkip('the application in Firefox', () => {
     const project = await script(client, `return document.querySelector('.topbar h1')?.textContent`)
     assert.ok(project, 'the project name is missing')
 
-    const entries = await script(
+    // Nothing is open at first: what is shown is the library, as a grid.
+    const cards = await script(
       client,
-      `return [...document.querySelectorAll('.sidebar .entry strong')].map((n) => n.textContent)`,
+      `return [...document.querySelectorAll('.library .card strong')].map((n) => n.textContent)`,
     )
-    assert.ok(entries.length > 0, 'the sidebar listed nothing')
+    assert.ok(cards.length > 0, 'the library listed nothing')
+    assert.ok(
+      !(await script(client, `return !!document.querySelector('.cm-content')`)),
+      'something was opened unasked',
+    )
   })
 
   test('the event stream connects, so live updates work', async () => {
@@ -62,6 +67,9 @@ describeOrSkip('the application in Firefox', () => {
   })
 
   test('a note opens for reading, and a click does not start an edit', async () => {
+    await click(client, '.library [data-show="notes"]')
+    await waitFor(client, `!!document.querySelector('.library .card.note')`, { label: 'the notes' })
+    await click(client, '.library .card.note .card-open')
     await waitFor(client, `!!document.querySelector('.cm-content')`, {
       label: 'the editor to mount',
     })
@@ -248,7 +256,7 @@ describeOrSkip('the application in Firefox', () => {
     await click(client, '.mode-tabs [data-mode="read"]')
     await waitFor(client, `!!document.querySelector('.editor.reading')`, { label: 'reading mode' })
     // Put the paper away, so that opening it again is plainly the click's doing.
-    await click(client, '.pdf-bar button[title="Close the source panel"]')
+    await click(client, '.pdf-bar button[title="Close the paper"]')
     await waitFor(client, `!document.querySelector('.pdf')`, { label: 'the source panel to close' })
 
     await click(client, '.cm-source-link')
@@ -514,16 +522,24 @@ describeOrSkip('the application in Firefox', () => {
     }
   })
 
-  test('A13: the sidebar writes a bibliography and reports what it found', async () => {
+  test('A13: the library writes a bibliography and reports what it found', async () => {
+    // Over to the library, which is laid over what is open, and back afterwards.
+    await click(client, '[data-action="library"]')
+    await waitFor(client, `!!document.querySelector('.library')`, { label: 'the library' })
+    await click(client, '.library [data-show="papers"]')
     const actions = await script(
       client,
-      `return [...document.querySelectorAll('.sidebar .head-actions *')].map((n) =>
+      `return [...document.querySelectorAll('.library-head button, .library-head a')].map((n) =>
          n.textContent.trim(),
        )`,
     )
     assert.ok(actions.includes('Write .bib'), `no bibliography action: ${actions.join(' | ')}`)
 
-    await click(client, '.sidebar .head-actions button')
+    await script(
+      client,
+      `[...document.querySelectorAll('.library-head button')]
+         .find((n) => n.textContent.trim() === 'Write .bib').click()`,
+    )
     const banner = await waitFor(
       client,
       `return document.querySelector('.banner span')?.textContent ?? null`,
@@ -536,10 +552,16 @@ describeOrSkip('the application in Firefox', () => {
     // fetches it without the header the API requires and gets a 401.
     const href = await script(
       client,
-      `return document.querySelector('.sidebar .head-actions a')?.getAttribute('href') ?? ''`,
+      `return document.querySelector('.library-head a')?.getAttribute('href') ?? ''`,
     )
     assert.match(href, /format=bibtex/, `unexpected download link: ${href}`)
     assert.match(href, /token=./, `the download link carries no credential: ${href}`)
+
+    // What was open kept its place underneath.
+    await click(client, '[data-action="library"]')
+    await waitFor(client, `!!document.querySelector('.cm-content') && !!document.querySelector('.pdf')`, {
+      label: 'the note and the paper to be back',
+    })
   })
 
   test('a highlight in the paper leads to where it is cited', async (t) => {
@@ -556,7 +578,7 @@ describeOrSkip('the application in Firefox', () => {
     }
     const before = await script(
       client,
-      `return document.querySelector('.main-head h2')?.textContent ?? ''`,
+      `return document.querySelector('.editor-title')?.textContent ?? ''`,
     )
 
     // Where the cursor is, and whether the editor has the keyboard, beforehand.
@@ -572,7 +594,7 @@ describeOrSkip('the application in Firefox', () => {
          const view = document.querySelector('.cm-scroller').getBoundingClientRect()
          const middle = (at.top + at.bottom) / 2
          return {
-           title: document.querySelector('.main-head h2')?.textContent ?? '',
+           title: document.querySelector('.editor-title')?.textContent ?? '',
            inView: at.top >= view.top && at.bottom <= view.bottom,
            // Centred, when the note is long enough to scroll that far.
            offCentre: Math.abs(middle - (view.top + view.bottom) / 2) / view.height,
@@ -645,27 +667,32 @@ describeOrSkip('the application in Firefox', () => {
   })
 
   test('what was typed just before leaving a note is saved', async (t) => {
+    const openNotes = async () => {
+      if (!(await script(client, `return !!document.querySelector('.library')`))) {
+        await click(client, '[data-action="library"]')
+      }
+      await waitFor(client, `!!document.querySelector('.library')`, { label: 'the library' })
+      await click(client, '.library [data-show="notes"]')
+      await waitFor(client, `!!document.querySelector('.library .card.note')`, { label: 'the notes' })
+    }
+    await openNotes()
     const notes = await script(
       client,
-      `return [...document.querySelectorAll('.sidebar section')]
-         .find((section) => section.querySelector('h3')?.textContent === 'Notes')
-         ?.querySelectorAll('.entry').length ?? 0`,
+      `return [...document.querySelectorAll('.library .card.note')].map((n) => n.dataset.note)`,
     )
-    if (notes < 2) {
+    if (notes.length < 2) {
       t.skip('needs two notes to leave one for the other')
       return
     }
-    const noteEntries = `[...document.querySelectorAll('.sidebar section')]
-      .find((section) => section.querySelector('h3')?.textContent === 'Notes')
-      .querySelectorAll('.entry')`
-    await script(client, `${noteEntries}[0].click()`)
+    const noteId = notes[0]
+    await click(client, `.library .card.note[data-note="${noteId}"] .card-open`)
     await waitFor(client, `!!document.querySelector('.cm-content')`, { label: 'the note to open' })
     await click(client, '.mode-tabs [data-mode="edit"]')
     await waitFor(client, `!document.querySelector('.editor.reading')`, { label: 'edit mode' })
     const marker = `typed-then-left-${Date.now()}`
 
     // Type, and leave at once: well inside the autosave delay.
-    const noteId = await script(
+    await script(
       client,
       `const content = document.querySelector('.cm-content')
        content.focus()
@@ -673,12 +700,12 @@ describeOrSkip('the application in Firefox', () => {
        selection.selectAllChildren(content)
        selection.collapseToEnd()
        document.execCommand('insertText', false, ' ' + arguments[0])
-       const entries = ${noteEntries}
-       const id = entries[0].querySelector('.muted')?.textContent.replace(/\.md$/, '')
-       entries[1].click()
-       return id`,
+       document.querySelector('[data-action="library"]').click()`,
       [marker],
     )
+    await openNotes()
+    await click(client, `.library .card.note[data-note="${notes[1]}"] .card-open`)
+    await waitFor(client, `!!document.querySelector('.cm-content')`, { label: 'the other note to open' })
     const saved = await waitFor(
       client,
       `(() => {

@@ -251,12 +251,13 @@ the first paper can be put in a pile. One written `group:value`
 (`field:labor`, `jmp:2026`, `author:Card`) is shown under its group, which is
 all the structure there is.
 
-- **Filter.** Every tag in use is a chip above the list of papers, with a
-  count. Click one to see only the papers carrying it; click several to narrow
-  to papers carrying all of them. *untagged* lists the papers with none.
-- **Tag one paper** with **Tag** / **Edit tags** under it, or **all the papers
-  listed** with **Tag these N…** — filter to *untagged* after a batch import,
-  and one tag gathers the batch.
+- **Filter.** Beside the library, every tag in use is a chip with a count.
+  Click one to see only the papers carrying it; click several to narrow to
+  papers carrying all of them. *untagged* lists the papers with none. A tag on
+  a paper's card does the same.
+- **Tag one paper** with **Tag** / **Edit tags** in the panel beside it when
+  it is open, or **all the papers shown** with **Tag these N…** in the library
+  — filter to *untagged* after a batch import, and one tag gathers the batch.
 - **Import into a collection.** PDFs dropped in while a tag filter is on arrive
   already carrying those tags.
 - **In chat**, type a tag in the paper picker and **Attach all** to hand the
@@ -421,6 +422,40 @@ that reason. This is access control for one person, not multi-user hosting.
 | `.research/history/` | Previous file contents, for review and undo. |
 | `.research/runs/` | Staged agent edits and run diagnostics. |
 
+## The library, and what is open
+
+The application opens on the **library**: every paper and every note as a grid
+with the width of the page, which is what a hundred papers need. Type to
+narrow it — by author, year, title, tag or file name, at once — and the text
+of the papers and notes is searched as well, a moment later, under *In the
+text*. Order the papers by when they were added, by author, by year or by
+title. **Papers** and **Notes** are two tabs; a search looks through both.
+Drop PDFs anywhere on it to import them.
+
+A click on a paper opens its summary with the PDF beside it; a click on a note
+opens the note. **Library**, in the top bar, lays the grid back over whatever
+is open — and takes it away again, with what you were reading where you left
+it.
+
+The **panel on the left** is about the one thing that is open:
+
+- **Contents** — the headings of the note or summary; a click goes to one.
+- **In the paper** — the PDF's own table of contents, where it carries one
+  (most typeset papers do); a click goes to the page.
+- For a paper: what it is called, its tags, and **Details**, **Edit tags**,
+  **Regenerate**. For a note: **Delete**.
+- **What it is tied to.** For a note, the papers it cites or names. For a
+  paper, the notes that cite or name it, the papers its summary mentions, the
+  papers whose summaries mention it, and the papers sharing its tags. Each is
+  a click away. This is read from the text of the notes and summaries each
+  time, so it is never out of date with them.
+
+Over the library, the same panel holds the tag filters. *Recent edits* is at
+the foot of it either way.
+
+The paper's own bar is one line — its name, the page, the zoom, the marks by
+where they are cited, and the way to close it — so the page gets the room.
+
 ## Reading and editing
 
 A summary or a note opens for **reading**: fully rendered, with no cursor to
@@ -434,7 +469,8 @@ by itself, with the cursor after what was inserted.
 Editing is live preview over the real Markdown: syntax is revealed around the
 cursor and hidden elsewhere, and **Source** shows the whole text raw.
 
-**Delete**, under a note in the sidebar, removes it once you confirm. The text
+**Delete** — in the panel beside an open note, or the × on its card in the
+library — removes it once you confirm. The text
 is kept aside and the deletion is listed under *Recent edits*, where **Undo**
 brings the note back — unless a note of that name has been written since,
 which is not written over. The agent and sessions elsewhere can delete a note
@@ -513,8 +549,8 @@ reading the evidence.
 
 ## Bibliography
 
-**Write .bib** in the sidebar generates `references.bib` in the project
-directory, and **Download** fetches the same file without writing it. There is
+**Write .bib** in the library generates `references.bib` in the project
+directory, and **Download .bib** fetches the same file without writing it. There is
 one entry per imported document — a `.bib` entry is a work, so the page each
 reference points at travels in the `\cite[p.~12]{key}` command the export
 returns alongside the entries, not in the entry itself.

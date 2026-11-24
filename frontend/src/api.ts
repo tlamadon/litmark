@@ -100,6 +100,19 @@ export interface NoteSummary {
   modified_at: string
 }
 
+/** The papers a note cites or names, most leaned-on first. */
+export interface RelatedToNote {
+  papers: { document_id: string; count: number }[]
+}
+
+/** What a paper is tied to: notes about it, papers around it. */
+export interface RelatedToPaper {
+  notes: { note_id: string; title: string; count: number }[]
+  mentions: { document_id: string; count: number }[]
+  mentioned_by: { document_id: string; count: number }[]
+  same_tags: { document_id: string; tags: string[] }[]
+}
+
 export interface Note extends NoteSummary {
   text: string
 }
@@ -452,6 +465,10 @@ export const api = {
       `/documents/${encodeURIComponent(id)}/summarize`,
       { method: 'POST' },
     ),
+  relatedToNote: (id: string) =>
+    request<RelatedToNote>(`/related?note_id=${encodeURIComponent(id)}`),
+  relatedToPaper: (id: string) =>
+    request<RelatedToPaper>(`/related?document_id=${encodeURIComponent(id)}`),
   setDetails: (
     id: string,
     details: { title?: string; authors?: string; year?: number },
