@@ -1,0 +1,206 @@
+# Build the container image and publish it to the GitHub Container Registry.
+#
+#   ghcr.io/tlamadon/litmark
+#
+# Releases are versioned MAJOR.MINOR.PATCH. A release is a tag, `v` + the
+# version in src/litmark/__init__.py:
+#
+#   git tag v1.2.3 && git push origin v1.2.3
+#
+# What is published, and under which tags:
+#
+#   push of tag v1.2.3   1.2.3, 1.2, 1, latest
+#   push to main         main, sha-<commit>
+#
+# So `1.2.3` never moves, `1.2` follows patches, `1` follows minor releases,
+# and `latest` is the newest release. `main` and `sha-<commit>` are unreleased
+# builds, for trying a change before it is tagged. Each moving tag goes to
+# whichever release was pushed last, so release in order. Pull requests and
+# manual runs build and test the image but publish nothing.
+#
+# Nothing is published that has not passed the tests and then been started:
+# `docker/smoke-test.sh` runs the built image and checks that it serves the
+# application, creates a project, and has git, the agent runtime and the S3
+# client on board.
+#
+# The image is built for amd64 and arm64. It authenticates to the registry
+# with the workflow's own token, so there is no secret to set up. A new
+# package starts out private: to pull it without `docker login ghcr.io`, make
+# it public once under github.com/users/tlamadon/packages -> litmark ->
+# Package settings.
+
+name: Container
+
+on:
+  push:
+    branches: [main]
+    # MAJOR.MINOR.PATCH only; anything else that starts with `v` is not a release.
+    tags: ["v[0-9]+.[0-9]+.[0-9]+"]
+  pull_request:
+  # Build and test without publishing, to prove the workflow.
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# A newer push to the same branch makes an older build pointless.
+concurrency:
+  group: container-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  IMAGE: ghcr.io/${{ github.repository }}
+
+jobs:
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      # Built before the Python tests: the server is tested serving these.
+      - name: Build the browser assets
+        run: |
+          npm --prefix frontend ci
+          npm --prefix frontend run build
+
+      - name: Test the front end
+        run: npm --prefix frontend test
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v10.4.0
+        with:
+          enable-cache: true
+
+      # The Python the image runs. The extras are what the image installs.
+      - name: Install
+        run: uv sync --all-extras --python 3.12
+
+      - name: Test the server
+        run: uv run --python 3.12 pytest -q
+
+      # The version is MAJOR.MINOR.PATCH, on every push: a version that is not
+      # could never be released.
+      - name: The package version must be MAJOR.MINOR.PATCH
+        run: |
+          version=$(uv run --python 3.12 python -c "import litmark; print(litmark.__version__)")
+          built=$(uv run --python 3.12 python -c "from importlib.metadata import version; print(version('litmark'))")
+          echo "__version__=$version  package metadata=$built"
+          if ! printf '%s' "$version" | grep -Eq '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$'; then
+            echo "::error::__version__ = $version is not MAJOR.MINOR.PATCH."
+            exit 1
+          fi
+          if [ "$built" != "$version" ]; then
+            echo "::error::The package metadata says $built but __version__ says $version."
+            exit 1
+          fi
+
+      # A version tag names a release; it must be the release the code says it is.
+      - name: Tag must match the package version
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          version=$(uv run --python 3.12 python -c "import litmark; print(litmark.__version__)")
+          echo "tag=$tag  package=$version"
+          if [ "$tag" != "$version" ]; then
+            echo "::error::Tag $GITHUB_REF_NAME does not match __version__ = $version."
+            echo "::error::Bump src/litmark/__init__.py, or retag."
+            exit 1
+          fi
+
+  image:
+    name: Build and publish
+    needs: test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v7
+
+      # arm64 is built under emulation. Only the image's last stage is: the
+      # assets and the wheel are the same for both and are built natively.
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v4
+        with:
+          platforms: arm64
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Work out the tags
+        id: meta
+        uses: docker/metadata-action@v6
+        with:
+          images: ${{ env.IMAGE }}
+          # `latest` is set below, by rule, rather than by the action's guess.
+          flavor: latest=false
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=semver,pattern={{major}}
+            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
+            type=ref,event=branch
+            type=sha,format=short,enable=${{ github.ref_type == 'branch' }}
+            type=ref,event=pr
+
+      # First for this machine only, loaded into Docker so it can be run.
+      - name: Build for testing
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          platforms: linux/amd64
+          load: true
+          tags: litmark:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Start the image and check it works
+        run: docker/smoke-test.sh litmark:ci
+
+      - name: Log in to the registry
+        if: github.event_name == 'push'
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Both architectures; amd64 comes straight from the cache of the build
+      # above. On a pull request or a manual run this still builds arm64, so a
+      # change that breaks it is caught before it is merged — but nothing is
+      # pushed.
+      - name: Build for every architecture${{ github.event_name == 'push' && ' and publish' || '' }}
+        id: build
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: ${{ github.event_name == 'push' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Say what was published
+        if: github.event_name == 'push'
+        env:
+          TAGS: ${{ steps.meta.outputs.tags }}
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          {
+            echo "### Published"
+            echo
+            echo '```'
+            echo "$TAGS"
+            echo '```'
+            echo
+            echo "Digest: \`$DIGEST\`"
+          } >> "$GITHUB_STEP_SUMMARY"

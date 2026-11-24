@@ -1,0 +1,46 @@
+# One person's Litmark, somewhere other than their laptop.
+#
+#   cp docker/compose.example.yaml compose.yaml   # then fill in .env
+#   docker compose up -d
+#
+# Secrets come from the environment (an .env file beside this one, not
+# committed). Nothing here is written into the project.
+services:
+  litmark:
+    # The newest release. Releases are MAJOR.MINOR.PATCH: pin `1.2.3` for a
+    # deployment that should not move, or `1.2` / `1` to follow patches / minor
+    # releases. `docker compose pull` moves whichever of them you track.
+    image: ghcr.io/tlamadon/litmark:latest
+    # To run your own checkout instead, replace `image:` with `build: .`
+    # (and run compose from the repository root).
+    restart: unless-stopped
+    ports:
+      # Loopback only: put a TLS-terminating proxy or a private network
+      # (Tailscale, WireGuard) in front. Do not publish this port to the world.
+      - "127.0.0.1:8765:8765"
+    environment:
+      # Text: a private git repository. Cloned on first start, then committed
+      # to and synced automatically.
+      LITMARK_GIT_REMOTE: ${LITMARK_GIT_REMOTE}
+      LITMARK_GIT_TOKEN: ${LITMARK_GIT_TOKEN}
+      # Papers: any S3-compatible bucket. Used when the project is created;
+      # after that the project file remembers it.
+      LITMARK_S3_BUCKET: ${LITMARK_S3_BUCKET}
+      LITMARK_S3_PREFIX: ${LITMARK_S3_PREFIX:-}
+      LITMARK_S3_ENDPOINT: ${LITMARK_S3_ENDPOINT:-}
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY}
+      AWS_DEFAULT_REGION: ${AWS_DEFAULT_REGION:-us-east-1}
+      # The agent. One of the two.
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      CLAUDE_CODE_OAUTH_TOKEN: ${CLAUDE_CODE_OAUTH_TOKEN:-}
+      # Asked for by the browser before anything is served.
+      LITMARK_PASSWORD: ${LITMARK_PASSWORD}
+    volumes:
+      # Optional. Without it everything is fetched again on each start.
+      - litmark-data:/data
+    # Name the host the browser will use, so other Host headers are refused:
+    # command: ["--allow-host", "papers.example.com"]
+
+volumes:
+  litmark-data:

@@ -1,0 +1,12 @@
+.git
+.venv
+**/node_modules
+**/__pycache__
+frontend/dist
+frontend/test/bundle
+src/litmark/static
+my-research
+dist
+build
+.pytest_cache
+*.sqlite*
