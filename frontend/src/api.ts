@@ -42,6 +42,16 @@ export function refreshSessionToken(): Promise<boolean> {
   return refreshing
 }
 
+let leaving = false
+
+/** Leave for the sign-in page, once, remembering where to come back to. */
+export function goToSignIn(): void {
+  if (leaving) return
+  leaving = true
+  const here = window.location.pathname + window.location.search
+  window.location.assign(here === '/' ? '/login' : `/login?next=${encodeURIComponent(here)}`)
+}
+
 export interface ApiErrorBody {
   code: string
   message: string
@@ -86,6 +96,9 @@ async function request<T>(path: string, init: RequestInit = {}, retried = false)
     if (response.status === 401 && body.code === 'unauthorized' && !retried) {
       if (await refreshSessionToken()) return request<T>(path, init, true)
     }
+    // No longer signed in — the session lapsed, or was ended elsewhere: to the
+    // form, and back to this place afterwards.
+    if (response.status === 401 && body.code === 'login_required') goToSignIn()
     throw new ApiError(response.status, body)
   }
   return payload as T
@@ -176,6 +189,8 @@ export interface ProjectState {
   notes: NoteSummary[]
   conversations: ConversationSummary[]
   latest_seq: number
+  /** Whether the server asks for a password, and so has a session to end. */
+  auth?: { password: boolean }
 }
 
 export interface PageRecord {
@@ -465,6 +480,14 @@ export const api = {
       `/documents/${encodeURIComponent(id)}/summarize`,
       { method: 'POST' },
     ),
+  /** End the session in this browser, and go back to the sign-in page. */
+  signOut: async (): Promise<void> => {
+    try {
+      await fetch('/logout', { method: 'POST', redirect: 'manual' })
+    } finally {
+      window.location.assign('/login')
+    }
+  },
   relatedToNote: (id: string) =>
     request<RelatedToNote>(`/related?note_id=${encodeURIComponent(id)}`),
   relatedToPaper: (id: string) =>

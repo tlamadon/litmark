@@ -262,6 +262,9 @@ test('the built application bundle runs and renders without throwing', async (t)
   assert.ok(syncButton, 'no sync indicator')
   assert.ok((syncButton.textContent ?? '').includes('2 to save'), syncButton.textContent)
 
+  // No password is asked for here, so there is no session to offer to end.
+  assert.equal(root.querySelector('[data-action="sign-out"]'), null)
+
   const header = root.querySelector('.conv-button')?.textContent ?? ''
   assert.ok(header.includes('What does the paper assume?'), `conversation not named: ${header}`)
 })
@@ -332,7 +335,7 @@ test('the library, what is open, and the panel about it', async (t) => {
     '',
   ].join('\n')
   const routes = new Map(ROUTES)
-  routes.set('/api/state', state)
+  routes.set('/api/state', { ...state, auth: { password: true } })
   routes.set('/api/notes/welcome', { ...ROUTES.get('/api/notes/welcome'), text })
   routes.set('/api/related?note', { papers: [{ document_id: 'doc-002', count: 2 }] })
   routes.set('/api/related?paper', {
@@ -370,6 +373,9 @@ test('the library, what is open, and the panel about it', async (t) => {
           [...section.querySelectorAll('li')].map((item) => item.textContent),
         ]),
     )
+
+  // Behind a password, the way to end the session is in the top bar.
+  assert.equal(root.querySelector('.topbar [data-action="sign-out"]')?.textContent, 'Sign out')
 
   // ---- the library: a paper is named as it is cited, with its title beneath.
   // Most recently added first, which for papers added together is as they came.

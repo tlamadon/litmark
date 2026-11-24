@@ -395,15 +395,27 @@ is the same thing as a Compose file.
 | `LITMARK_S3_BUCKET`, `_PREFIX`, `_ENDPOINT`, `_REGION` | Where papers go, when the project is first created. |
 | `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` | Credentials for the bucket. |
 | `ANTHROPIC_API_KEY` or `CLAUDE_CODE_OAUTH_TOKEN` | The agent's credential. The second is what `claude setup-token` issues, for using a subscription where no browser sign-in is possible. |
-| `LITMARK_PASSWORD` | Asked for by the browser before anything is served. |
+| `LITMARK_PASSWORD` | Asked for, at a sign-in page, before anything is served. |
 | `LITMARK_MCP_TOKEN` | Opens `/mcp` to other sessions holding this token. Unset, it is not served. See [A memory for other sessions](#a-memory-for-other-sessions-mcp). |
 
 **Set a password, and put TLS in front.** Without `LITMARK_PASSWORD`, anyone
 who can reach the port can read the project and run the agent on your account.
-The password is HTTP Basic, so it protects nothing in transit by itself: serve
-it through a TLS-terminating proxy, or keep it on a private network
-(Tailscale, WireGuard). The example publishes the port on loopback only for
-that reason. This is access control for one person, not multi-user hosting.
+The password protects nothing in transit by itself: serve it through a
+TLS-terminating proxy, or keep it on a private network (Tailscale, WireGuard).
+The example publishes the port on loopback only for that reason. This is
+access control for one person, not multi-user hosting.
+
+**Signing in is a page with a form**, not the browser's own dialog, so a
+password manager can fill it and offer to remember it: the field is marked as
+the current password, and filed under the name `litmark`. A browser opening
+any address is sent to `/login` and brought back to where it was going. Being
+signed in is a cookie good for thirty days — out of reach of scripts, kept to
+TLS where the page came over it — and it survives the server restarting, so a
+redeploy does not sign you out; changing the password ends every session.
+**Sign out**, in the top bar, ends it in that browser. A handful of wrong
+passwords in a few minutes and the form stops answering for a while.
+
+A script can still send the password as HTTP Basic (`curl -u any:$PASSWORD`).
 
 ## Project layout
 

@@ -134,7 +134,10 @@ def build_router() -> APIRouter:
 
     @router.get("/state")
     async def state(request: Request) -> dict[str, Any]:
-        return services_of(request).project_state()
+        payload = services_of(request).project_state()
+        # Whether there is a session to sign out of.
+        payload["auth"] = {"password": bool(getattr(request.app.state, "password_enabled", False))}
+        return payload
 
     @router.get("/doctor")
     async def doctor(request: Request) -> dict[str, Any]:

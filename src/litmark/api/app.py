@@ -22,13 +22,14 @@ from importlib import resources
 from pathlib import Path
 
 from fastapi import FastAPI, Request
-from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse
+from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
 from .. import __version__
 from ..errors import InvalidInput, WorkspaceError
 from ..mcpserver import MCP_PATH, TOKEN_ENV, UPLOAD_PATH, UploadTickets
 from ..services import Services
+from . import login
 from .routes import build_router
 
 log = logging.getLogger(__name__)
@@ -61,10 +62,12 @@ def create_app(
 ) -> FastAPI:
     """Build the application.
 
-    ``password``, when set, is asked for by the browser before anything is
-    served — the page included, since the page carries the session credential.
-    It is for a server reachable by more than its owner (a container on a
-    host); it protects nothing in transit, so it belongs behind TLS.
+    ``password``, when set, is asked for before anything is served — the page
+    included, since the page carries the session credential. A browser is sent
+    to a sign-in page and remembered by a cookie (see :mod:`login`); a script
+    may send it as HTTP Basic instead. It is for a server reachable by more
+    than its owner (a container on a host); it protects nothing in transit, so
+    it belongs behind TLS.
 
     ``mcp_token``, when set, opens the project to sessions elsewhere: the MCP
     endpoint at ``/mcp``, which asks for that token as a bearer credential, and
@@ -86,6 +89,7 @@ def create_app(
     )
     app.state.services = services
     app.state.dev_origin = dev_origin
+    app.state.password_enabled = bool(password)
     tickets = UploadTickets()
     mcp_endpoint: object | None = None
     mcp_sessions: object | None = None
@@ -167,11 +171,29 @@ def create_app(
                     headers={"www-authenticate": 'Bearer realm="Litmark MCP"'},
                 )
         # An upload address is its own credential, checked where it is used.
-        if password and not outside and not _password_given(request, password):
-            return PlainTextResponse(
-                "This Litmark server asks for a password.\n",
+        # The sign-in page is where the password is given, so it is not asked
+        # for the password itself.
+        signing_in = path in (login.LOGIN_PATH, login.LOGOUT_PATH)
+        if password and not outside and not signing_in and not _signed_in(request, password):
+            if _is_navigation(request, path):
+                # Someone opening the application: to the form, and back after.
+                return RedirectResponse(
+                    login.login_address(path, request.url.query), status_code=303
+                )
+            # No `WWW-Authenticate: Basic` here: on a request made by the page
+            # it would bring up the browser's own dialog, which is what the
+            # sign-in page is there to replace. The page goes to the form.
+            return JSONResponse(
+                {
+                    "error": {
+                        "code": "login_required",
+                        "message": (
+                            "This Litmark server asks for a password. Sign in at "
+                            f"{login.LOGIN_PATH}, or send it as HTTP Basic."
+                        ),
+                    }
+                },
                 status_code=401,
-                headers={"www-authenticate": 'Basic realm="Litmark", charset="UTF-8"'},
             )
         origin = request.headers.get("origin")
         if origin and not _origin_allowed(origin, dev_origin, effective_hosts):
@@ -220,6 +242,9 @@ def create_app(
         async def upload_paper(request: Request, ticket_id: str, wait: float = 60.0) -> JSONResponse:
             return await _receive_paper(request, services, tickets, ticket_id, wait)
 
+    if password:
+        _add_sign_in(app, password)
+
     assets = static_root()
     if assets is not None:
         app.mount("/assets", StaticFiles(directory=str(assets / "assets")), name="assets")
@@ -249,6 +274,89 @@ def create_app(
             )
 
     return app
+
+
+def _add_sign_in(app: FastAPI, password: str) -> None:
+    """The sign-in page, what it posts to, and signing out."""
+    attempts = login.Attempts()
+
+    def page(next_path: str, problem: str | None = None, status_code: int = 200) -> HTMLResponse:
+        return HTMLResponse(
+            login.login_page(next_path=next_path, problem=problem),
+            status_code=status_code,
+            headers={
+                "cache-control": "no-store",
+                "x-frame-options": "DENY",
+                "referrer-policy": "same-origin",
+            },
+        )
+
+    @app.get(login.LOGIN_PATH, response_model=None)
+    async def sign_in_page(request: Request, next: str = "/") -> HTMLResponse | RedirectResponse:  # noqa: A002
+        wanted = login.safe_next(next)
+        if _signed_in(request, password):
+            return RedirectResponse(wanted, status_code=303)
+        return page(wanted)
+
+    @app.post(login.LOGIN_PATH, response_model=None)
+    async def sign_in(request: Request) -> HTMLResponse | RedirectResponse:
+        import asyncio
+
+        form = await request.form()
+        supplied = form.get("password")
+        wanted = login.safe_next(str(form.get("next") or "/"))
+        if attempts.blocked():
+            return page(
+                wanted,
+                "Too many wrong passwords. Wait a few minutes, then try again.",
+                status_code=429,
+            )
+        if not isinstance(supplied, str) or not login.password_matches(supplied, password):
+            attempts.failed()
+            # A guess costs a little time, whoever is making it.
+            await asyncio.sleep(login.FAILURE_DELAY_SECONDS)
+            return page(wanted, "That is not the password.", status_code=401)
+        attempts.succeeded()
+        response = RedirectResponse(wanted, status_code=303)
+        response.set_cookie(
+            login.COOKIE,
+            login.issue_session(password),
+            max_age=login.SESSION_SECONDS,
+            path="/",
+            httponly=True,
+            samesite="lax",
+            # Kept to TLS where the page itself came over it, directly or
+            # through a proxy that says so.
+            secure=_over_tls(request),
+        )
+        return response
+
+    @app.post(login.LOGOUT_PATH)
+    async def sign_out() -> RedirectResponse:
+        response = RedirectResponse(login.LOGIN_PATH, status_code=303)
+        response.delete_cookie(login.COOKIE, path="/")
+        return response
+
+
+def _signed_in(request: Request, password: str) -> bool:
+    """Signed in at the form, or carrying the password as a script would."""
+    return login.session_is_good(
+        request.cookies.get(login.COOKIE), password
+    ) or _password_given(request, password)
+
+
+def _is_navigation(request: Request, path: str) -> bool:
+    """Someone opening a page, as against the page or a script asking for data."""
+    return (
+        request.method == "GET"
+        and "text/html" in (request.headers.get("accept") or "")
+        and not path.startswith(("/api/", "/assets/"))
+    )
+
+
+def _over_tls(request: Request) -> bool:
+    forwarded = (request.headers.get("x-forwarded-proto") or "").split(",")[0].strip().lower()
+    return request.url.scheme == "https" or forwarded == "https"
 
 
 async def _receive_paper(

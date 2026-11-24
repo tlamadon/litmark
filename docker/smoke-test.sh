@@ -39,6 +39,16 @@ echo "ok: the server answers"
 [ "$(curl -s -o /dev/null -w '%{http_code}' "$URL/")" = 401 ] || fail "the page was served without the password"
 echo "ok: nothing is served without the password"
 
+# A browser is sent to the sign-in page, and the form's cookie lets it in.
+[ "$(curl -s -o /dev/null -w '%{http_code}' -H 'Accept: text/html' "$URL/")" = 303 ] || fail "a browser was not sent to sign in"
+curl -s "$URL/login" | grep -q 'autocomplete="current-password"' || fail "the sign-in page has no password field"
+jar=$(mktemp)
+[ "$(curl -s -o /dev/null -w '%{http_code}' -c "$jar" -d 'password=wrong' "$URL/login")" = 401 ] || fail "a wrong password was not refused"
+[ "$(curl -s -o /dev/null -w '%{http_code}' -c "$jar" -d 'password=smoke' "$URL/login")" = 303 ] || fail "the right password was not accepted"
+[ "$(curl -s -o /dev/null -w '%{http_code}' -b "$jar" "$URL/")" = 200 ] || fail "the page was not served to a signed-in browser"
+rm -f "$jar"
+echo "ok: signing in at the form works"
+
 # The page is the application, and its script is in the image.
 page=$(curl -s -u me:smoke "$URL/")
 token=$(printf '%s' "$page" | sed -n 's/.*name="litmark-token" content="\([^"]*\)".*/\1/p')

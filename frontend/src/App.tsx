@@ -983,6 +983,17 @@ export function App() {
         >
           Chat
         </button>
+        {state.auth?.password && (
+          <button
+            type="button"
+            class="ghost sign-out"
+            data-action="sign-out"
+            title="End this session; the password is asked for again"
+            onClick={() => void api.signOut()}
+          >
+            Sign out
+          </button>
+        )}
       </header>
 
       {insertNotice !== null && (

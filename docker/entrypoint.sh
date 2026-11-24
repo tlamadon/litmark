@@ -8,7 +8,7 @@
 #   LITMARK_S3_PREFIX, LITMARK_S3_ENDPOINT, LITMARK_S3_REGION
 #   AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY   credentials for that bucket
 #   ANTHROPIC_API_KEY or CLAUDE_CODE_OAUTH_TOKEN   the agent's credential
-#   LITMARK_PASSWORD      asked for by the browser; set it on any shared network
+#   LITMARK_PASSWORD      asked for at a sign-in page; set it on any shared network
 #
 # Arguments are passed on to `litmark serve`, e.g. `--allow-host papers.example`.
 set -eu

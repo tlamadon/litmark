@@ -161,6 +161,11 @@ select {
   margin: 0;
 }
 
+.topbar .sign-out {
+  font-size: 0.86rem;
+  color: var(--muted-strong);
+}
+
 .topbar .path {
   overflow: hidden;
   text-overflow: ellipsis;

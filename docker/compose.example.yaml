@@ -34,7 +34,7 @@ services:
       # The agent. One of the two.
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       CLAUDE_CODE_OAUTH_TOKEN: ${CLAUDE_CODE_OAUTH_TOKEN:-}
-      # Asked for by the browser before anything is served.
+      # Asked for, at a sign-in page, before anything is served.
       LITMARK_PASSWORD: ${LITMARK_PASSWORD}
       # Optional. Lets other Claude sessions use the project as a memory, over
       # MCP at /mcp, with this token as a bearer credential. Long and random.
