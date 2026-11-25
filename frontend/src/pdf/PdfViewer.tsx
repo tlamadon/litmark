@@ -86,6 +86,8 @@ export interface PdfViewerProps {
   onClose?: () => void
   /** The paper's own table of contents, when its PDF carries one. */
   onOutline?: (items: PdfOutlineItem[]) => void
+  /** The page most in view, as it changes: where the reader is in the paper. */
+  onPage?: (page: number) => void
 }
 
 /** One entry of a PDF's bookmarks: a section, and the page it starts on. */
@@ -176,8 +178,16 @@ export function PdfViewer(props: PdfViewerProps) {
     if (best) {
       setCurrentPage(best)
       setPageInput(String(best))
+      if (best !== reportedPage.current) {
+        reportedPage.current = best
+        reportPage.current?.(best)
+      }
     }
   }, [])
+
+  const reportPage = useRef(props.onPage)
+  reportPage.current = props.onPage
+  const reportedPage = useRef(0)
 
   /**
    * Decide which pages are drawn, from where they are now.

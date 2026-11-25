@@ -29,6 +29,11 @@ CREATE TABLE IF NOT EXISTS conversations (
     -- work (automatic summaries) so it never clutters the list of chats.
     kind               TEXT NOT NULL DEFAULT 'chat',
     backend_session_id TEXT,
+    -- What was on screen with it — the note or paper open, the page, what was
+    -- attached — so coming back to a conversation is coming back to the work.
+    view_json          TEXT,
+    -- Put away: out of the row of sessions, though nothing of it is gone.
+    closed_at          TEXT,
     created_at         TEXT NOT NULL,
     updated_at         TEXT NOT NULL
 );
@@ -109,6 +114,8 @@ ADDED_COLUMNS = (
     ("conversations", "kind", "TEXT NOT NULL DEFAULT 'chat'"),
     ("runs", "label", "TEXT"),
     ("runs", "usage_json", "TEXT"),
+    ("conversations", "view_json", "TEXT"),
+    ("conversations", "closed_at", "TEXT"),
 )
 
 

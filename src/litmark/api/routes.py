@@ -21,6 +21,7 @@ from ..documents import QUEUED, normalize_tags
 from ..errors import InvalidInput, NotFound, RevisionConflict
 from ..events import format_sse
 from ..related import related_to_document, related_to_note
+from ..skills import read_skill, write_skill
 from ..references import (
     PAGE_ONLY,
     RESOLVED,
@@ -66,8 +67,16 @@ class ConversationCreate(BaseModel):
     title: str | None = Field(default=None, max_length=200)
 
 
-class ConversationRename(BaseModel):
-    title: str = Field(max_length=200)
+class ConversationChange(BaseModel):
+    """A new name, or put away / brought back; what is left out stays."""
+
+    title: str | None = Field(default=None, max_length=200)
+    closed: bool | None = None
+
+
+class ViewSave(BaseModel):
+    # What was on screen with the conversation; the window's own business.
+    view: dict[str, Any]
 
 
 class ManualReference(BaseModel):
@@ -291,6 +300,22 @@ def build_router() -> APIRouter:
         document = services.documents.set_tags(document_id, body.tags)
         services.announce_documents([document_id])
         return document.api_json(summary_text=services.documents.summary_text(document_id))
+
+    # ---------------------------------------------------------------- skill
+
+    @router.get("/skills/summary")
+    async def get_skill(request: Request) -> dict[str, Any]:
+        """How this reader wants papers summarized."""
+        return read_skill(services_of(request).workspace)
+
+    @router.put("/skills/summary")
+    async def save_skill(request: Request, body: SummarySave) -> dict[str, Any]:
+        """The reader's own hand on it: saved like a note, and on the same record."""
+        services = services_of(request)
+        services.tools.save_skill(
+            body.text, expected_revision=body.expected_revision, origin=USER
+        )
+        return read_skill(services.workspace)
 
     @router.put("/documents/{document_id}/details")
     async def set_details(
@@ -621,10 +646,24 @@ def build_router() -> APIRouter:
         return services_of(request).runner.conversation(conversation_id)
 
     @router.patch("/conversations/{conversation_id}")
-    async def rename_conversation(
-        request: Request, conversation_id: str, body: ConversationRename
+    async def change_conversation(
+        request: Request, conversation_id: str, body: ConversationChange
     ) -> dict[str, Any]:
-        return services_of(request).runner.rename_conversation(conversation_id, body.title)
+        runner = services_of(request).runner
+        if body.title is None and body.closed is None:
+            raise InvalidInput("Give a title, or say whether the session is closed.")
+        changed: dict[str, Any] = {}
+        if body.title is not None:
+            changed = runner.rename_conversation(conversation_id, body.title)
+        if body.closed is not None:
+            changed = runner.set_closed(conversation_id, body.closed)
+        return changed
+
+    @router.put("/conversations/{conversation_id}/view", status_code=204)
+    async def save_view(request: Request, conversation_id: str, body: ViewSave) -> Response:
+        """Remember what was on screen with a conversation, to come back to."""
+        services_of(request).runner.save_view(conversation_id, body.view)
+        return Response(status_code=204)
 
     @router.delete("/conversations/{conversation_id}")
     async def delete_conversation(request: Request, conversation_id: str) -> dict[str, Any]:
@@ -712,7 +751,11 @@ def build_router() -> APIRouter:
 
         previous_text = snapshot.read_text("utf-8")
         expected = body.expected_revision or row["new_revision"]
-        if row["target_kind"] == "note":
+        if row["target_kind"] == "skill":
+            new_revision, _ = write_skill(
+                services.workspace, previous_text, expected_revision=expected, name=row["target_id"]
+            )
+        elif row["target_kind"] == "note":
             note = services.workspace.write_note(
                 row["target_id"],
                 previous_text,

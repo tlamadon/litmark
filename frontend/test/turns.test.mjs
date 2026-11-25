@@ -10,7 +10,13 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 
-import { describeOrigin, describeTool, pageRange, transcriptOf } from './bundle/chat/describe.mjs'
+import {
+  describeChange,
+  describeOrigin,
+  describeTool,
+  pageRange,
+  transcriptOf,
+} from './bundle/chat/describe.mjs'
 import { applyEvent, foldEvent, latestSeq, turnFromRecord } from './bundle/chat/turns.mjs'
 
 const NAMES = {
@@ -324,6 +330,44 @@ test('recalling and adding to a note read as what they are', () => {
     NAMES,
   )
   assert.equal(made.verb, 'created')
+})
+
+test('what was learned about summarizing is said as that, and opens the skill', () => {
+  const tool = (name, input, result = {}, isError = false) => ({
+    kind: 'tool', id: 'x', tool: name, input, result, finished: true, isError,
+  })
+  const read = describeTool(tool('read_skill', {}, { text: '…' }), NAMES)
+  assert.deepEqual([read.verb, read.target], ['read', 'how you want papers summarized'])
+  assert.deepEqual(read.open, { kind: 'skill' })
+
+  const learned = describeTool(
+    tool('write_skill', { text: '…', learned: 'Summaries lead with the identification strategy.' }, { ok: true }),
+    NAMES,
+  )
+  assert.deepEqual(
+    [learned.verb, learned.tone, learned.target],
+    ['learned', 'ok', 'Summaries lead with the identification strategy.'],
+  )
+  assert.deepEqual(learned.open, { kind: 'skill' })
+  const refused = describeTool(
+    tool('write_skill', { text: '…', learned: 'x' }, { ok: false, message: 'Read it again.' }, true),
+    NAMES,
+  )
+  assert.deepEqual([refused.verb, refused.detail], ['learned — refused', 'Read it again.'])
+
+  // The change it made is listed under the turn as what it is, not as a note.
+  const turn = foldEvent(
+    turnFromRecord({ run_id: 'run-9', status: 'running', kind: 'chat', events: [] }),
+    { seq: 1, type: 'file_changed', run_id: 'run-9', change_id: 'chg-9', target_kind: 'skill', target_id: 'summary', summary: 'Learned: shorter.' },
+  )
+  const change = turn.entries.find((entry) => entry.kind === 'change')
+  assert.equal(change.targetKind, 'skill')
+  const described = describeChange(change, NAMES)
+  assert.deepEqual(
+    [described.verb, described.target, described.detail],
+    ['learned', 'how you want papers summarized', 'Learned: shorter.'],
+  )
+  assert.deepEqual(described.open, { kind: 'skill' })
 })
 
 test('an edit says who made it, and whether that was from outside', () => {

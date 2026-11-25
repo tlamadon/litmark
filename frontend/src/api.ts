@@ -113,6 +113,15 @@ export interface NoteSummary {
   modified_at: string
 }
 
+/** The summarizing skill: how this reader wants papers summarized. */
+export interface Skill {
+  name: string
+  text: string
+  revision: string
+  /** False while it is still what every project starts with. */
+  customised: boolean
+}
+
 /** The papers a note cites or names, most leaned-on first. */
 export interface RelatedToNote {
   papers: { document_id: string; count: number }[]
@@ -288,6 +297,12 @@ export interface ConversationSummary {
   status: 'running' | 'queued' | 'idle'
   last_run_status: RunStatus | null
   resumable: boolean
+  /** Not yet named for anything asked in it. */
+  untitled?: boolean
+  /** What was on screen with it, as a window last left it; read with `readView`. */
+  view?: unknown
+  /** Put away: out of the row of sessions, with nothing of it gone. */
+  closed?: boolean
 }
 
 export interface RunUsage {
@@ -488,6 +503,12 @@ export const api = {
       window.location.assign('/login')
     }
   },
+  skill: () => request<Skill>('/skills/summary'),
+  saveSkill: (text: string, expected_revision: string | null) =>
+    request<Skill>('/skills/summary', {
+      method: 'PUT',
+      body: JSON.stringify({ text, expected_revision }),
+    }),
   relatedToNote: (id: string) =>
     request<RelatedToNote>(`/related?note_id=${encodeURIComponent(id)}`),
   relatedToPaper: (id: string) =>
@@ -553,6 +574,18 @@ export const api = {
     request<ConversationSummary>(`/conversations/${encodeURIComponent(id)}`, {
       method: 'PATCH',
       body: JSON.stringify({ title }),
+    }),
+  /** Remember what is on screen with a session. Sent even as the page is left. */
+  saveView: (id: string, view: unknown) =>
+    request<void>(`/conversations/${encodeURIComponent(id)}/view`, {
+      method: 'PUT',
+      body: JSON.stringify({ view }),
+      keepalive: true,
+    }),
+  setClosed: (id: string, closed: boolean) =>
+    request<ConversationSummary>(`/conversations/${encodeURIComponent(id)}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ closed }),
     }),
   deleteConversation: (id: string) =>
     request<{ conversation_id: string; deleted: boolean }>(

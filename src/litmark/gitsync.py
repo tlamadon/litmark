@@ -553,6 +553,8 @@ def _thing(path: str) -> tuple[str, str] | None:
         if parts[2] in {"metadata.json", "original.pdf"}:
             return "paper", parts[1]
         return None
+    if parts[0] == "skills" and path.endswith(".md"):
+        return "skill", parts[-1][: -len(".md")]
     if path == "references.json":
         return "references", "references"
     if path == "references.bib":
@@ -586,6 +588,7 @@ def describe_changes(changed: list[tuple[str, str]]) -> str:
     verbs = {"added": "Add", "edited": "Update", "deleted": "Remove"}
     plural = {
         "note": "notes", "summary": "summaries", "paper": "papers", "file": "files",
+        "skill": "skills",
         "references": "references", "bibliography": "bibliography", "settings": "settings",
     }
     phrases: list[str] = []

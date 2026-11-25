@@ -31,7 +31,7 @@ export interface ToolEntry {
 export interface ChangeEntry {
   kind: 'change'
   changeId: string
-  targetKind: 'note' | 'summary'
+  targetKind: 'note' | 'summary' | 'skill'
   targetId: string
   summary: string
 }
@@ -206,7 +206,12 @@ export function foldEvent(turn: Turn, event: RunEvent): Turn {
       const entry: ChangeEntry = {
         kind: 'change',
         changeId: String(event.change_id ?? ''),
-        targetKind: event.target_kind === 'summary' ? 'summary' : 'note',
+        targetKind:
+          event.target_kind === 'summary'
+            ? 'summary'
+            : event.target_kind === 'skill'
+              ? 'skill'
+              : 'note',
         targetId: String(event.target_id ?? ''),
         summary: String(event.summary ?? ''),
       }

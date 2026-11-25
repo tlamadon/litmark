@@ -42,20 +42,36 @@ describeOrSkip('the application in Firefox', () => {
     await firefox?.close()
   })
 
+  /**
+   * The library, laid over whatever is open. A session comes back with what
+   * was on screen in it, so the library is not always what is shown first.
+   */
+  const showLibrary = async () => {
+    if (!(await script(client, `return !!document.querySelector('.library')`))) {
+      await click(client, '[data-action="library"]')
+    }
+    await waitFor(client, `!!document.querySelector('.library')`, { label: 'the library' })
+  }
+
   test('renders the project shell', async () => {
     const project = await script(client, `return document.querySelector('.topbar h1')?.textContent`)
     assert.ok(project, 'the project name is missing')
 
-    // Nothing is open at first: what is shown is the library, as a grid.
+    // The session on screen is a tab, and has an address of its own.
+    const session = await script(
+      client,
+      `const tab = document.querySelector('.topbar .sessions .session.on')
+       return tab && { id: tab.dataset.session, path: window.location.pathname }`,
+    )
+    assert.ok(session, 'no session is shown as the one on screen')
+    assert.equal(session.path, `/s/${session.id}`)
+
+    await showLibrary()
     const cards = await script(
       client,
       `return [...document.querySelectorAll('.library .card strong')].map((n) => n.textContent)`,
     )
     assert.ok(cards.length > 0, 'the library listed nothing')
-    assert.ok(
-      !(await script(client, `return !!document.querySelector('.cm-content')`)),
-      'something was opened unasked',
-    )
   })
 
   test('the event stream connects, so live updates work', async () => {
@@ -67,6 +83,7 @@ describeOrSkip('the application in Firefox', () => {
   })
 
   test('a note opens for reading, and a click does not start an edit', async () => {
+    await showLibrary()
     await click(client, '.library [data-show="notes"]')
     await waitFor(client, `!!document.querySelector('.library .card.note')`, { label: 'the notes' })
     await click(client, '.library .card.note .card-open')
@@ -524,8 +541,7 @@ describeOrSkip('the application in Firefox', () => {
 
   test('A13: the library writes a bibliography and reports what it found', async () => {
     // Over to the library, which is laid over what is open, and back afterwards.
-    await click(client, '[data-action="library"]')
-    await waitFor(client, `!!document.querySelector('.library')`, { label: 'the library' })
+    await showLibrary()
     await click(client, '.library [data-show="papers"]')
     const actions = await script(
       client,
@@ -711,12 +727,56 @@ describeOrSkip('the application in Firefox', () => {
     )
   })
 
+  test('a session comes back with what was on screen in it', async () => {
+    // Whatever is open now belongs to the session on screen. Note it, start
+    // another, and come back.
+    const seen = `(() => ({
+      path: window.location.pathname,
+      title: document.querySelector('.editor-title')?.textContent ?? null,
+      paper: document.querySelector('.pdf-title')?.textContent ?? null,
+      library: !!document.querySelector('.library'),
+    }))()`
+    const first = await script(client, `return ${seen}`)
+    assert.ok(first.title || first.paper, `nothing is open to come back to: ${JSON.stringify(first)}`)
+
+    await click(client, '[data-action="new-session"]')
+    const second = await waitFor(
+      client,
+      `(() => { const now = ${seen}; return now.path !== ${JSON.stringify(first.path)} ? now : null })()`,
+      { label: 'a new session, at an address of its own' },
+    )
+    // Its own conversation, and nothing open: the library.
+    assert.deepEqual([second.title, second.paper, second.library], [null, null, true])
+    assert.equal(
+      await script(client, `return document.querySelectorAll('.topbar .sessions .session').length >= 2`),
+      true,
+    )
+
+    // Back by its tab: the note, and the paper beside it, as they were.
+    await click(client, `.session a[href="${first.path}"]`)
+    const back = await waitFor(
+      client,
+      // The note is read from the server again, so it is a moment behind the paper.
+      `(() => { const now = ${seen}; return JSON.stringify(now) === ${JSON.stringify(JSON.stringify(first))} ? now : null })()`,
+      { label: `the first session to come back as it was: ${JSON.stringify(first)}` },
+    )
+    assert.deepEqual(back, first)
+
+    // And by a reload at its address, as in a window of its own: the server
+    // was told what was on screen.
+    await script(client, `return new Promise((resolve) => setTimeout(resolve, 1200))`)
+    await navigate(client, new URL(first.path, BASE_URL).href)
+    const reloaded = await waitFor(
+      client,
+      `(() => { const now = ${seen}; return JSON.stringify(now) === ${JSON.stringify(JSON.stringify(first))} ? now : null })()`,
+      { timeoutMs: 30000, label: `the session to be restored after a reload: ${JSON.stringify(first)}` },
+    )
+    assert.deepEqual(reloaded, first)
+  })
+
   test('what was typed just before leaving a note is saved', async (t) => {
     const openNotes = async () => {
-      if (!(await script(client, `return !!document.querySelector('.library')`))) {
-        await click(client, '[data-action="library"]')
-      }
-      await waitFor(client, `!!document.querySelector('.library')`, { label: 'the library' })
+      await showLibrary()
       await click(client, '.library [data-show="notes"]')
       await waitFor(client, `!!document.querySelector('.library .card.note')`, { label: 'the notes' })
     }

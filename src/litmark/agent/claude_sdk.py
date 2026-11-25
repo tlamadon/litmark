@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import Any
 
 from .. import __version__
+from ..events import NOTICE
 from .base import (
     DONE,
     ERROR,
@@ -63,6 +64,21 @@ DISALLOWED_TOOLS = [
     "SlashCommand",
 ]
 
+
+# The runtime ends a reply this way when the model's tool call arrives in a form
+# it cannot read, after asking twice more by itself. It is the model slipping,
+# not anything in the request, and the session is intact: everything read so
+# far is still in it. So the reply is asked for again, in that session, rather
+# than lost — a summary that had read a whole paper would otherwise fail on its
+# last step. The wording is the runtime's; it is the only sign it gives.
+UNREAD_TOOL_CALL = "tool call could not be parsed"
+UNREAD_TOOL_CALL_RETRIES = 2
+ASK_AGAIN = (
+    "Your last tool call did not arrive in a form that could be read, so it was not "
+    "run and nothing was changed. Carry on from where you were and make the call "
+    "again. If it was a long piece of writing, keep the call's arguments plain and "
+    "write it in shorter parts."
+)
 
 # Any of these in the environment is a credential the runtime will use. The
 # last is what `claude setup-token` issues: the way to use a subscription
@@ -218,20 +234,47 @@ class ClaudeAgentBackend(AgentBackend):
         session_id: str | None = request.backend_session_id
         # What the translator learns along the way: which tool each result
         # answers, and the backend's own account of the run.
-        state: dict[str, Any] = {"tools": {}, "usage": None}
+        state: dict[str, Any] = {"tools": {}, "usage": None, "unread_call": False}
+        retries_left = UNREAD_TOOL_CALL_RETRIES
         client = ClaudeSDKClient(options=options)
         self._clients[request.run_id] = client
         try:
             await client.connect()
             await client.query(self._compose_prompt(request))
-            async for message in client.receive_response():
-                found = _session_id_of(message)
-                if found:
-                    session_id = found
-                for event in self._translate(message, state):
-                    yield event
-                for change in self._tools.drain_changes(request.run_id):
-                    yield AgentEvent(FILE_CHANGED, change)
+            while True:
+                ask_again = False
+                async for message in client.receive_response():
+                    found = _session_id_of(message)
+                    if found:
+                        session_id = found
+                    if (
+                        type(message).__name__ == "ResultMessage"
+                        and _is_unread_tool_call(message, state)
+                        and retries_left > 0
+                        and request.run_id not in self._cancelled
+                    ):
+                        # Not the end of the run: keep the account of what this
+                        # attempt took, and say nothing of an error yet.
+                        state["usage"] = _usage_of(message, state["usage"])
+                        ask_again = True
+                    else:
+                        for event in self._translate(message, state):
+                            yield event
+                    for change in self._tools.drain_changes(request.run_id):
+                        yield AgentEvent(FILE_CHANGED, change)
+                if not ask_again:
+                    break
+                retries_left -= 1
+                state["unread_call"] = False
+                log.warning("Run %s: the model's tool call could not be read; asking again", request.run_id)
+                yield AgentEvent(
+                    NOTICE,
+                    {
+                        "message": "The agent's last step did not come through, so it was asked again.",
+                        "kind": "tool_call_retried",
+                    },
+                )
+                await client.query(ASK_AGAIN)
         except asyncio.CancelledError:
             await self._safe_interrupt(request.run_id)
             for change in self._tools.drain_changes(request.run_id):
@@ -316,6 +359,7 @@ class ClaudeAgentBackend(AgentBackend):
     ) -> list[AgentEvent]:
         """Map SDK messages onto the normalized event vocabulary."""
         state = state if state is not None else {"tools": {}, "usage": None}
+        state.setdefault("unread_call", False)
         events: list[AgentEvent] = []
         kind = type(message).__name__
 
@@ -335,7 +379,11 @@ class ClaudeAgentBackend(AgentBackend):
         if kind == "AssistantMessage":
             for block in getattr(message, "content", []) or []:
                 block_kind = type(block).__name__
-                if block_kind == "TextBlock":
+                if block_kind == "TextBlock" and UNREAD_TOOL_CALL in block.text:
+                    # The runtime's own notice, not something the agent said.
+                    # The result that follows decides what becomes of it.
+                    state["unread_call"] = True
+                elif block_kind == "TextBlock":
                     # Partial deltas already streamed the text; mark the final
                     # block so the client can reconcile rather than duplicate.
                     events.append(
@@ -374,9 +422,17 @@ class ClaudeAgentBackend(AgentBackend):
             return events
 
         if kind == "ResultMessage":
-            state["usage"] = _usage_of(message)
+            state["usage"] = _usage_of(message, state.get("usage"))
             subtype = str(getattr(message, "subtype", "") or "")
-            if getattr(message, "is_error", False) or subtype.startswith("error"):
+            if _is_unread_tool_call(message, state):
+                state["unread_call"] = False
+                events.append(
+                    AgentEvent.error(
+                        "The agent's tool call could not be read, and asking again did "
+                        "not help. Nothing was lost: try once more."
+                    )
+                )
+            elif getattr(message, "is_error", False) or subtype.startswith("error"):
                 events.append(AgentEvent.error(_result_error(message, subtype)))
         return events
 
@@ -421,14 +477,33 @@ def _safe_result(content: Any) -> dict[str, Any]:
     return trim_result(parsed) if isinstance(parsed, dict) else {"value": trim_result(parsed)}
 
 
-def _usage_of(message: Any) -> dict[str, Any]:
-    """The backend's own account of a run: how long, how many steps, what cost."""
+def _usage_of(message: Any, earlier: dict[str, Any] | None = None) -> dict[str, Any]:
+    """The backend's own account of a run: how long, how many steps, what cost.
+
+    A reply that was asked for again is reported in parts. Time and steps add
+    up across them; the cost is already the session's total.
+    """
     usage = {
         "duration_ms": getattr(message, "duration_ms", None),
         "num_turns": getattr(message, "num_turns", None),
         "cost_usd": getattr(message, "total_cost_usd", None),
     }
-    return {key: value for key, value in usage.items() if value is not None}
+    usage = {key: value for key, value in usage.items() if value is not None}
+    for key in ("duration_ms", "num_turns"):
+        before = (earlier or {}).get(key)
+        if isinstance(before, (int, float)):
+            usage[key] = usage.get(key, 0) + before
+    if "cost_usd" not in usage and (earlier or {}).get("cost_usd") is not None:
+        usage["cost_usd"] = earlier["cost_usd"]
+    return usage
+
+
+def _is_unread_tool_call(message: Any, state: dict[str, Any]) -> bool:
+    """Whether a reply ended because the model's tool call could not be read."""
+    if state.get("unread_call"):
+        return True
+    said = [getattr(message, "result", None), *(getattr(message, "errors", None) or [])]
+    return any(UNREAD_TOOL_CALL in str(text) for text in said if text)
 
 
 def _result_error(message: Any, subtype: str) -> str:

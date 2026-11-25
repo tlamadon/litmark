@@ -101,6 +101,31 @@ max_parallel_runs = 3     # conversations that may be working at once
 auto_summary = true       # summarize a paper when it is imported
 ```
 
+## Sessions
+
+Several lines of work go on at once — a paper being read for one thing, a note
+being written for another — and each has its own conversation with the agent.
+A **session** is that conversation together with what was on screen for it:
+the note or summary that was open, the paper beside it and the page it was at,
+the papers attached to the next question, whether the library was up.
+
+Sessions sit in a row in the top bar. Click one and you are back in that work,
+not only in its transcript; the others carry on meanwhile, and a dot on a tab
+says the agent is working there, or has answered since you looked. **+** starts
+a new one, with nothing open. Until something has been asked in it, a session
+goes by what is open in it.
+
+- **Each has an address** (`/s/…`), so one can be opened in another browser
+  window and kept there — Ctrl- or middle-click its tab — and Back and Forward
+  go between the sessions you were in. A window is titled for its session.
+- **The view is kept on the server**, a moment after it settles, so a session
+  is the same from another machine, and after a restart.
+- **×** puts a session away. Nothing is deleted: it is still in the chat's own
+  list, and going to it there brings it back to the row. Deleting a
+  conversation is done from that list, as before.
+
+Sessions share one library: the same papers, notes and summarizing skill.
+
 ## Conversations
 
 The chat drawer holds as many conversations as you like, and they do not wait
@@ -164,6 +189,11 @@ memory:
   reading or disturbing the rest, creating the note if need be. `write_note`
   and `patch_note` revise, under the same version check as every other edit.
   `resolve_source` turns a quotation into a citation you can click.
+- **Summarizing your way.** `read_skill` gives the summarizing skill — how you
+  want papers summarized, as learned from you — and a session is told to read
+  it before `write_summary`. `write_skill` records a preference you state to
+  that session, so that it holds here too. See
+  [The summarizing skill](#the-summarizing-skill).
 - **Adding a paper.** A tool call carries JSON, not files, so `add_paper`
   answers with a one-time upload address and the session sends the PDF to it
   (`curl -T paper.pdf <address>`). The address expires after fifteen minutes,
@@ -211,6 +241,7 @@ litmark edit reading-log          # in $EDITOR
 | `papers`, `search WORDS…` | the papers with their IDs and tags; passages of their text (`--tag`, `--in DOC`) |
 | `pages DOC 3 4-6` | a paper's extracted text, page by page |
 | `summary DOC` | a paper's summary |
+| `skill` | the summarizing skill: how papers are to be summarized |
 | `notes`, `note NOTE` | the notes; one of them |
 | `append NOTE [TEXT]` | add to the end of a note, from the arguments or standard input |
 | `write NOTE`, `edit NOTE` | replace a note from standard input or `--file`; or open it in `$EDITOR` |
@@ -427,6 +458,7 @@ A script can still send the password as HTTP Basic (`curl -u any:$PASSWORD`).
 | `documents/<id>/pages.json` | Per-page text, character geometry, offset mapping. |
 | `documents/<id>/summary.md` | Editable, cited summary. |
 | `notes/*.md` | User and agent notes. |
+| `skills/summary.md` | How papers are summarized, as learned from you. Absent until something has been. |
 | `references.json` | Versioned source registry. |
 | `references.bib` | Generated BibTeX bibliography of the imported documents. |
 | `.gitignore` | Written when the project is a repository: keeps `.research/`, extracted text, and stored PDFs out of git. |
@@ -539,6 +571,45 @@ to text that is already there, ask: *"link the papers mentioned in this
 note."* Like a citation, a link naming a paper that is not in the library is
 refused when an agent writes it, and one whose paper has since been removed is
 shown greyed out.
+
+## The summarizing skill
+
+How a paper is summarized is not fixed: it is a **skill** the project keeps and
+the agent learns from you. It starts as what any reader might want — a couple
+of hundred words on the question, the data and method, the findings and the
+limitations — and becomes yours as you say what you want instead.
+
+**It is learned in conversation.** Tell the agent how you want summaries —
+*"much shorter, a hundred words at most"*, *"open with the identification
+strategy"*, *"always give the sample size"*, *"skip the literature"* — or
+correct one in a way that would hold for the next paper too, and it writes
+that into the skill and says in a sentence what it recorded. A request about
+one paper (*"add a line about the data to this one"*) changes that summary and
+not the skill; where it cannot tell which you meant, it asks.
+
+**Every summary is written to it** from then on: the one made when a paper is
+imported, **Regenerate**, a summary asked for in the chat, and one written by
+a session elsewhere over MCP, which is told to read the skill first and can
+teach it too. A paper already summarized keeps its summary until you
+regenerate it.
+
+**It is a file you can read and change**: `skills/summary.md`, Markdown,
+versioned and synced with the rest of the project. **Summarizing skill**, in
+the library and beside any open paper, opens it like a note. What the agent
+learned is listed under *Recent edits* in its own words (*Learned: summaries
+open with the identification strategy*), with **Undo** — back to what every
+project starts with, if it was the first thing learned. The agent cannot write
+over what you put there yourself without having read it.
+
+Two things it will not do. It is not changed while a summary is being written
+in the background: there is no one there to have said anything, and a paper's
+own text is evidence, never an instruction. And it does not replace what holds
+for every summary — claims are cited, and nothing is filled in from general
+knowledge.
+
+There is one skill for now. It is kept under a name so that others — a
+different way of reading for a job-market paper, or for a referee report — can
+sit beside it.
 
 ## Citations
 

@@ -15,6 +15,8 @@ export type OpenTarget =
   | { kind: 'note'; noteId: string }
   | { kind: 'summary'; documentId: string }
   | { kind: 'reference'; referenceId: string }
+  /** The summarizing skill: how the reader wants papers summarized. */
+  | { kind: 'skill' }
 
 export type Tone = '' | 'busy' | 'ok' | 'warn' | 'bad'
 
@@ -243,6 +245,24 @@ export function describeTool(entry: ToolEntry, names: Names): Activity {
       }
     }
 
+    case 'read_skill':
+      return {
+        ...base,
+        verb: 'read',
+        target: 'how you want papers summarized',
+        open: { kind: 'skill' },
+      }
+
+    case 'write_skill':
+      return {
+        ...base,
+        tone: entry.finished && !entry.isError ? 'ok' : tone,
+        verb: entry.isError ? 'learned — refused' : 'learned',
+        // What was learned, in the words it was recorded with.
+        target: shorten(text(input.learned), 120) || 'how you want papers summarized',
+        open: { kind: 'skill' },
+      }
+
     case 'write_summary':
       return {
         ...base,
@@ -260,6 +280,16 @@ export function describeTool(entry: ToolEntry, names: Names): Activity {
 }
 
 export function describeChange(entry: ChangeEntry, names: Names): Activity {
+  if (entry.targetKind === 'skill') {
+    // What it says was learned is the line beside it; this names where it went.
+    return {
+      verb: 'learned',
+      tone: 'ok',
+      target: 'how you want papers summarized',
+      detail: entry.summary || undefined,
+      open: { kind: 'skill' },
+    }
+  }
   const isNote = entry.targetKind === 'note'
   if (isNote && entry.summary === 'Deleted note') {
     // Nothing to open: what the line names is no longer there.

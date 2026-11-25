@@ -58,6 +58,7 @@ READ_ONLY = {
     "list_notes",
     "read_note",
     "read_summary",
+    "read_skill",
 }
 # Tools whose effect is recorded with the name of the session that asked.
 ATTRIBUTED = {
@@ -66,6 +67,7 @@ ATTRIBUTED = {
     "append_note",
     "delete_note",
     "write_summary",
+    "write_skill",
     "tag_documents",
     "set_document_details",
 }
@@ -103,6 +105,15 @@ Setting something down
   its link from `list_documents` — `[Olley & Pakes (1996)](paper:doc-002)` —
   so the user can click through to it. Never invent a document ID.
 - Your edits are recorded under your client's name, and the user can undo them.
+
+Summarizing a paper
+- The user has standing instructions for how a paper is summarized, learned
+  from them over time: `read_skill`. Read it before `write_summary`, and
+  follow it.
+- When the user tells you how they want summaries — or corrects one in a way
+  that would hold for the next paper too — record it with `write_skill`, so
+  that every later summary, here and in Litmark itself, is written that way.
+  Say what you recorded. Only what the user says changes it.
 
 Adding a paper
 - `add_paper` returns a one-time upload address. Send the PDF's bytes to it

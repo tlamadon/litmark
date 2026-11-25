@@ -398,3 +398,20 @@ def test_a_paper_is_listed_by_its_authors_and_year_once_they_are_said(server, ru
     assert "Mobility Restrictions and Wage Growth · 2 pages" in out
     code, _, err = run("details", "doc-001")
     assert code == 1 and "--title" in err
+
+
+def test_the_summarizing_skill_is_read_and_taught_from_a_terminal(server, services, run):
+    code, out, err = run("skill")
+    assert code == 0 and out.startswith("# How to summarize a paper") and "as every project starts" in err
+    revision = err.strip().rsplit(" ", 1)[-1]
+    code, out, _ = run(
+        "call",
+        "write_skill",
+        "text=# How to summarize a paper\n\nThree sentences.",
+        f"expected_revision={revision}",
+        "learned=Summaries are three sentences.",
+    )
+    assert code == 0 and json.loads(out)["ok"] is True
+    code, out, err = run("skill")
+    assert "Three sentences." in out and "as learned" in err
+    assert origins(services)[-1] == ("mcp:cli", "Learned: Summaries are three sentences.")

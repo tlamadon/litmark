@@ -30,6 +30,8 @@ import { TagFilter, TagInput } from './Tags'
 export type Subject =
   | { kind: 'note'; noteId: string }
   | { kind: 'paper'; documentId: string }
+  /** The summarizing skill: how the reader wants papers summarized. */
+  | { kind: 'skill' }
   | null
 
 export interface SidebarProps {
@@ -61,6 +63,8 @@ export interface SidebarProps {
   onOpenPaper: (documentId: string) => void
   onOpenSummary: (documentId: string) => void
   onOpenDocument: (documentId: string) => void
+  /** Open the summarizing skill, to read what was learned or change it by hand. */
+  onOpenSkill: () => void
   /** Delete a note. What it held is kept, and listed under Recent edits to undo. */
   onDeleteNote: (noteId: string) => Promise<void>
   /** Say what a paper is: its title, authors and year. Rejects with the reason. */
@@ -112,6 +116,19 @@ export function Sidebar(props: SidebarProps) {
           <button type="button" class="link back-to-library" onClick={props.onOpenLibrary}>
             ← Library
           </button>
+          {subject?.kind === 'skill' && (
+            <section class="about">
+              <strong>How papers are summarized</strong>
+              <p class="about-text">
+                The agent follows this every time it writes a summary. Tell it in the chat how
+                you want them — shorter, what to lead with, what to leave out — and it writes
+                that down here. Or change it yourself.
+              </p>
+              <p class="about-text muted">
+                A paper already summarized keeps its summary until you Regenerate it.
+              </p>
+            </section>
+          )}
           {note && <NoteAbout key={note.note_id} note={note} onDelete={props.onDeleteNote} />}
           {paper && <PaperAbout key={paper.document_id} document={paper} {...props} />}
 
@@ -303,6 +320,15 @@ function PaperAbout(props: SidebarProps & { document: DocumentRecord }) {
             {document.summary.status === 'ready' ? 'Regenerate' : 'Summarize'}
           </button>
         )}
+        <button
+          type="button"
+          class="link"
+          data-action="open-skill"
+          title="How papers are summarized: what the agent has learned of how you want it done"
+          onClick={props.onOpenSkill}
+        >
+          Summarizing skill
+        </button>
       </div>
     </section>
   )
@@ -383,10 +409,13 @@ function RecentEdits(props: SidebarProps) {
         {props.changes.map((change) => {
           const origin = describeOrigin(change.origin)
           const isNote = change.target_kind === 'note'
+          const isSkill = change.target_kind === 'skill'
           const note = isNote
             ? props.notes.find((item) => item.note_id === change.target_id)
             : undefined
-          const name = isNote
+          const name = isSkill
+            ? 'how papers are summarized'
+            : isNote
             ? (note?.title ?? change.target_id)
             : (nameOf(
                 props.documents.find((document) => document.document_id === change.target_id),
@@ -394,7 +423,8 @@ function RecentEdits(props: SidebarProps) {
           // A note that was deleted is named, and there is nothing to open.
           const gone = isNote && !note
           const open = (): void => {
-            if (isNote) props.onOpenNote(change.target_id)
+            if (isSkill) props.onOpenSkill()
+            else if (isNote) props.onOpenNote(change.target_id)
             else if (change.target_kind === 'summary') props.onOpenSummary(change.target_id)
             else props.onOpenDocument(change.target_id)
           }

@@ -483,6 +483,8 @@ def test_a_project_from_an_older_version_still_opens(tmp_path):
     try:
         row = db.query_one("SELECT * FROM conversations WHERE id = 'conv-old'")
         assert row["kind"] == "chat" and row["backend_session_id"] == "abc"
+        # Nothing was on screen with it yet, and it is not put away.
+        assert row["view_json"] is None and row["closed_at"] is None
         run = db.query_one("SELECT * FROM runs WHERE id = 'run-old'")
         assert run["label"] is None and run["usage_json"] is None
     finally:
@@ -522,3 +524,59 @@ def test_a_turns_cost_is_what_it_added_to_the_sessions_total(services):
     # The browser is told the same figure it will read back later.
     done = [event for event in events_of(services, "done")]
     assert [event["usage"]["cost_usd"] for event in done] == pytest.approx([0.84, 0.05, 0.06])
+
+
+# ------------------------------------------------------------------ sessions
+
+
+def test_a_conversation_remembers_what_was_on_screen_with_it(client, services):
+    """A session is a conversation and its view: coming back to one is coming back to the work."""
+    first = client.post("/api/conversations", json={}).json()["conversation_id"]
+    second = client.post("/api/conversations", json={}).json()["conversation_id"]
+    assert client.get(f"/api/conversations/{first}").json()["view"] is None
+
+    view = {
+        "target": {"kind": "summary", "documentId": "doc-002"},
+        "documentId": "doc-002",
+        "page": 14,
+        "attached": ["doc-002", "doc-005"],
+        "library": False,
+    }
+    assert client.put(f"/api/conversations/{first}/view", json={"view": view}).status_code == 204
+    listed = {c["conversation_id"]: c for c in client.get("/api/conversations").json()["conversations"]}
+    # Kept as it was given, and each conversation's is its own.
+    assert listed[first]["view"] == view
+    assert listed[second]["view"] is None
+    assert client.get(f"/api/conversations/{first}").json()["view"] == view
+
+    # Saving a view is not something every window needs telling about, and it
+    # is not activity: the conversation is no more recently used for it.
+    before = listed[first]["updated_at"]
+    events = services.db.query("SELECT seq FROM events WHERE type = 'conversation_updated'")
+    client.put(f"/api/conversations/{first}/view", json={"view": {**view, "page": 15}})
+    assert services.db.query("SELECT seq FROM events WHERE type = 'conversation_updated'") == events
+    assert client.get(f"/api/conversations/{first}").json()["updated_at"] == before
+
+    too_much = {"attached": ["doc-001"] * 2000}
+    assert client.put(f"/api/conversations/{first}/view", json={"view": too_much}).status_code == 422
+    assert client.put("/api/conversations/conv-absent/view", json={"view": view}).status_code == 404
+    background = services.runner.system_conversation()
+    assert client.put(f"/api/conversations/{background}/view", json={"view": view}).status_code == 422
+
+
+def test_a_session_is_put_away_and_brought_back_with_nothing_lost(client, services):
+    conversation_id = client.post("/api/conversations", json={}).json()["conversation_id"]
+    client.put(f"/api/conversations/{conversation_id}/view", json={"view": {"library": True}})
+    assert client.get(f"/api/conversations/{conversation_id}").json()["closed"] is False
+
+    closed = client.patch(f"/api/conversations/{conversation_id}", json={"closed": True})
+    assert closed.status_code == 200 and closed.json()["closed"] is True
+    # Still there, still listed, with its view: only out of the row of sessions.
+    kept = client.get(f"/api/conversations/{conversation_id}").json()
+    assert kept["closed"] is True and kept["view"] == {"library": True}
+
+    renamed = client.patch(
+        f"/api/conversations/{conversation_id}", json={"title": "Markups", "closed": False}
+    ).json()
+    assert (renamed["title"], renamed["closed"]) == ("Markups", False)
+    assert client.patch(f"/api/conversations/{conversation_id}", json={}).status_code == 422

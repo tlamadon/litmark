@@ -27,6 +27,8 @@ export interface LibraryProps {
   onOpenPaper: (documentId: string) => void
   onOpenNote: (noteId: string) => void
   onNewNote: () => void
+  /** Open the summarizing skill: how the agent has learned to summarize a paper. */
+  onOpenSkill: () => void
   onDeleteNote: (noteId: string) => Promise<void>
   /** Import PDFs; `tags` are given to each, so they arrive in the collection on screen. */
   onImport: (files: File[], tags: string[]) => void
@@ -259,6 +261,15 @@ export function Library(props: LibraryProps) {
               Tag {papers.length === 1 ? 'it' : `these ${papers.length}`}…
             </button>
           )}
+          <button
+            type="button"
+            class="link"
+            data-action="open-skill"
+            title="How papers are summarized: what the agent has learned of how you want it done"
+            onClick={props.onOpenSkill}
+          >
+            Summarizing skill
+          </button>
           <button
             type="button"
             class="link"

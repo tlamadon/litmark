@@ -359,3 +359,112 @@ def test_the_runtime_shipped_with_the_sdk_is_enough(monkeypatch):
     monkeypatch.setattr(claude_sdk.shutil, "which", lambda _name: None)
     found = claude_sdk._runtime_path()
     assert found is not None and found.endswith("claude")
+
+
+# ------------------------------------------- a tool call the runtime cannot read
+
+
+UNREAD = "The model's tool call could not be parsed (retry also failed)."
+
+
+def _run_with_replies(services, monkeypatch, replies: list[list]) -> tuple[list, list[str]]:
+    """Run the adapter against a client that answers each prompt with the next reply."""
+    import asyncio
+
+    from litmark.agent.base import RunContext, RunRequest
+
+    asked: list[str] = []
+    pending = list(replies)
+
+    class FakeClient:
+        def __init__(self, options: object) -> None:
+            pass
+
+        async def connect(self) -> None:
+            pass
+
+        async def query(self, prompt: str) -> None:
+            asked.append(prompt)
+
+        async def receive_response(self):
+            for message in pending.pop(0):
+                yield message
+
+        async def disconnect(self) -> None:
+            pass
+
+    module = pytest.importorskip("claude_agent_sdk")
+    monkeypatch.setattr(module, "ClaudeSDKClient", FakeClient)
+    request = RunRequest(
+        run_id="run-1",
+        conversation_id="conv-1",
+        prompt="Summarize it.",
+        context=RunContext(),
+        backend_session_id=None,
+        kind="summary",
+    )
+
+    async def collect() -> list:
+        return [event async for event in backend(services).start_run(request)]
+
+    return asyncio.run(collect()), asked
+
+
+def _unread_reply() -> list:
+    from claude_agent_sdk import AssistantMessage, ResultMessage, TextBlock
+
+    return [
+        AssistantMessage(content=[TextBlock(text=UNREAD)], model="m"),
+        ResultMessage(
+            subtype="success",
+            duration_ms=1000,
+            duration_api_ms=900,
+            is_error=True,
+            num_turns=4,
+            session_id="s",
+            total_cost_usd=0.5,
+            result=UNREAD,
+        ),
+    ]
+
+
+@requires_sdk
+def test_a_tool_call_that_cannot_be_read_is_asked_for_again(services, monkeypatch):
+    """The model slipping on one call does not cost the run what it had read."""
+    from claude_agent_sdk import AssistantMessage, ResultMessage, TextBlock
+
+    good = [
+        AssistantMessage(content=[TextBlock(text="Done.")], model="m"),
+        ResultMessage(
+            subtype="success",
+            duration_ms=2000,
+            duration_api_ms=1800,
+            is_error=False,
+            num_turns=2,
+            session_id="s",
+            total_cost_usd=0.75,
+        ),
+    ]
+    events, asked = _run_with_replies(services, monkeypatch, [_unread_reply(), good])
+
+    assert len(asked) == 2 and "make the call" in asked[1]
+    kinds = [event.type for event in events]
+    assert "error" not in kinds
+    assert kinds.count("notice") == 1
+    # The runtime's notice is not passed off as something the agent said.
+    said = [event.data["text"] for event in events if event.type == "text_delta"]
+    assert said == ["Done."]
+    done = events[-1]
+    assert done.type == "done" and done.data["terminal_reason"] == "endTurn"
+    assert done.data["usage"] == {"duration_ms": 3000, "num_turns": 6, "cost_usd": 0.75}
+
+
+@requires_sdk
+def test_asking_again_stops_and_says_so(services, monkeypatch):
+    replies = [_unread_reply() for _ in range(claude_sdk.UNREAD_TOOL_CALL_RETRIES + 1)]
+    events, asked = _run_with_replies(services, monkeypatch, replies)
+
+    assert len(asked) == claude_sdk.UNREAD_TOOL_CALL_RETRIES + 1
+    errors = [event.data["message"] for event in events if event.type == "error"]
+    assert len(errors) == 1 and "could not be read" in errors[0]
+    assert not [event for event in events if event.type == "text_delta"]

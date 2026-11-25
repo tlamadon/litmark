@@ -252,6 +252,8 @@ def add_commands(sub: Any) -> None:
     summary = command("summary", "Print a paper's summary.")
     summary.add_argument("document", metavar="DOC")
 
+    command("skill", "Print the summarizing skill: how papers are to be summarized.")
+
     command("notes", "List the notes.")
 
     note = command("note", "Print a note.")
@@ -421,6 +423,17 @@ def cmd_summary(server: Server, args: argparse.Namespace) -> int:
         print(f"summary of {payload['document_id']} · revision {payload['revision']}", file=sys.stderr)
 
     return _finish(args, server.call("read_summary", {"document_id": args.document}), show)
+
+
+def cmd_skill(server: Server, args: argparse.Namespace) -> int:
+    def show(payload: dict[str, Any]) -> None:
+        _print_text(payload["text"])
+        learned = "as learned" if payload.get("customised") else "as every project starts"
+        print(f"summarizing skill, {learned} · revision {payload['revision']}", file=sys.stderr)
+
+    payload = server.call("read_skill")
+    payload.pop("note", None)  # Addressed to an agent about to summarize, not to a reader.
+    return _finish(args, payload, show)
 
 
 def cmd_notes(server: Server, args: argparse.Namespace) -> int:
@@ -634,6 +647,7 @@ COMMANDS = {
     "search": cmd_search,
     "pages": cmd_pages,
     "summary": cmd_summary,
+    "skill": cmd_skill,
     "notes": cmd_notes,
     "note": cmd_note,
     "append": cmd_append,

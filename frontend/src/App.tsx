@@ -40,6 +40,15 @@ import {
   type PdfOutlineItem,
   type PdfSelection,
 } from './pdf/PdfViewer'
+import {
+  addressOf,
+  isUntouched,
+  openSessions,
+  readView,
+  sessionInAddress,
+  Sessions,
+  type SessionView,
+} from './Sessions'
 import { Sidebar, type Subject } from './Sidebar'
 import { UNTAGGED } from './Tags'
 import { SyncStatus } from './SyncStatus'
@@ -47,6 +56,8 @@ import { SyncStatus } from './SyncStatus'
 type MainTarget =
   | { kind: 'note'; noteId: string }
   | { kind: 'summary'; documentId: string }
+  /** The summarizing skill: how the reader wants papers summarized. */
+  | { kind: 'skill' }
   | { kind: 'empty' }
 
 interface Buffer {
@@ -61,7 +72,9 @@ const keyOf = (target: MainTarget): string =>
     ? `note:${target.noteId}`
     : target.kind === 'summary'
       ? `summary:${target.documentId}`
-      : 'empty'
+      : target.kind === 'skill'
+        ? 'skill:summary'
+        : 'empty'
 
 const NARROW_QUERY = '(max-width: 1100px)'
 
@@ -161,6 +174,26 @@ export function App() {
   const insertRef = useRef<((markdown: string) => void) | null>(null)
   const revealRef = useRef<((referenceId: string) => RevealResult) | null>(null)
   const gotoHeadingRef = useRef<((headingIndex: number) => void) | null>(null)
+
+  // A session is a conversation and its view. What each one had on screen, as
+  // this window knows it — ahead of what the server was last told.
+  const viewsRef = useRef(new Map<string, SessionView>())
+  // What the server was last told of each, so the same thing is not said twice.
+  const savedViews = useRef(new Map<string, string>())
+  // The view waiting to be told, a moment after it last changed.
+  const pendingView = useRef<{ id: string; view: SessionView; json: string; timer: number } | null>(
+    null,
+  )
+  // The session whose view is on screen: until it is, there is nothing to save.
+  const restoredFor = useRef<string | null>(null)
+  // Whether the library is to be laid over a view that is being restored.
+  const pendingLibrary = useRef<boolean | null>(null)
+  // The page the paper on show is at.
+  const [pdfPage, setPdfPage] = useState<number | null>(null)
+  const stateRef = useRef<ProjectState | null>(null)
+  stateRef.current = state
+  const conversationsRef = useRef<ConversationSummary[]>([])
+  conversationsRef.current = conversations
   // A citation to go to once the note that holds it has opened.
   const pendingReveal = useRef<string | null>(null)
   // The note just created, which opens ready to be written in.
@@ -214,15 +247,100 @@ export function App() {
     }
   }, [])
 
-  const selectConversation = useCallback((id: string): void => {
-    setConversationId(id)
-    setUnread((current) => {
-      if (!current.has(id)) return current
-      const next = new Set(current)
-      next.delete(id)
-      return next
-    })
+  /** Tell the server now what is on screen, rather than in a moment. */
+  const flushView = useCallback((): void => {
+    const pending = pendingView.current
+    if (!pending) return
+    window.clearTimeout(pending.timer)
+    pendingView.current = null
+    savedViews.current.set(pending.id, pending.json)
+    api.saveView(pending.id, pending.view).then(
+      () => {
+        // The list this window holds learns it too: a session with a view is
+        // one that stays in the row.
+        setConversations((known) =>
+          known.map((conversation) =>
+            conversation.conversation_id === pending.id && conversation.view == null
+              ? { ...conversation, view: pending.view }
+              : conversation,
+          ),
+        )
+      },
+      () => {
+        // Not told after all: say it again the next time the view changes.
+        savedViews.current.delete(pending.id)
+      },
+    )
   }, [])
+
+  /**
+   * Put on screen what a session last had there: the note or paper, the page,
+   * what was attached. What is no longer in the project is simply not opened.
+   */
+  const restoreView = useCallback(
+    (id: string, project: ProjectState, known: ConversationSummary[]): void => {
+      const view =
+        viewsRef.current.get(id) ??
+        readView(known.find((conversation) => conversation.conversation_id === id)?.view)
+      const has = (documentId: string): boolean =>
+        project.documents.some((document) => document.document_id === documentId)
+      let next: MainTarget = view.target
+      if (next.kind === 'note') {
+        const noteId = next.noteId
+        if (!project.notes.some((note) => note.note_id === noteId)) next = { kind: 'empty' }
+      } else if (next.kind === 'summary' && !has(next.documentId)) {
+        next = { kind: 'empty' }
+      }
+      const paper = view.documentId
+        ? (project.documents.find((document) => document.document_id === view.documentId) ?? null)
+        : null
+      // Going somewhere takes the library away; coming back to a session that
+      // had it up is the one case where it is put back.
+      pendingLibrary.current = view.library
+      setTarget({ ...next })
+      setOpenDocument(paper)
+      setHighlight(null)
+      setPdfSelection(null)
+      setGotoPage(paper ? (view.page ?? 1) : null)
+      setGotoNonce((value) => value + 1)
+      setPdfPage(paper ? (view.page ?? 1) : null)
+      setSourceTakesOver(false)
+      setContext({ document_ids: view.attached.filter(has) })
+      restoredFor.current = id
+    },
+    [],
+  )
+
+  const selectConversation = useCallback(
+    (id: string, address: 'push' | 'replace' | 'keep' = 'push'): void => {
+      const leaving = conversationRef.current
+      if (id !== leaving) {
+        // What the session being left had on screen is told before it is left.
+        flushView()
+        setConversationId(id)
+        if (stateRef.current) restoreView(id, stateRef.current, conversationsRef.current)
+      }
+      setUnread((current) => {
+        if (!current.has(id)) return current
+        const next = new Set(current)
+        next.delete(id)
+        return next
+      })
+      if (address !== 'keep' && sessionInAddress(window.location.pathname) !== id) {
+        // Each session has an address, so one can be kept in a window of its own.
+        if (address === 'replace') window.history.replaceState(null, '', addressOf(id))
+        else window.history.pushState(null, '', addressOf(id))
+      }
+      // Going to a session that was put away brings it back to the row.
+      if (conversationsRef.current.find((c) => c.conversation_id === id)?.closed) {
+        void api.setClosed(id, false).then(
+          () => refreshConversations(),
+          () => undefined,
+        )
+      }
+    },
+    [flushView, restoreView, refreshConversations],
+  )
 
   useEffect(() => {
     if (conversationId && state) rememberConversation(state.project.root, conversationId)
@@ -238,11 +356,17 @@ export function App() {
       setConversations(next.conversations)
       const chats = next.conversations.filter((c) => c.kind === 'chat')
       const remembered = rememberedConversation(next.project.root)
+      // The session the address names; failing that the one last open here,
+      // then the most recent.
+      const addressed = sessionInAddress(window.location.pathname)
       const opening =
+        chats.find((c) => c.conversation_id === addressed)?.conversation_id ??
         next.conversations.find((c) => c.conversation_id === remembered)?.conversation_id ??
         chats[0]?.conversation_id ??
         (await api.createConversation()).conversation_id
-      setConversationId(opening)
+      conversationsRef.current = next.conversations
+      stateRef.current = next
+      selectConversation(opening, 'replace')
       if (chats.length === 0) void refreshConversations()
       void api.changes().then((payload) => setChanges(payload.changes))
       void refreshSync()
@@ -316,6 +440,9 @@ export function App() {
         } else if (target.kind === 'summary') {
           const summary = await api.summary(target.documentId)
           placeBuffer(key, summary.text ?? '', summary.revision)
+        } else if (target.kind === 'skill') {
+          const skill = await api.skill()
+          placeBuffer(key, skill.text, skill.revision)
         } else {
           setBuffer(null)
         }
@@ -376,6 +503,10 @@ export function App() {
       } else if (target.kind === 'summary') {
         const summary = await api.summary(target.documentId)
         placeBuffer(key, summary.text ?? '', summary.revision)
+      } else if (target.kind === 'skill') {
+        // The agent learned something while it was open: show what it wrote.
+        const skill = await api.skill()
+        placeBuffer(key, skill.text, skill.revision)
       }
     } catch (error) {
       if (!(error instanceof ApiError && error.status === 404)) throw error
@@ -393,14 +524,49 @@ export function App() {
     if (fileTick > 0 && !dirty) void reloadBuffer()
   }, [fileTick])
 
-  const newConversation = useCallback(async (): Promise<void> => {
-    // An empty conversation is as good as a new one: go there instead of
-    // leaving a trail of them.
-    const blank = conversations.find((c) => c.kind === 'chat' && c.turn_count === 0)
-    const id = blank?.conversation_id ?? (await api.createConversation()).conversation_id
-    await refreshConversations()
-    selectConversation(id)
-  }, [conversations, refreshConversations, selectConversation])
+  /**
+   * A new session. One in which nothing has been asked or opened is as good
+   * as a new one: go there instead of leaving a trail of them. `besides` is a
+   * session not to end up in — the one being closed.
+   */
+  const newConversation = useCallback(
+    async (besides: string | null = null): Promise<void> => {
+      const untouched = (conversation: ConversationSummary): boolean => {
+        const id = conversation.conversation_id
+        if (conversation.kind !== 'chat' || id === besides) return false
+        // What this window has done in it since counts, whatever the server has heard.
+        const mine = viewsRef.current.get(id)
+        return isUntouched(mine ? { ...conversation, view: mine } : conversation)
+      }
+      const known = conversationsRef.current
+      const here = known.find((c) => c.conversation_id === conversationRef.current)
+      const blank = (here && untouched(here) ? here : undefined) ?? known.find(untouched)
+      const id = blank?.conversation_id ?? (await api.createConversation()).conversation_id
+      await refreshConversations()
+      selectConversation(id)
+    },
+    [refreshConversations, selectConversation],
+  )
+
+  /** Put a session away. Nothing is deleted; the chat's list brings it back. */
+  const closeSession = useCallback(
+    async (id: string): Promise<void> => {
+      if (id === conversationRef.current) {
+        // Somewhere to be instead: the session beside it, or a new one.
+        const row = openSessions(conversationsRef.current, id)
+        const at = row.findIndex((c) => c.conversation_id === id)
+        const beside = row[at + 1] ?? row[at - 1]
+        if (beside) selectConversation(beside.conversation_id)
+        else await newConversation(id)
+      }
+      try {
+        await api.setClosed(id, true)
+      } finally {
+        await refreshConversations()
+      }
+    },
+    [selectConversation, newConversation, refreshConversations],
+  )
 
   const renameConversation = useCallback(
     async (id: string, title: string): Promise<void> => {
@@ -415,7 +581,9 @@ export function App() {
       await api.deleteConversation(id)
       const left = await refreshConversations()
       if (id !== conversationRef.current) return
+      viewsRef.current.delete(id)
       const next =
+        openSessions(left, null)[0]?.conversation_id ??
         left.find((c) => c.kind === 'chat')?.conversation_id ??
         (await api.createConversation()).conversation_id
       if (!left.some((c) => c.conversation_id === next)) await refreshConversations()
@@ -445,6 +613,12 @@ export function App() {
         if (keyOf(target) === docKeyRef.current) setDirty(false)
         void refreshState()
         return { revision: result.revision }
+      }
+      if (target.kind === 'skill') {
+        const skill = await api.saveSkill(text, expectedRevision)
+        placeBuffer(keyOf(target), skill.text, skill.revision)
+        if (keyOf(target) === docKeyRef.current) setDirty(false)
+        return { revision: skill.revision }
       }
       throw new Error('Nothing is open to save.')
     },
@@ -703,6 +877,9 @@ export function App() {
       else if (target.kind === 'note') {
         setTarget({ kind: 'note', noteId: target.noteId })
         setSourceTakesOver(false)
+      } else if (target.kind === 'skill') {
+        setTarget({ kind: 'skill' })
+        setSourceTakesOver(false)
       } else {
         setTarget({ kind: 'summary', documentId: target.documentId })
         setSourceTakesOver(false)
@@ -775,8 +952,68 @@ export function App() {
   // Going anywhere — to a note, a summary, a page of a paper — is leaving the
   // library; it stays one click away, and what was open is still there.
   useEffect(() => {
-    setLibrary(false)
+    // …unless this is a session coming back that had the library up.
+    setLibrary(pendingLibrary.current ?? false)
+    pendingLibrary.current = null
   }, [target, gotoNonce])
+
+  // What is on screen, as it is kept for the session.
+  const view = useMemo<SessionView>(
+    () => ({
+      target,
+      documentId: openDocument?.document_id ?? null,
+      page: openDocument ? pdfPage : null,
+      attached: context.document_ids ?? [],
+      library,
+    }),
+    [target, openDocument?.document_id, pdfPage, context.document_ids, library],
+  )
+  const viewJson = JSON.stringify(view)
+  useEffect(() => {
+    const id = conversationId
+    // Nothing to keep until the session's own view is the one on screen.
+    if (!id || restoredFor.current !== id) return
+    viewsRef.current.set(id, view)
+    const pending = pendingView.current
+    if (pending) window.clearTimeout(pending.timer)
+    pendingView.current = null
+    if (savedViews.current.get(id) === viewJson) return
+    // Told a moment after it settles: a page turned is not worth a request each.
+    pendingView.current = { id, view, json: viewJson, timer: window.setTimeout(flushView, 700) }
+  }, [conversationId, viewJson, flushView])
+
+  // A window put away or closed is told about at once.
+  useEffect(() => {
+    const onHidden = (): void => {
+      if (document.visibilityState === 'hidden') flushView()
+    }
+    document.addEventListener('visibilitychange', onHidden)
+    window.addEventListener('pagehide', flushView)
+    return () => {
+      document.removeEventListener('visibilitychange', onHidden)
+      window.removeEventListener('pagehide', flushView)
+    }
+  }, [flushView])
+
+  // Back and forward go between the sessions that were on screen.
+  useEffect(() => {
+    const onPop = (): void => {
+      const id = sessionInAddress(window.location.pathname)
+      if (!id || id === conversationRef.current) return
+      if (conversationsRef.current.some((c) => c.conversation_id === id && c.kind === 'chat')) {
+        selectConversation(id, 'keep')
+      }
+    }
+    window.addEventListener('popstate', onPop)
+    return () => window.removeEventListener('popstate', onPop)
+  }, [selectConversation])
+
+  // A window is named for its session, to tell several of them apart.
+  const onScreen = conversations.find((c) => c.conversation_id === conversationId)
+  const sessionTitle = onScreen && !onScreen.untitled ? onScreen.title : null
+  useEffect(() => {
+    document.title = sessionTitle ? `${sessionTitle} — Litmark` : 'Litmark'
+  }, [sessionTitle])
 
   useEffect(() => {
     if (!openDocument) setOutline([])
@@ -787,18 +1024,21 @@ export function App() {
   const subject = useMemo<Subject>(() => {
     if (target.kind === 'note') return { kind: 'note', noteId: target.noteId }
     if (target.kind === 'summary') return { kind: 'paper', documentId: target.documentId }
+    if (target.kind === 'skill') return { kind: 'skill' }
     return openDocument ? { kind: 'paper', documentId: openDocument.document_id } : null
   }, [target, openDocument?.document_id])
-  const subjectKey = subject
-    ? subject.kind === 'note'
+  const subjectKey = !subject
+    ? ''
+    : subject.kind === 'note'
       ? `note:${subject.noteId}`
-      : `paper:${subject.documentId}`
-    : ''
+      : subject.kind === 'paper'
+        ? `paper:${subject.documentId}`
+        : 'skill'
 
   // What it is tied to is read from the text of the notes and summaries, so
   // it is asked again whenever one of them is saved or changed from elsewhere.
   useEffect(() => {
-    if (!subject) {
+    if (!subject || subject.kind === 'skill') {
       setRelated(null)
       return
     }
@@ -903,6 +1143,20 @@ export function App() {
   // What a `paper:` link in the text on screen may name.
   const papers = papersOf(state.documents)
 
+  // A session nothing has been asked in yet goes by what is open in it.
+  const sessionLabel = (conversation: ConversationSummary): string => {
+    if (!conversation.untitled) return conversation.title
+    const id = conversation.conversation_id
+    const seen =
+      id === conversationId ? view : (viewsRef.current.get(id) ?? readView(conversation.view))
+    if (seen.target.kind === 'note') {
+      return notesById.get(seen.target.noteId)?.title ?? 'New session'
+    }
+    if (seen.target.kind === 'skill') return 'Summarizing skill'
+    const paperId = seen.target.kind === 'summary' ? seen.target.documentId : seen.documentId
+    return nameOf(state.documents.find((d) => d.document_id === paperId)) ?? 'New session'
+  }
+
   const currentTitle =
     target.kind === 'note'
       ? (notesById.get(target.noteId)?.title ?? target.noteId)
@@ -911,7 +1165,9 @@ export function App() {
             nameOf(state.documents.find((d) => d.document_id === target.documentId)) ??
             target.documentId
           }`
-        : 'Nothing open'
+        : target.kind === 'skill'
+          ? 'How papers are summarized'
+          : 'Nothing open'
 
   // The library shows when it is asked for, and when nothing at all is open.
   const inLibrary = library || (target.kind === 'empty' && openDocument === null)
@@ -957,6 +1213,15 @@ export function App() {
         >
           Library
         </button>
+        <Sessions
+          conversations={conversations}
+          currentId={conversationId}
+          unread={unread}
+          labelFor={sessionLabel}
+          onSelect={(id) => selectConversation(id)}
+          onNew={() => void newConversation()}
+          onClose={(id) => void closeSession(id)}
+        />
         <span class="spacer" />
         {!connected && <span class="badge warn">Reconnecting…</span>}
         {sync && (
@@ -1038,6 +1303,10 @@ export function App() {
               setSourceTakesOver(false)
             }}
             onOpenDocument={openDocumentById}
+            onOpenSkill={() => {
+              setTarget({ kind: 'skill' })
+              setSourceTakesOver(false)
+            }}
             onDeleteNote={deleteNote}
             onSetDetails={async (documentId, details) => {
               await api.setDetails(documentId, details)
@@ -1068,6 +1337,10 @@ export function App() {
               setSourceTakesOver(false)
             }}
             onNewNote={() => void createNote()}
+            onOpenSkill={() => {
+              setTarget({ kind: 'skill' })
+              setSourceTakesOver(false)
+            }}
             onDeleteNote={deleteNote}
             onImport={(files, tags) => void importFiles(files, tags)}
             onTagDocuments={(ids, add) => void changeTags(() => api.tagDocuments(ids, add))}
@@ -1164,6 +1437,7 @@ export function App() {
                 if (reference) revealCitation(reference)
               }}
               onOutline={setOutline}
+              onPage={setPdfPage}
               onClose={() => {
                 setOpenDocument(null)
                 // No passage is on show any more, here or in the note.

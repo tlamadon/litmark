@@ -152,6 +152,32 @@ function buildDom({ serverToken = 'test-token', routes = ROUTES } = {}) {
       return { ok: false, status: 401, text: async () => JSON.stringify({ error: { code: 'unauthorized', message: 'Missing or invalid session credential.' } }) }
     }
     window.requests.push(`${init.method ?? 'GET'} ${path}`)
+    // A session's view is kept with its conversation; a new session is a new conversation.
+    const viewOf = /^\/api\/conversations\/([^/]+)\/view$/.exec(path)
+    if (init.method === 'PUT' && viewOf) {
+      const list = routes.get('/api/conversations')
+      routes.set('/api/conversations', {
+        conversations: list.conversations.map((c) =>
+          c.conversation_id === viewOf[1] ? { ...c, view: JSON.parse(init.body).view } : c,
+        ),
+      })
+      return { ok: true, status: 204, text: async () => '' }
+    }
+    if (init.method === 'POST' && path === '/api/conversations') {
+      const created = {
+        ...CONVERSATION,
+        conversation_id: `conv-${routes.get('/api/conversations').conversations.length + 1}`,
+        title: 'New conversation',
+        untitled: true,
+        turn_count: 0,
+        last_run_status: null,
+      }
+      routes.set('/api/conversations', {
+        conversations: [created, ...routes.get('/api/conversations').conversations],
+      })
+      routes.set(`/api/conversations/${created.conversation_id}`, { ...created, messages: [], runs: [], turns: [], latest_seq: 10 })
+      return { ok: true, status: 201, text: async () => JSON.stringify(routes.get(`/api/conversations/${created.conversation_id}`)) }
+    }
     if (init.method === 'DELETE' && routes.has(path)) {
       // Gone from the server: from its own address, and from the list of notes.
       routes.delete(path)
@@ -338,6 +364,18 @@ test('the library, what is open, and the panel about it', async (t) => {
   routes.set('/api/state', { ...state, auth: { password: true } })
   routes.set('/api/notes/welcome', { ...ROUTES.get('/api/notes/welcome'), text })
   routes.set('/api/related?note', { papers: [{ document_id: 'doc-002', count: 2 }] })
+  routes.set('/api/documents/doc-003/summary', { document_id: 'doc-003', text: '## Summary\n\nUses intermediate inputs.\n', revision: 'rev-3', status: 'ready' })
+  routes.set('/api/skills/summary', {
+    name: 'summary',
+    text: '# How to summarize a paper\n\nLead with the identification strategy.\n\n## Length\n\nAt most 120 words.\n',
+    revision: 'rev-skill',
+    customised: true,
+  })
+  routes.set('/api/changes', {
+    changes: [
+      { change_id: 'chg-7', target_kind: 'skill', target_id: 'summary', origin: 'agent', summary: 'Learned: lead with identification.', base_revision: 'a', new_revision: 'rev-skill', undoable: true, undone_at: null, created_at: '2026-01-01T00:00:05Z' },
+    ],
+  })
   routes.set('/api/related?paper', {
     notes: [{ note_id: 'welcome', title: 'Welcome', count: 1 }],
     mentions: [],
@@ -400,6 +438,26 @@ test('the library, what is open, and the panel about it', async (t) => {
   click(root.querySelector('.library-head .tag.on'))
   await settle(50)
   assert.equal(cards('paper').length, 3)
+
+  // ---- the summarizing skill: how the agent has learned to summarize, one
+  // click from the library, open to be read and changed like a note.
+  click(root.querySelector('.library [data-action="open-skill"]'))
+  await settle()
+  assert.equal(root.querySelector('.editor-bar .editor-title')?.textContent, 'How papers are summarized')
+  assert.ok((root.querySelector('.cm-content')?.textContent ?? '').includes('Lead with the identification strategy.'))
+  assert.equal(root.querySelector('.sidebar .about strong')?.textContent, 'How papers are summarized')
+  assert.ok((root.querySelector('.sidebar .about')?.textContent ?? '').includes('Tell it in the chat'))
+  assert.deepEqual(sections(), { Contents: ['How to summarize a paper', 'Length'] })
+  // What it learned is on the record, named for what it is, with a way back.
+  click(root.querySelector('.sidebar details.changes summary'))
+  root.querySelector('.sidebar details.changes').open = true
+  root.querySelector('.sidebar details.changes').dispatchEvent(new window.Event('toggle'))
+  await settle(100)
+  const learned = root.querySelector('.sidebar details.changes li')?.textContent ?? ''
+  assert.ok(learned.includes('how papers are summarized'), learned)
+  assert.ok(learned.includes('Learned: lead with identification.') && learned.includes('Undo'), learned)
+  click(root.querySelector('[data-action="library"]'))
+  await settle(50)
 
   // ---- a note, opened from its card
   click(root.querySelector('.library [data-show="notes"]'))
@@ -471,6 +529,60 @@ test('the library, what is open, and the panel about it', async (t) => {
   click(root.querySelector('[data-action="library"]'))
   await settle(100)
   assert.ok(root.querySelector('.cm-content') && root.querySelector('aside.source .pdf-bar'))
+
+  // ---- sessions: the conversation under way is a tab, with an address of its
+  // own, and what is on screen is kept with it.
+  const tabs = () =>
+    [...root.querySelectorAll('.topbar .sessions .session')].map((tab) => [
+      tab.dataset.session,
+      tab.classList.contains('on'),
+      tab.querySelector('.session-title').textContent,
+    ])
+  assert.deepEqual(tabs(), [['conv-1', true, 'What does the paper assume?']])
+  assert.equal(window.location.pathname, '/s/conv-1')
+  assert.equal(root.querySelector('.session a').getAttribute('href'), '/s/conv-1')
+  await settle(900) // The view is told a moment after it settles.
+  const kept = routes.get('/api/conversations').conversations.find((c) => c.conversation_id === 'conv-1').view
+  // (No page: nothing lays a paper out here, so none is ever in view. A paper
+  // opened from a link in the text is shown, not attached to what is asked.)
+  assert.deepEqual(kept, {
+    target: { kind: 'note', noteId: 'welcome' },
+    documentId: 'doc-002',
+    page: null,
+    attached: [],
+    library: false,
+  })
+
+  // A new session starts with nothing open: its own conversation, the library.
+  click(root.querySelector('[data-action="new-session"]'))
+  await settle(300)
+  assert.equal(window.location.pathname, '/s/conv-2')
+  assert.ok(root.querySelector('.library') && !root.querySelector('.cm-content'))
+  assert.equal(root.querySelector('aside.source'), null)
+  assert.deepEqual(tabs(), [
+    ['conv-1', false, 'What does the paper assume?'],
+    ['conv-2', true, 'New session'],
+  ])
+  // Until something is asked in it, it goes by what is open in it.
+  click(root.querySelector('.card.paper[data-document="doc-003"] .card-open'))
+  await settle(300)
+  assert.equal(tabs()[1][2], 'Levinsohn & Petrin (2003)')
+
+  // Going back to the first is going back to the work: the note, and the paper beside it.
+  click(root.querySelector('.session[data-session="conv-1"] a'))
+  await settle(300)
+  assert.equal(window.location.pathname, '/s/conv-1')
+  assert.equal(root.querySelector('.editor-bar .editor-title')?.textContent, 'Welcome')
+  assert.equal(root.querySelector('aside.source .pdf-title')?.textContent, 'Olley & Pakes (1992)')
+  // And the other kept its own.
+  click(root.querySelector('.session[data-session="conv-2"] a'))
+  await settle(300)
+  assert.equal(
+    root.querySelector('.editor-bar .editor-title')?.textContent,
+    'Summary — Levinsohn & Petrin (2003)',
+  )
+  click(root.querySelector('.session[data-session="conv-1"] a'))
+  await settle(300)
 
   // ---- deleting is asked for, confirmed, and then the note is gone from the
   // page; the paper that was beside it is what is left, and the panel is about it.

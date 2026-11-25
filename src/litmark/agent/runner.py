@@ -42,6 +42,7 @@ from ..events import (
 )
 from ..workspace import Workspace, utcnow
 from .base import AgentBackend, AgentEvent, RunContext, RunRequest
+from ..skills import read_skill
 from .prompts import summary_prompt
 
 log = logging.getLogger(__name__)
@@ -62,6 +63,19 @@ UNTITLED = "New conversation"
 # The first message replaces them; a title the user typed is never replaced.
 PLACEHOLDER_TITLES = {"", "Conversation", "Research chat", UNTITLED}
 MAX_TITLE = 80
+# A view is a handful of IDs and a page number; this is room to spare.
+MAX_VIEW_CHARS = 8000
+
+
+def _view_of(encoded: str | None) -> dict[str, Any] | None:
+    """A saved view, or nothing where there is none or it cannot be read."""
+    if not encoded:
+        return None
+    try:
+        view = json.loads(encoded)
+    except ValueError:
+        return None
+    return view if isinstance(view, dict) else None
 DEFAULT_PARALLEL_RUNS = 3
 # How much of a saved transcript a new backend session is told, when the one
 # the conversation was held in can no longer be reopened.
@@ -206,6 +220,35 @@ class AgentRunner:
         self._announce(conversation_id, "renamed")
         return self._summary_of(self._require(conversation_id))
 
+    def save_view(self, conversation_id: str, view: dict[str, Any]) -> None:
+        """Remember what was on screen with a conversation.
+
+        The view is the window's business — which note, which paper, which
+        page — and is kept as it was given. Nobody is told: it changes with
+        every click, and each window knows its own.
+        """
+        row = self._require(conversation_id)
+        if row["kind"] != CHAT:
+            raise InvalidInput("Background work has no view to come back to.")
+        encoded = json.dumps(view, ensure_ascii=False, separators=(",", ":"))
+        if len(encoded) > MAX_VIEW_CHARS:
+            raise InvalidInput("That is more than the view of one session holds.")
+        self._db.execute(
+            "UPDATE conversations SET view_json = ? WHERE id = ?", (encoded, conversation_id)
+        )
+
+    def set_closed(self, conversation_id: str, closed: bool) -> dict[str, Any]:
+        """Put a session away, or bring it back. Nothing of it is deleted."""
+        row = self._require(conversation_id)
+        if row["kind"] != CHAT:
+            raise InvalidInput("Background work is not a session to put away.")
+        self._db.execute(
+            "UPDATE conversations SET closed_at = ? WHERE id = ?",
+            (utcnow() if closed else None, conversation_id),
+        )
+        self._announce(conversation_id, "closed" if closed else "reopened")
+        return self._summary_of(self._require(conversation_id))
+
     def delete_conversation(self, conversation_id: str) -> dict[str, Any]:
         """Forget a conversation. Notes and summaries it edited are files; they stay."""
         row = self._require(conversation_id)
@@ -314,6 +357,8 @@ class AgentRunner:
         return {
             "conversation_id": conversation_id,
             "title": row["title"] or UNTITLED,
+            # Not yet named for anything asked in it.
+            "untitled": not row["title"],
             "kind": row["kind"],
             "created_at": row["created_at"],
             "updated_at": row["updated_at"],
@@ -322,6 +367,9 @@ class AgentRunner:
             "last_run_status": last["status"] if last else None,
             # Whether the backend can pick the thread up where it stopped.
             "resumable": bool(row["backend_session_id"]),
+            # What was on screen with it, as the window last left it.
+            "view": _view_of(row["view_json"]),
+            "closed": bool(row["closed_at"]),
         }
 
     def _announce(self, conversation_id: str, change: str) -> None:
@@ -471,6 +519,9 @@ class AgentRunner:
             authors=document.authors,
             year=document.year,
             details_confirmed=document.details_by is not None,
+            # As the reader wants it, as of now: what they said in conversation
+            # since the last summary is in the next one.
+            skill=str(read_skill(self._workspace)["text"]),
         )
         self._documents.set_summary_status(document_id, QUEUED)
         result = self.submit(
