@@ -529,7 +529,8 @@ select {
   .body > .source {
     min-width: 0;
   }
-  .chat-drawer {
+  .chat-drawer,
+  .rail-right {
     display: none;
   }
 }
@@ -676,10 +677,52 @@ select {
   border-color: color-mix(in srgb, var(--danger) 40%, transparent);
 }
 
-/* The panel about what is open. */
-.back-to-library {
-  align-self: flex-start;
-  text-decoration: none;
+/* Each side panel is named at its top, with the way to fold it there too. */
+.panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: -0.5rem;
+}
+
+.panel-head h3 {
+  margin: 0;
+}
+
+/* A folded panel leaves a strip at its own edge, which brings it back. */
+.body > .rail {
+  flex: none;
+  width: 1.9rem;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.55rem 0;
+  border: 0;
+  border-radius: 0;
+  background: var(--panel);
+  color: var(--muted-strong);
+  cursor: pointer;
+  overflow: hidden;
+}
+
+.rail:hover {
+  color: var(--accent);
+}
+
+.rail-left {
+  border-right: 1px solid var(--rule);
+}
+
+.rail-right {
+  border-left: 1px solid var(--rule);
+}
+
+.rail-label {
+  writing-mode: vertical-rl;
+  font-size: 0.72rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
 }
 
 .about {
@@ -2249,6 +2292,80 @@ button.tag:hover {
   margin: 0;
   font-size: 0.82rem;
   font-style: italic;
+  color: var(--muted-strong);
+}
+
+/* The agent asking leave: it stands out until it is answered. */
+.permission {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  padding: 0.5rem 0.6rem;
+  border: 1px solid var(--rule);
+  border-radius: 8px;
+  font-size: 0.86rem;
+}
+
+.permission.waiting {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.permission p {
+  margin: 0;
+}
+
+.permission-host {
+  font-weight: 600;
+}
+
+.permission-url {
+  font-size: 0.76rem;
+  overflow-wrap: anywhere;
+  color: var(--muted-strong);
+}
+
+.permission-outcome {
+  font-size: 0.8rem;
+  color: var(--muted-strong);
+}
+
+.permission-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  margin-top: 0.15rem;
+}
+
+.permission-actions button {
+  border: 1px solid var(--rule);
+  border-radius: 6px;
+  padding: 0.2rem 0.7rem;
+  background: var(--panel);
+}
+
+.permission-actions button.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--panel);
+  font-weight: 600;
+}
+
+.downloads-setting {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  font-size: 0.74rem;
+  color: var(--muted);
+}
+
+.downloads-setting select {
+  font-size: 0.74rem;
+  padding: 0.05rem 0.15rem;
+  border: 1px solid var(--rule);
+  border-radius: 5px;
+  background: var(--bg);
   color: var(--muted-strong);
 }
 

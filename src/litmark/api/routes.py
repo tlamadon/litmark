@@ -131,6 +131,14 @@ class TagsChange(BaseModel):
     remove: list[str] = Field(default_factory=list)
 
 
+class SettingsChange(BaseModel):
+    downloads: str
+
+
+class PermissionAnswer(BaseModel):
+    answer: str
+
+
 class SyncRequest(BaseModel):
     # Settles a conflict by keeping one side: "mine" or "theirs".
     resolve: str | None = None
@@ -710,7 +718,29 @@ def build_router() -> APIRouter:
 
     @router.post("/runs/{run_id}/cancel")
     async def cancel_run(request: Request, run_id: str) -> dict[str, Any]:
-        return await services_of(request).runner.cancel(run_id)
+        services = services_of(request)
+        # A run waiting on the reader's answer has a tool held open: let it go.
+        services.permissions.stop_run(run_id)
+        return await services.runner.cancel(run_id)
+
+    # --------------------------------------------- settings and permissions
+
+    @router.get("/settings")
+    async def get_settings(request: Request) -> dict[str, Any]:
+        return {"downloads": services_of(request).download_mode()}
+
+    @router.put("/settings")
+    async def put_settings(request: Request, body: SettingsChange) -> dict[str, Any]:
+        return {"downloads": services_of(request).set_download_mode(body.downloads)}
+
+    @router.post("/permissions/{request_id}")
+    async def answer_permission(
+        request: Request, request_id: str, body: PermissionAnswer
+    ) -> dict[str, Any]:
+        """The reader's answer to something the agent asked leave to do."""
+        if not services_of(request).answer_permission(request_id, body.answer):
+            raise NotFound("That request is no longer waiting for an answer.")
+        return {"request_id": request_id, "answer": body.answer}
 
     # -------------------------------------------------------------- changes
 

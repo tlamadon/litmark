@@ -190,6 +190,12 @@ export interface AgentStatus {
   detail: string | null
 }
 
+/** Whether the agent may fetch papers from the web. */
+export type DownloadMode = 'always' | 'ask' | 'never'
+
+/** The reader's answer when the agent asks leave to do something. */
+export type PermissionAnswer = 'allow' | 'always' | 'deny'
+
 export interface ProjectState {
   project: { name: string; root: string; schema_version: number }
   agent: AgentStatus
@@ -198,6 +204,7 @@ export interface ProjectState {
   notes: NoteSummary[]
   conversations: ConversationSummary[]
   latest_seq: number
+  settings?: { downloads: DownloadMode }
   /** Whether the server asks for a password, and so has a session to end. */
   auth?: { password: boolean }
 }
@@ -608,6 +615,16 @@ export const api = {
     request<{ run_id: string; conversation_id: string; status: string }>(
       `/conversations/${encodeURIComponent(id)}/messages`,
       { method: 'POST', body: JSON.stringify({ prompt, context }) },
+    ),
+  setDownloads: (downloads: DownloadMode) =>
+    request<{ downloads: DownloadMode }>('/settings', {
+      method: 'PUT',
+      body: JSON.stringify({ downloads }),
+    }),
+  answerPermission: (requestId: string, answer: PermissionAnswer) =>
+    request<{ request_id: string; answer: string }>(
+      `/permissions/${encodeURIComponent(requestId)}`,
+      { method: 'POST', body: JSON.stringify({ answer }) },
     ),
   cancelRun: (runId: string) =>
     request<{ run_id: string; status: string }>(`/runs/${encodeURIComponent(runId)}/cancel`, {

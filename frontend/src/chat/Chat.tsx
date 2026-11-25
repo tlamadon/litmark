@@ -19,6 +19,7 @@ import {
   type ChangeRecord,
   type ConversationSummary,
   type DocumentRecord,
+  type DownloadMode,
   type MessageContext,
   type NoteSummary,
 } from '../api'
@@ -48,6 +49,11 @@ export interface ChatProps {
   onOpen: (target: OpenTarget) => void
   onOpenSource: (referenceId: string) => void
   onUndo: (changeId: string) => void
+  /** Fold the chat away, to a strip at the edge that brings it back. */
+  onCollapse: () => void
+  /** Whether the agent may fetch papers from the web, and the way to change it. */
+  downloads: DownloadMode
+  onDownloads: (mode: DownloadMode) => void
 }
 
 /** Close enough to the end that new text should keep the view there. */
@@ -168,6 +174,16 @@ export function Chat(props: ChatProps) {
             Transcript
           </button>
         </div>
+        <button
+          type="button"
+          class="ghost icon"
+          data-action="hide-chat"
+          title="Hide the chat"
+          aria-label="Hide the chat"
+          onClick={props.onCollapse}
+        >
+          »
+        </button>
       </header>
 
       {!props.agent.ready && (
@@ -231,6 +247,12 @@ export function Chat(props: ChatProps) {
               onStop={(runId) => void stop(runId)}
               onRetry={(again: Turn) => void send(again.prompt ?? '', again.context ?? {})}
               onUndo={props.onUndo}
+              onPermission={(requestId, answer) => {
+                // The answer comes back as an event, which settles the card.
+                void api.answerPermission(requestId, answer).catch((error: unknown) => {
+                  setProblem(error instanceof Error ? error.message : String(error))
+                })
+              }}
             />
           ))
         ) : (
@@ -252,6 +274,8 @@ export function Chat(props: ChatProps) {
         draft={draft}
         busy={active.length > 0}
         readOnly={background}
+        downloads={props.downloads}
+        onDownloads={props.onDownloads}
         onDraft={setDraft}
         onContextChange={props.onContextChange}
         onSend={() => {

@@ -99,6 +99,7 @@ model = "claude-opus-5"   # what answers; the adapter's default when unset
 effort = "medium"         # reasoning effort, when the model takes one
 max_parallel_runs = 3     # conversations that may be working at once
 auto_summary = true       # summarize a paper when it is imported
+downloads = "ask"         # may the agent fetch a paper from the web: always, ask, never
 ```
 
 ## Sessions
@@ -687,7 +688,7 @@ without having checked anything.
 
 v0.1 covers ingestion of text-based PDFs, cited summaries, Markdown live-preview
 editing, PDF evidence with highlights, chat with one agent backend, and manual
-references. Deferred: OCR, URL downloads, Word/HTML ingestion, Zotero
+references. Deferred: OCR, Word/HTML ingestion, Zotero
 integration, semantic search, multiple agent providers, arbitrary analysis
 execution, multi-user collaboration, full mobile editing, and public hosting.
 

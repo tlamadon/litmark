@@ -374,7 +374,11 @@ export function App() {
 
       source = new EventStream(setConnected)
       source.subscribe((event: ServerEvent) => {
-        if (event.type === 'document_updated' || event.type === 'job_updated') {
+        if (
+          event.type === 'document_updated' ||
+          event.type === 'job_updated' ||
+          event.type === 'settings_updated'
+        ) {
           void refreshState()
         }
         if (event.type === 'document_updated') {
@@ -1191,14 +1195,6 @@ export function App() {
         .join(' ')}
     >
       <header class="topbar">
-        <button
-          type="button"
-          class="ghost"
-          onClick={() => setShowSidebar(!showSidebar)}
-          title={inLibrary ? 'Toggle the tag filters' : 'Toggle the panel about what is open'}
-        >
-          ☰
-        </button>
         <h1 title={state.project.root}>{state.project.name}</h1>
         <button
           type="button"
@@ -1242,14 +1238,6 @@ export function App() {
             Agent not configured
           </span>
         )}
-        <button
-          type="button"
-          class={showChat ? 'ghost active' : 'ghost'}
-          onClick={() => setShowChat(!showChat)}
-          title="Toggle the chat drawer"
-        >
-          Chat
-        </button>
         {state.auth?.password && (
           <button
             type="button"
@@ -1274,8 +1262,9 @@ export function App() {
       )}
 
       <div class="body" style={{ '--chat-width': `${chatWidth}px` }}>
-        {showSidebar && (
+        {showSidebar ? (
           <Sidebar
+            onCollapse={() => setShowSidebar(false)}
             library={inLibrary}
             documents={state.documents}
             notes={state.notes}
@@ -1295,7 +1284,6 @@ export function App() {
               if (narrow) setSourceTakesOver(true)
             }}
             related={related && related.key === subjectKey ? related.value : null}
-            onOpenLibrary={() => setLibrary(true)}
             onOpenNote={(noteId) => {
               setTarget({ kind: 'note', noteId })
               setSourceTakesOver(false)
@@ -1324,6 +1312,17 @@ export function App() {
             onUndo={(change) => void undo(change)}
             onLoadChanges={async () => setChanges((await api.changes()).changes)}
           />
+        ) : (
+          <button
+            type="button"
+            class="rail rail-left"
+            data-action="show-sidebar"
+            title={inLibrary ? 'Show the tag filters' : 'Show the panel about what is open'}
+            onClick={() => setShowSidebar(true)}
+          >
+            <span aria-hidden="true">»</span>
+            <span class="rail-label">{inLibrary ? 'Tags' : 'About'}</span>
+          </button>
         )}
 
         {inLibrary && (
@@ -1451,7 +1450,7 @@ export function App() {
           </aside>
         )}
 
-        {showChat && (
+        {showChat ? (
           <aside class="chat-drawer">
             <div
               class="chat-splitter"
@@ -1487,8 +1486,27 @@ export function App() {
               onOpen={openTarget}
               onOpenSource={(id) => void openSource(id)}
               onUndo={(changeId) => void undo({ change_id: changeId })}
+              onCollapse={() => setShowChat(false)}
+              downloads={state.settings?.downloads ?? 'ask'}
+              onDownloads={(mode) => {
+                // The server announces the change, and the state is read again.
+                void api.setDownloads(mode).catch((error: unknown) => {
+                  setInsertNotice(error instanceof Error ? error.message : String(error))
+                })
+              }}
             />
           </aside>
+        ) : (
+          <button
+            type="button"
+            class="rail rail-right"
+            data-action="show-chat"
+            title="Show the chat"
+            onClick={() => setShowChat(true)}
+          >
+            <span aria-hidden="true">«</span>
+            <span class="rail-label">Chat</span>
+          </button>
         )}
       </div>
     </div>

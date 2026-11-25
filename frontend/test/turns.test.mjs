@@ -381,3 +381,35 @@ test('an edit says who made it, and whether that was from outside', () => {
   assert.match(outside.title, /over MCP/)
   assert.equal(describeOrigin('user').outside, false)
 })
+
+test('a request to download waits in the turn, then shows how it was settled', () => {
+  let turns = []
+  const run = { run_id: 'run-ask', conversation_id: 'conv-1' }
+  for (const event of [
+    durable('run_started', { ...run }),
+    durable('tool_started', {
+      ...run,
+      tool: 'download_paper',
+      tool_use_id: 't1',
+      input: { url: 'https://arxiv.org/pdf/2401.01234' },
+    }),
+    durable('permission_requested', {
+      ...run,
+      request_id: 'ask-1',
+      url: 'https://arxiv.org/pdf/2401.01234',
+      host: 'arxiv.org',
+    }),
+  ]) {
+    turns = applyEvent(turns, event)
+  }
+  const waiting = turns[0].entries.at(-1)
+  assert.equal(waiting.kind, 'permission')
+  assert.equal(waiting.answer, null)
+  assert.equal(describeTool(turns[0].entries[0], NAMES).verb, 'downloading')
+
+  turns = applyEvent(turns, durable('permission_resolved', { ...run, request_id: 'ask-1', answer: 'deny' }))
+  assert.equal(turns[0].entries.at(-1).answer, 'deny')
+  // An answer to a request this turn never made changes nothing.
+  const same = applyEvent(turns, durable('permission_resolved', { ...run, request_id: 'ask-9', answer: 'allow' }))
+  assert.equal(same[0].entries.at(-1).answer, 'deny')
+})

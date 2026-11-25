@@ -128,7 +128,11 @@ class FakeBackend(AgentBackend):
                 yield AgentEvent(
                     TOOL_STARTED, {"tool": name, "tool_use_id": tool_use_id, "input": arguments}
                 )
-                result = dispatch(self._tools, name, arguments)
+                # Off the loop, as the live backend runs them: a tool may wait
+                # for the reader, who answers through this same loop.
+                result = await asyncio.get_running_loop().run_in_executor(
+                    None, dispatch, self._tools, name, arguments
+                )
                 if name == "resolve_source" and result.get("reference_id"):
                     last_reference = str(result["reference_id"])
                 yield AgentEvent(

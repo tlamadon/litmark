@@ -10,7 +10,7 @@
 
 import { useMemo } from 'preact/hooks'
 
-import type { ChangeRecord, MessageContext } from '../api'
+import type { ChangeRecord, MessageContext, PermissionAnswer } from '../api'
 import { renderMarkdown } from '../markdown'
 import {
   describeChange,
@@ -20,7 +20,13 @@ import {
   type Names,
   type OpenTarget,
 } from './describe'
-import { isFinished, type ChangeEntry, type Entry, type Turn } from './turns'
+import {
+  isFinished,
+  type ChangeEntry,
+  type Entry,
+  type PermissionEntry,
+  type Turn,
+} from './turns'
 
 /** Steps beyond this many, once prose has followed them, fold to a count. */
 const FOLD_ABOVE = 3
@@ -28,6 +34,7 @@ const FOLD_ABOVE = 3
 type Block =
   | { kind: 'text'; text: string; unfinished: boolean }
   | { kind: 'notice'; text: string }
+  | { kind: 'permission'; entry: PermissionEntry }
   | { kind: 'steps'; steps: Step[] }
 
 interface Step extends Activity {
@@ -44,6 +51,10 @@ function blocksOf(entries: Entry[], names: Names): Block[] {
     }
     if (entry.kind === 'notice') {
       blocks.push({ kind: 'notice', text: entry.text })
+      continue
+    }
+    if (entry.kind === 'permission') {
+      blocks.push({ kind: 'permission', entry })
       continue
     }
     // An edit is announced by the step that made it; the change itself is
@@ -89,6 +100,8 @@ export interface TurnViewProps {
   onStop: (runId: string) => void
   onRetry: (turn: Turn) => void
   onUndo: (changeId: string) => void
+  /** Answer the agent's request to download a paper. */
+  onPermission: (requestId: string, answer: PermissionAnswer) => void
 }
 
 export function TurnView({ turn, names, ...actions }: TurnViewProps) {
@@ -144,6 +157,16 @@ export function TurnView({ turn, names, ...actions }: TurnViewProps) {
                 <p key={index} class="turn-notice">
                   {block.text}
                 </p>
+              )
+            }
+            if (block.kind === 'permission') {
+              return (
+                <Permission
+                  key={block.entry.requestId}
+                  entry={block.entry}
+                  live={live}
+                  onAnswer={actions.onPermission}
+                />
               )
             }
             // The steps of the moment stay open; earlier runs of them fold.
@@ -293,6 +316,68 @@ function AttachedContext({
   }
   if (pieces.length === 0) return null
   return <div class="turn-context">{pieces}</div>
+}
+
+const SETTLED: Record<string, string> = {
+  allow: 'Allowed.',
+  always: 'Allowed, and downloads are now always allowed.',
+  deny: 'Not allowed.',
+  expired: 'Not answered in time, so nothing was downloaded.',
+  stopped: 'Stopped before it was answered.',
+}
+
+/** The agent asking leave to fetch a paper, with the address in full. */
+function Permission({
+  entry,
+  live,
+  onAnswer,
+}: {
+  entry: PermissionEntry
+  live: boolean
+  onAnswer: (requestId: string, answer: PermissionAnswer) => void
+}) {
+  const waiting = entry.answer === null && live
+  return (
+    <div
+      class={waiting ? 'permission waiting' : 'permission'}
+      role={waiting ? 'alertdialog' : undefined}
+      aria-label="The agent asks to download a paper"
+      data-request={entry.requestId}
+    >
+      <p>
+        {waiting ? 'Download this paper?' : 'Asked to download'}{' '}
+        <span class="permission-host">{entry.host}</span>
+      </p>
+      <code class="permission-url">{entry.url}</code>
+      {waiting ? (
+        <div class="permission-actions">
+          <button
+            type="button"
+            class="primary"
+            data-answer="allow"
+            onClick={() => onAnswer(entry.requestId, 'allow')}
+          >
+            Allow
+          </button>
+          <button
+            type="button"
+            data-answer="always"
+            title="Stop asking: the agent may download any paper you ask it for"
+            onClick={() => onAnswer(entry.requestId, 'always')}
+          >
+            Always allow
+          </button>
+          <button type="button" data-answer="deny" onClick={() => onAnswer(entry.requestId, 'deny')}>
+            Don’t allow
+          </button>
+        </div>
+      ) : (
+        <p class="permission-outcome">
+          {entry.answer ? SETTLED[entry.answer] : 'The run ended before it was answered.'}
+        </p>
+      )}
+    </div>
+  )
 }
 
 function Steps({

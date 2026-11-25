@@ -7,6 +7,7 @@ SQLite under ``.research/`` holds operational state only.
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import re
 import shutil
@@ -248,6 +249,47 @@ class Workspace:
             return {}
         with self.project_file.open("rb") as handle:
             return tomllib.load(handle)
+
+    def set_setting(self, table: str, key: str, value: str) -> None:
+        """Set one string setting in project.toml, leaving the rest as written.
+
+        The file is the reader's, with their comments and order, so it is
+        edited in place rather than written out again from what was parsed.
+        """
+        if not re.fullmatch(r"[A-Za-z0-9_]+", table) or not re.fullmatch(r"[A-Za-z0-9_]+", key):
+            raise InvalidInput("A setting is named by plain words.")
+        line = f"{key} = {json.dumps(value)}"
+        with self._lock_for(PROJECT_FILE):
+            text = self.project_file.read_text(encoding="utf-8") if self.project_file.is_file() else ""
+            lines = text.splitlines()
+            header = next(
+                (i for i, item in enumerate(lines) if re.fullmatch(rf"\[\s*{table}\s*\]\s*(#.*)?", item.strip())),
+                None,
+            )
+            if header is None:
+                if lines and lines[-1].strip():
+                    lines.append("")
+                lines += [f"[{table}]", line]
+            else:
+                end = next(
+                    (i for i in range(header + 1, len(lines)) if lines[i].lstrip().startswith("[")),
+                    len(lines),
+                )
+                existing = next(
+                    (i for i in range(header + 1, end) if re.match(rf"\s*{key}\s*=", lines[i])),
+                    None,
+                )
+                if existing is not None:
+                    lines[existing] = line
+                else:
+                    # After the table's last setting, before the blank lines that close it.
+                    at = end
+                    while at > header + 1 and not lines[at - 1].strip():
+                        at -= 1
+                    lines.insert(at, line)
+            updated = "\n".join(lines) + "\n"
+            tomllib.loads(updated)  # never leave a file that cannot be read
+            atomic_write_text(self.project_file, updated)
 
     # ----------------------------------------------------------- path safety
 

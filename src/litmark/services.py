@@ -12,6 +12,7 @@ import logging
 import secrets
 import threading
 import time
+import urllib.parse
 from pathlib import Path
 from typing import Any
 
@@ -19,12 +20,22 @@ from .agent.base import AgentBackend, Availability
 from .agent.claude_sdk import ClaudeAgentBackend
 from .agent.fake import FakeBackend
 from .agent.runner import DEFAULT_PARALLEL_RUNS, AgentRunner
-from .agent.tools import ProjectTools
+from . import downloads
+from .agent.tools import AGENT, ProjectTools
 from .bibliography import Bibliography, build_bibliography
 from .db import Database
 from .documents import DocumentStore, normalize_tags
-from .errors import WorkspaceError
-from .events import DOCUMENT_UPDATED, FILE_CHANGED, SYNC_UPDATED, EventBus
+from .downloads import Permissions
+from .errors import InvalidInput, WorkspaceError
+from .events import (
+    DOCUMENT_UPDATED,
+    FILE_CHANGED,
+    PERMISSION_REQUESTED,
+    PERMISSION_RESOLVED,
+    SETTINGS_UPDATED,
+    SYNC_UPDATED,
+    EventBus,
+)
 from .gitsync import GitError, GitSync
 from .jobs import JobQueue
 from .papersync import PaperSync
@@ -91,6 +102,8 @@ class Services:
         self.tools = ProjectTools(workspace, self.documents, self.references, self.db)
         self.tools.on_documents_changed = self.announce_documents
         self.tools.on_external_change = self._announce_change
+        self.tools.downloader = self._download_paper
+        self.permissions = Permissions()
         self.auto_summary = bool(agent_settings.get("auto_summary", True))
 
         self.backend_name = backend_name or str(agent_settings.get("backend", "claude"))
@@ -182,6 +195,98 @@ class Services:
             self.enqueue_extraction(document_id, summarize=summarize)
         self.announce_documents([document_id])
         return {"document_id": document_id, "duplicate": duplicate}
+
+    # ------------------------------------------------------------ downloads
+
+    def download_mode(self) -> str:
+        """Whether the agent may fetch papers from the web: always, ask, never."""
+        return downloads.mode_of(self.workspace.settings())
+
+    def set_download_mode(self, mode: str) -> str:
+        if mode not in downloads.MODES:
+            raise InvalidInput(f"Downloads are one of: {', '.join(downloads.MODES)}.")
+        self.workspace.set_setting("agent", "downloads", mode)
+        self.bus.publish(SETTINGS_UPDATED, {"downloads": mode})
+        return mode
+
+    def answer_permission(self, request_id: str, answer: str) -> bool:
+        if answer not in downloads.ANSWERS:
+            raise InvalidInput(f"An answer is one of: {', '.join(downloads.ANSWERS)}.")
+        return self.permissions.answer(request_id, answer)
+
+    def _download_paper(self, url: str, tags: list[str], run_id: str | None) -> dict[str, Any]:
+        """Fetch a paper for one of the agent's runs, as far as the reader allows.
+
+        Runs on the tool's own thread, and in `ask` mode stays there until the
+        reader has answered in the conversation.
+        """
+
+        def refused(code: str, message: str) -> dict[str, Any]:
+            return {"ok": False, "error": code, "message": message}
+
+        mode = self.download_mode()
+        if mode == downloads.NEVER:
+            return refused(
+                "downloads_off",
+                "The reader has turned downloads off. Tell them so; they can import "
+                "the PDF themselves, or allow downloads beside the chat box.",
+            )
+        run = (
+            self.db.query_one("SELECT conversation_id, kind FROM runs WHERE id = ?", (run_id,))
+            if run_id
+            else None
+        )
+        # Only in a conversation, where the reader is: background work reads
+        # papers, and a paper's text must never be what sets off a download.
+        if run is None or run["kind"] != "chat":
+            return refused(
+                "downloads_unavailable",
+                "Papers are downloaded only in a conversation with the reader.",
+            )
+        target = downloads.normalize(url)
+        host = urllib.parse.urlsplit(target).hostname or ""
+
+        if mode == downloads.ASK:
+            assert run_id is not None
+            scope = {"conversation_id": run["conversation_id"], "run_id": run_id}
+            request_id = self.permissions.open(run_id, target)
+            self.bus.publish(
+                PERMISSION_REQUESTED,
+                {"request_id": request_id, "action": "download", "url": target, "host": host},
+                **scope,
+            )
+            answer = self.permissions.wait(request_id)
+            if answer == downloads.ALLOW_ALWAYS:
+                self.set_download_mode(downloads.ALWAYS)
+            self.bus.publish(
+                PERMISSION_RESOLVED, {"request_id": request_id, "answer": answer}, **scope
+            )
+            if answer == downloads.DENY:
+                return refused(
+                    "download_declined",
+                    "The reader declined this download. Do not try it again, by this "
+                    "address or another, unless they ask.",
+                )
+            if answer not in (downloads.ALLOW, downloads.ALLOW_ALWAYS):
+                return refused(
+                    "download_unanswered",
+                    "The reader did not answer, so nothing was downloaded. Say that "
+                    "the download is waiting on them, and carry on with the rest.",
+                )
+
+        fetched = downloads.fetch_pdf(target, max_bytes=self.documents.max_upload_bytes)
+        imported = self.import_paper(fetched.data, fetched.filename, tags=tags, origin=AGENT)
+        return {
+            "ok": True,
+            **imported,
+            "url": fetched.url,
+            "filename": fetched.filename,
+            "note": (
+                "Already in the library."
+                if imported["duplicate"]
+                else "Imported. Its text is being extracted; read_pages answers once that is done."
+            ),
+        }
 
     def _outside_edits(self) -> str:
         """For a commit message: which sessions elsewhere wrote what is in it.
@@ -412,6 +517,7 @@ class Services:
                 "schema_version": settings.get("schema_version", 1),
             },
             "agent": self.agent_availability().to_json(),
+            "settings": {"downloads": downloads.mode_of(settings)},
             "documents": documents,
             "tags": self.documents.all_tags(),
             "notes": [note.to_json(include_text=False) for note in self.workspace.list_notes()],

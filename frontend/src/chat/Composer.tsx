@@ -9,7 +9,7 @@
 
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks'
 
-import type { AgentStatus, DocumentRecord, MessageContext } from '../api'
+import type { AgentStatus, DocumentRecord, DownloadMode, MessageContext } from '../api'
 import { shorten, type Names } from './describe'
 
 export interface ComposerProps {
@@ -26,6 +26,8 @@ export interface ComposerProps {
   onContextChange: (context: MessageContext) => void
   onSend: () => void
   onStop: () => void
+  downloads: DownloadMode
+  onDownloads: (mode: DownloadMode) => void
 }
 
 /** Past this many attached papers, the chips give way to a count. */
@@ -180,6 +182,23 @@ export function Composer(props: ComposerProps) {
             ? 'Working — a new message waits its turn'
             : 'Enter to send · Shift-Enter for a new line'}
         </span>
+        <label
+          class="downloads-setting"
+          title="Whether the agent may download a paper from the web when you ask it to add one"
+        >
+          Downloads
+          <select
+            value={props.downloads}
+            data-setting="downloads"
+            onChange={(event) =>
+              props.onDownloads((event.target as HTMLSelectElement).value as DownloadMode)
+            }
+          >
+            <option value="ask">ask</option>
+            <option value="always">always</option>
+            <option value="never">never</option>
+          </select>
+        </label>
         {props.busy && (
           <button type="button" class="stop" onClick={props.onStop}>
             Stop

@@ -57,7 +57,8 @@ export interface SidebarProps {
   onGotoPage: (page: number) => void
   related: RelatedToNote | RelatedToPaper | null
 
-  onOpenLibrary: () => void
+  /** Fold the panel away, to a strip at the edge that brings it back. */
+  onCollapse: () => void
   onOpenNote: (noteId: string) => void
   /** Open a paper: its summary, with the PDF beside it. */
   onOpenPaper: (documentId: string) => void
@@ -94,9 +95,21 @@ export function Sidebar(props: SidebarProps) {
 
   return (
     <nav class="sidebar" aria-label={props.library ? 'Filters' : 'About what is open'}>
+      <header class="panel-head">
+        <h3>{props.library ? 'Tags' : 'About'}</h3>
+        <button
+          type="button"
+          class="ghost icon"
+          data-action="hide-sidebar"
+          title="Hide this panel"
+          aria-label="Hide this panel"
+          onClick={props.onCollapse}
+        >
+          «
+        </button>
+      </header>
       {props.library ? (
         <section>
-          <h3>Tags</h3>
           {props.tags.length === 0 && untagged === 0 ? (
             <p class="muted">
               No tags yet. A tag gathers papers: a field, a year, a shortlist.
@@ -113,9 +126,6 @@ export function Sidebar(props: SidebarProps) {
         </section>
       ) : (
         <>
-          <button type="button" class="link back-to-library" onClick={props.onOpenLibrary}>
-            ← Library
-          </button>
           {subject?.kind === 'skill' && (
             <section class="about">
               <strong>How papers are summarized</strong>

@@ -41,7 +41,17 @@ export interface NoticeEntry {
   text: string
 }
 
-export type Entry = TextEntry | ToolEntry | ChangeEntry | NoticeEntry
+/** The agent asked leave to do something, and what came of it. */
+export interface PermissionEntry {
+  kind: 'permission'
+  requestId: string
+  url: string
+  host: string
+  /** How it was settled; null while it waits for the reader. */
+  answer: 'allow' | 'always' | 'deny' | 'expired' | 'stopped' | null
+}
+
+export type Entry = TextEntry | ToolEntry | ChangeEntry | NoticeEntry | PermissionEntry
 
 export interface Turn {
   runId: string
@@ -216,6 +226,29 @@ export function foldEvent(turn: Turn, event: RunEvent): Turn {
         summary: String(event.summary ?? ''),
       }
       return { ...settled, entries: [...settled.entries, entry] }
+    }
+
+    case 'permission_requested': {
+      const settled = settle(turn)
+      const entry: PermissionEntry = {
+        kind: 'permission',
+        requestId: String(event.request_id ?? ''),
+        url: String(event.url ?? ''),
+        host: String(event.host ?? ''),
+        answer: null,
+      }
+      return { ...settled, entries: [...settled.entries, entry] }
+    }
+
+    case 'permission_resolved': {
+      const index = turn.entries.findIndex(
+        (entry) => entry.kind === 'permission' && entry.requestId === String(event.request_id),
+      )
+      if (index < 0) return turn
+      const entries = turn.entries.slice()
+      const answer = String(event.answer ?? 'expired') as PermissionEntry['answer']
+      entries[index] = { ...(entries[index] as PermissionEntry), answer }
+      return { ...turn, entries }
     }
 
     case 'notice': {

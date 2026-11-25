@@ -245,6 +245,24 @@ export function describeTool(entry: ToolEntry, names: Names): Activity {
       }
     }
 
+    case 'download_paper': {
+      let host = text(input.url)
+      try {
+        host = new URL(host).hostname
+      } catch {
+        /* not an address: shown as it was given */
+      }
+      const got = text(result?.document_id)
+      return {
+        ...base,
+        tone: entry.finished && !entry.isError ? 'ok' : tone,
+        verb: !entry.finished ? 'downloading' : entry.isError ? 'download — refused' : 'downloaded',
+        target: got ? names.document(got) : `a paper from ${shorten(host, 40)}`,
+        detail: refusal ?? text(input.url),
+        open: got ? { kind: 'document', documentId: got, page: 1 } : undefined,
+      }
+    }
+
     case 'read_skill':
       return {
         ...base,
@@ -407,6 +425,12 @@ export function transcriptOf(turn: Turn): TranscriptLine[] {
         break
       case 'notice':
         lines.push({ tone: 'notice', text: `  ${entry.text}` })
+        break
+      case 'permission':
+        lines.push({
+          tone: 'notice',
+          text: `  ? download ${entry.url} — ${entry.answer ?? 'waiting for an answer'}`,
+        })
         break
     }
   }

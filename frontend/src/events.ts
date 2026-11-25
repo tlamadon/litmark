@@ -101,6 +101,9 @@ export class EventStream {
 
 const KNOWN_EVENTS = [
   'text_delta',
+  'permission_requested',
+  'permission_resolved',
+  'settings_updated',
   'tool_started',
   'tool_finished',
   'file_proposed',

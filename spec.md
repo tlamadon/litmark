@@ -240,6 +240,8 @@ Provide project tools with explicit schemas:
 
 Use the agent runtime's tool loop; avoid terminal screen scraping. Configure its available tools explicitly — with the Claude Agent SDK this means the `tools` allowlist, not only `allowed_tools`/`disallowed_tools`, which still let the runtime load its own built-ins such as tool search. Any direct file editing must go through staging and the versioned commit mechanism below. Disable unrestricted shell and unrelated host tools in the initial research mode; running arbitrary analysis code can be added as a separately scoped capability.
 
+**Downloading papers.** The agent has one way to the network: `download_paper`, which fetches the PDF at an address the reader gave and imports it. The reader decides whether it may, by `[agent] downloads` in the project file: `ask` (the default) holds the tool call open and shows the address in the conversation with *Allow*, *Always allow* (which sets `always`) and *Don't allow*; `always` fetches without asking; `never` refuses. An unanswered request lapses after ten minutes, and stopping the run ends it. Because the agent reads untrusted text, the fetch is narrow whatever the setting: `http`/`https` only; only hosts on the public internet, checked on the connection actually made and again at each redirect — never loopback, a local network or a tailnet; no proxy; a PDF, no larger than an upload may be. It is offered only in a conversation, not to background work such as summaries, and not over MCP, where a session fetches for itself and uses `add_paper`.
+
 ## 8. Human and agent editing
 
 Prevent silent overwrites when the user and agent work on the same note.
@@ -368,7 +370,7 @@ The target application includes ingestion, summaries, live-preview editing, PDF 
 
 Prototype the live-preview cursor behavior and quote-to-PDF geometry early. For a short class, provide the shell and editor integration as starter code and let students build a complete document-to-agent-to-note workflow. Building the full application from an empty repository is a larger exercise.
 
-Deferred: OCR, document URL downloads, Word/HTML ingestion, Zotero and other reference-manager integration, semantic search, multiple agent providers, arbitrary analysis execution, multi-user collaboration, full mobile editing, complex tables, and multi-user public hosting. Keep extension points small rather than building a plugin framework first.
+Deferred: OCR, Word/HTML ingestion, Zotero and other reference-manager integration, semantic search, multiple agent providers, arbitrary analysis execution, multi-user collaboration, full mobile editing, complex tables, and multi-user public hosting. Keep extension points small rather than building a plugin framework first.
 
 ## 12. Acceptance criteria
 

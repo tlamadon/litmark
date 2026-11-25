@@ -32,7 +32,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 from . import __version__
-from .agent.tools import TOOL_SCHEMAS, as_text, dispatch
+from .agent.tools import LOCAL_TOOLS, TOOL_SCHEMAS, as_text, dispatch
 from .documents import normalize_tags
 from .errors import WorkspaceError
 
@@ -163,7 +163,10 @@ ADD_PAPER_SCHEMA: dict[str, Any] = {
     },
 }
 
-MCP_TOOL_SCHEMAS: list[dict[str, Any]] = [*TOOL_SCHEMAS, ADD_PAPER_SCHEMA]
+MCP_TOOL_SCHEMAS: list[dict[str, Any]] = [
+    *(schema for schema in TOOL_SCHEMAS if schema["name"] not in LOCAL_TOOLS),
+    ADD_PAPER_SCHEMA,
+]
 
 
 def check_token(token: str) -> str:
