@@ -10,7 +10,13 @@
  * They sit in a row in the top bar. Each has an address of its own, so one can
  * be opened in another window and kept there. Closing one puts it away; it is
  * not deleted, and the list in the chat drawer brings it back.
+ *
+ * A session is named after the first thing asked in it, which is not always
+ * what it turns out to be about. Double-clicking a tab (or F2 on it) puts the
+ * name up to be typed over, there in the tab.
  */
+
+import { useLayoutEffect, useRef, useState } from 'preact/hooks'
 
 import type { ConversationSummary } from './api'
 import { addressOf, openSessions } from './sessionView'
@@ -27,10 +33,84 @@ export interface SessionsProps {
   onSelect: (id: string) => void
   onNew: () => void
   onClose: (id: string) => void
+  /** Give a session a name of the reader's choosing. Rejects with the reason. */
+  onRename: (id: string, title: string) => Promise<void>
+}
+
+/** A tab's name, up to be typed over. Enter keeps it; Escape leaves it as it was. */
+function SessionName(props: {
+  label: string
+  onKeep: (title: string) => Promise<void>
+  onDone: () => void
+}) {
+  const [title, setTitle] = useState(props.label)
+  const [problem, setProblem] = useState<string | null>(null)
+  const input = useRef<HTMLInputElement | null>(null)
+  // Settled once: Enter is followed by the field losing focus, which must not
+  // keep the name a second time, and Escape by a blur that must not keep it.
+  const settled = useRef(false)
+  // Before the tab is drawn, not after: what is typed next belongs to the field.
+  useLayoutEffect(() => {
+    input.current?.focus()
+    input.current?.select()
+  }, [])
+
+  const keep = async (): Promise<void> => {
+    if (settled.current) return
+    // What the field holds now, not what was last drawn: Enter can come
+    // straight after the last letter.
+    const wanted = (input.current?.value ?? title).trim()
+    // Emptied, or left as it was: nothing to say to the server.
+    if (!wanted || wanted === props.label) {
+      settled.current = true
+      props.onDone()
+      return
+    }
+    settled.current = true
+    try {
+      await props.onKeep(wanted)
+      props.onDone()
+    } catch (error) {
+      settled.current = false
+      setProblem(error instanceof Error ? error.message : 'That did not work.')
+      input.current?.focus()
+    }
+  }
+
+  return (
+    <input
+      ref={input}
+      class="session-name"
+      type="text"
+      value={title}
+      maxLength={200}
+      aria-label="Session name"
+      aria-invalid={problem !== null}
+      title={problem ?? 'Enter to keep the name, Escape to leave it as it was'}
+      onInput={(event) => {
+        setTitle((event.target as HTMLInputElement).value)
+        setProblem(null)
+      }}
+      onKeyDown={(event) => {
+        if (event.key === 'Enter') {
+          event.preventDefault()
+          void keep()
+        } else if (event.key === 'Escape') {
+          event.preventDefault()
+          // Its own, not the page's: Escape here only gives up the renaming.
+          event.stopPropagation()
+          settled.current = true
+          props.onDone()
+        }
+      }}
+      onBlur={() => void keep()}
+    />
+  )
 }
 
 export function Sessions(props: SessionsProps) {
   const sessions = openSessions(props.conversations, props.currentId)
+  const [renaming, setRenaming] = useState<string | null>(null)
   return (
     <nav class="sessions" aria-label="Sessions">
       {sessions.map((session) => {
@@ -46,6 +126,14 @@ export function Sessions(props: SessionsProps) {
             data-session={id}
             data-state={working ? 'working' : answered ? 'answered' : 'idle'}
           >
+            {renaming === id ? (
+              <SessionName
+                label={label}
+                onKeep={(title) => props.onRename(id, title)}
+                onDone={() => setRenaming(null)}
+              />
+            ) : (
+            <>
             {/* A link, so it can be opened in a window of its own. */}
             <a
               href={addressOf(id)}
@@ -55,8 +143,17 @@ export function Sessions(props: SessionsProps) {
                   ? `${label} — the agent is working here`
                   : answered
                     ? `${label} — answered since you looked`
-                    : label
+                    : `${label} — double-click to rename`
               }
+              onDblClick={(event) => {
+                event.preventDefault()
+                setRenaming(id)
+              }}
+              onKeyDown={(event) => {
+                if (event.key !== 'F2') return
+                event.preventDefault()
+                setRenaming(id)
+              }}
               onClick={(event) => {
                 // With a modifier it is the browser's: a new tab, a new window.
                 if (event.metaKey || event.ctrlKey || event.shiftKey || event.button !== 0) return
@@ -79,6 +176,8 @@ export function Sessions(props: SessionsProps) {
             >
               ×
             </button>
+            </>
+            )}
           </div>
         )
       })}

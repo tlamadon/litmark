@@ -1222,6 +1222,7 @@ export function App() {
           onSelect={(id) => selectConversation(id)}
           onNew={() => void newConversation()}
           onClose={(id) => void closeSession(id)}
+          onRename={renameConversation}
         />
         <span class="spacer" />
         {!connected && <span class="badge warn">Reconnecting…</span>}

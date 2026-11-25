@@ -178,6 +178,18 @@ function buildDom({ serverToken = 'test-token', routes = ROUTES } = {}) {
       routes.set(`/api/conversations/${created.conversation_id}`, { ...created, messages: [], runs: [], turns: [], latest_seq: 10 })
       return { ok: true, status: 201, text: async () => JSON.stringify(routes.get(`/api/conversations/${created.conversation_id}`)) }
     }
+    // A session renamed: its conversation goes by the name given.
+    const named = /^\/api\/conversations\/([^/]+)$/.exec(path)
+    if (init.method === 'PATCH' && named && JSON.parse(init.body).title) {
+      const list = routes.get('/api/conversations')
+      const title = JSON.parse(init.body).title
+      routes.set('/api/conversations', {
+        conversations: list.conversations.map((c) =>
+          c.conversation_id === named[1] ? { ...c, title, untitled: false } : c,
+        ),
+      })
+      return { ok: true, status: 200, text: async () => JSON.stringify({ conversation_id: named[1], title }) }
+    }
     if (init.method === 'DELETE' && routes.has(path)) {
       // Gone from the server: from its own address, and from the list of notes.
       routes.delete(path)
@@ -586,6 +598,36 @@ test('the library, what is open, and the panel about it', async (t) => {
   click(root.querySelector('.card.paper[data-document="doc-003"] .card-open'))
   await settle(300)
   assert.equal(tabs()[1][2], 'Levinsohn & Petrin (2003)')
+
+  // A tab is renamed where it is: double-click, type, Enter. Escape gives up.
+  const renameTab = (id) => {
+    const link = root.querySelector(`.session[data-session="${id}"] a`)
+    link.dispatchEvent(new window.MouseEvent('dblclick', { bubbles: true, cancelable: true }))
+  }
+  const press = (node, key) =>
+    node.dispatchEvent(new window.KeyboardEvent('keydown', { key, bubbles: true, cancelable: true }))
+  renameTab('conv-2')
+  await settle(20)
+  let nameField = root.querySelector('.session[data-session="conv-2"] input.session-name')
+  assert.equal(nameField?.value, 'Levinsohn & Petrin (2003)')
+  type(nameField, 'Given up on')
+  press(nameField, 'Escape')
+  await settle(50)
+  assert.equal(tabs()[1][2], 'Levinsohn & Petrin (2003)')
+  assert.ok(!window.requests.some((request) => request.startsWith('PATCH')), 'renamed unasked')
+  renameTab('conv-2')
+  await settle(20)
+  nameField = root.querySelector('.session[data-session="conv-2"] input.session-name')
+  type(nameField, '  Proxy variables  ')
+  press(nameField, 'Enter')
+  await settle(200)
+  assert.equal(root.querySelector('input.session-name'), null)
+  assert.equal(tabs()[1][2], 'Proxy variables')
+  assert.equal(
+    window.requests.filter((request) => request === 'PATCH /api/conversations/conv-2').length,
+    1,
+    'the name is kept once',
+  )
 
   // Going back to the first is going back to the work: the note, and the paper beside it.
   click(root.querySelector('.session[data-session="conv-1"] a'))
