@@ -159,8 +159,11 @@ jobs:
           platforms: linux/amd64
           load: true
           tags: litmark:ci
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          # A cache of its own. Sharing one with the build below, each wrote
+          # over what the other had left: this one kept nothing for arm64, so
+          # every run built arm64 from nothing, under emulation.
+          cache-from: type=gha,scope=test
+          cache-to: type=gha,scope=test,mode=max
 
       - name: Start the image and check it works
         run: docker/smoke-test.sh litmark:ci
@@ -186,8 +189,11 @@ jobs:
           push: ${{ github.event_name == 'push' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          # amd64 from the build above, arm64 from the last run of this one.
+          cache-from: |
+            type=gha,scope=test
+            type=gha,scope=publish
+          cache-to: type=gha,scope=publish,mode=max
 
       - name: Say what was published
         if: github.event_name == 'push'
