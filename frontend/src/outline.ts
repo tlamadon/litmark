@@ -13,11 +13,20 @@ export interface Heading {
   line: number
 }
 
-/** What a heading says, without the Markdown it is written in. */
+/**
+ * What a heading says, without the Markdown it is written in — but with its
+ * math, as written: in `$Z^A_{t-1}$` the underscore is a subscript, not
+ * emphasis, and whoever lists the heading draws the math.
+ */
 function plain(text: string): string {
   return text
-    .replace(/\[([^\]]*)\]\([^)]*\)/g, '$1')
-    .replace(/[*_`~]/g, '')
+    .split(/(\$[^$\s](?:[^$]*[^$\s])?\$(?!\d))/)
+    .map((part, index) =>
+      index % 2 === 1
+        ? part
+        : part.replace(/\[((?:[^[\]]|\[[^[\]]*\])*)\]\([^)]*\)/g, '$1').replace(/[*_`~]/g, ''),
+    )
+    .join('')
     .replace(/\s+/g, ' ')
     .trim()
 }

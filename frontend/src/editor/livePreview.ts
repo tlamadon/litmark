@@ -12,8 +12,10 @@
  * is this file's own work.
  */
 
+import { markdown, markdownLanguage } from '@codemirror/lang-markdown'
 import { ensureSyntaxTree, syntaxTree } from '@codemirror/language'
 import type { SyntaxNode, Tree } from '@lezer/common'
+import type { MarkdownConfig } from '@lezer/markdown'
 import {
   EditorSelection,
   type EditorState,
@@ -22,18 +24,59 @@ import {
   StateField,
   type Extension,
 } from '@codemirror/state'
-import {
-  Decoration,
-  EditorView,
-  ViewPlugin,
-  WidgetType,
-  type DecorationSet,
-  type ViewUpdate,
-} from '@codemirror/view'
+import { Decoration, EditorView, WidgetType, type DecorationSet } from '@codemirror/view'
 import katex from 'katex'
 
 import { findTables, renderInline, type TableBlock } from '../markdown'
 import type { KnownPaper } from '../papers'
+
+/**
+ * Brackets inside the label of a link.
+ *
+ * A citation's label is what the paper says, and papers say `E[g|G, f]`. The
+ * parser takes any `[…]` for a link by reference — it cannot know that no such
+ * reference is defined — and a link may not hold a link, so the citation around
+ * it stopped being one and was shown as the characters it is written with.
+ * Here a `]` that neither a `(` nor a `[` follows closes nothing: it and the
+ * bracket it answers are text, and the link around them stays a link. Links by
+ * reference without a second pair of brackets (`[like this]`) are given up for
+ * it; nothing in the preview drew them.
+ */
+const bracketsInLabels: MarkdownConfig = {
+  parseInline: [
+    {
+      name: 'BracketInLabel',
+      before: 'LinkEnd',
+      parse(cx, next, pos) {
+        if (next !== 93 /* ] */) return -1
+        const after = cx.char(pos + 1)
+        if (after === 40 /* ( */ || after === 91 /* [ */) return -1
+        // The parser's own list of what is still open; the bracket this one
+        // answers is the last opened.
+        const parts = (cx as unknown as { parts: ({ from: number; to: number } | null)[] }).parts
+        for (let index = parts.length - 1; index >= 0; index -= 1) {
+          const part = parts[index]
+          if (!part || !('side' in part)) continue
+          const opener = cx.slice(part.from, part.to)
+          if (opener !== '[' && opener !== '![') continue
+          parts[index] = null
+          return pos + 1
+        }
+        return -1
+      },
+    },
+  ],
+}
+
+/** Markdown as notes and summaries are written, for the editor and whatever reads its tree. */
+export function noteMarkdown(): Extension {
+  return markdown({ base: markdownLanguage, codeLanguages: [], extensions: [bracketsInLabels] })
+}
+
+/** A label as read: line breaks are spaces, and `\[` is the bracket it stands for. */
+function labelText(written: string): string {
+  return written.replace(/\s*\n\s*/g, ' ').replace(/\\([!-/:-@[-`{-~])/g, '$1')
+}
 
 /** Toggles the Source-mode view, which shows the complete Markdown text. */
 export const setSourceMode = StateEffect.define<boolean>()
@@ -175,22 +218,31 @@ export function sourceReferenceAt(
   return null
 }
 
-/** Where a reference is cited in a document: each `[…](source:id)` that is a real link. */
+/**
+ * Where a reference is cited in a document: each `[…](source:id)` that is a real link.
+ *
+ * Read off the syntax tree rather than matched as text. What is quoted from a
+ * paper is the label, and a quotation may run over a line break or hold
+ * brackets of its own — `E[g|G]` — which a pattern for "anything but `]`"
+ * silently passes over. The tree also knows that the same text inside a code
+ * block is an example of the syntax, not a citation.
+ */
 export function citationsOf(state: EditorState, referenceId: string): { from: number; to: number }[] {
-  const escaped = referenceId.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-  const pattern = new RegExp(`\\[[^\\]\\n]*\\]\\(source:${escaped}\\)`, 'g')
   // Parsed to the end, so a citation far down a long note is recognised too.
   // The editor itself parses only as far as it has shown, and a note opened in
   // order to go to a citation has shown nothing yet.
-  const tree = ensureSyntaxTree(state, state.doc.length, 500)
+  const tree = ensureSyntaxTree(state, state.doc.length, 500) ?? syntaxTree(state)
+  const target = `source:${referenceId}`
   const spots: { from: number; to: number }[] = []
-  for (const match of state.doc.toString().matchAll(pattern)) {
-    const from = match.index ?? 0
-    const to = from + match[0].length
-    // The same text inside a code block is an example of the syntax, not a
-    // citation; the syntax tree knows the difference.
-    if (!tree || sourceReferenceAt(state, to - 1, tree) === referenceId) spots.push({ from, to })
-  }
+  tree.iterate({
+    enter: (node) => {
+      if (node.name !== 'Link') return
+      const url = node.node.getChild('URL')
+      if (url && state.doc.sliceString(url.from, url.to) === target) {
+        spots.push({ from: node.from, to: node.to })
+      }
+    },
+  })
   return spots
 }
 
@@ -547,13 +599,16 @@ function findMath(text: string): MathRange[] {
     }
     if (end === -1) break
     const tex = text.slice(start, end)
-    // Inline math must not span a blank line. `$ x$` is not math, and neither
-    // is `$5 and then $7` — requiring a non-digit after the opening `$` keeps
-    // prose about money from rendering as equations.
+    // Inline math must not span a blank line. And it is told from money as
+    // Pandoc tells them: no whitespace just inside either `$`, and no digit
+    // just after the closing one. `$5 and then $7` and `$5–$7` stay prose,
+    // while a number can be math — `$0.758$`, which is how an estimate is
+    // written.
     const spansBlankLine = /\n\s*\n/.test(tex)
     const plausible =
       tex.trim().length > 0 &&
-      (display || (!/^[\s\d]/.test(tex) && !/\s$/.test(tex)))
+      (display ||
+        (!/^\s/.test(tex) && !/\s$/.test(tex) && !/\d/.test(text[end + fence.length] ?? '')))
     if (plausible && !spansBlankLine) {
       out.push({ from: dollar, to: end + fence.length, tex, display })
       index = end + fence.length
@@ -564,10 +619,9 @@ function findMath(text: string): MathRange[] {
   return out
 }
 
-function buildDecorations(view: EditorView, options: LivePreviewOptions): DecorationSet {
-  if (view.state.field(sourceMode, false)) return Decoration.none
+function buildDecorations(state: EditorState, options: LivePreviewOptions): DecorationSet {
+  if (state.field(sourceMode, false)) return Decoration.none
 
-  const { state } = view
   const selection = state.selection
   const active = state.field(activeCitation, false) ?? { referenceId: null, at: null }
   // Reading, nothing is opened up around the selection: the text stays as
@@ -693,9 +747,11 @@ function buildDecorations(view: EditorView, options: LivePreviewOptions): Decora
         // `[label](href)` → the label alone, as a readable link.
         const labelFrom = marks[0]!.to
         const labelTo = marks[1]!.from
-        const label = doc.sliceString(labelFrom, labelTo)
+        // A label broken over lines — a quotation copied as the paper sets it —
+        // reads as one run of text, as it would in rendered Markdown.
+        const label = labelText(doc.sliceString(labelFrom, labelTo))
         const href = doc.sliceString(url.from, url.to)
-        if (!label) return
+        if (!label.trim()) return
         const paper = href.startsWith(PAPER_SCHEME)
           ? (papers.find((known) => known.documentId === href.slice(PAPER_SCHEME.length))?.title ??
             null)
@@ -728,37 +784,11 @@ function buildDecorations(view: EditorView, options: LivePreviewOptions): Decora
 
 // --------------------------------------------------------------- extension
 
-class LivePreviewPlugin {
+/** What is drawn, and the part of it the cursor steps over. */
+interface Preview {
   decorations: DecorationSet
-  /** Only the rendered widgets, which the cursor should step over. */
+  /** Only the rendered widgets. */
   atomic: DecorationSet
-
-  constructor(
-    view: EditorView,
-    private readonly options: LivePreviewOptions,
-  ) {
-    const built = buildDecorations(view, options)
-    this.decorations = built
-    this.atomic = widgetsOnly(view, built)
-  }
-
-  update(update: ViewUpdate): void {
-    if (
-      update.docChanged ||
-      update.selectionSet ||
-      update.viewportChanged ||
-      update.startState.field(sourceMode, false) !== update.state.field(sourceMode, false) ||
-      update.startState.field(activeCitation, false) !== update.state.field(activeCitation, false) ||
-      update.startState.field(readingMode, false) !== update.state.field(readingMode, false) ||
-      update.startState.field(knownPapers, false) !== update.state.field(knownPapers, false) ||
-      // The parser works in the background and reaches the end of a long note
-      // late; what it finds there has to be drawn when it does.
-      syntaxTree(update.startState) !== syntaxTree(update.state)
-    ) {
-      this.decorations = buildDecorations(update.view, this.options)
-      this.atomic = widgetsOnly(update.view, this.decorations)
-    }
-  }
 }
 
 /**
@@ -768,7 +798,7 @@ class LivePreviewPlugin {
  * cursor moving through emphasised or quoted text, and hidden delimiters must
  * stay enterable so that touching them reveals the syntax.
  */
-function widgetsOnly(view: EditorView, source: DecorationSet): DecorationSet {
+function widgetsOnly(source: DecorationSet): DecorationSet {
   const ranges: Range<Decoration>[] = []
   const cursor = source.iter()
   while (cursor.value) {
@@ -776,22 +806,68 @@ function widgetsOnly(view: EditorView, source: DecorationSet): DecorationSet {
     if (spec.widget) ranges.push(cursor.value.range(cursor.from, cursor.to))
     cursor.next()
   }
-  void view
   return Decoration.set(ranges, true)
 }
 
-export function livePreview(options: LivePreviewOptions = {}): Extension {
-  const plugin = ViewPlugin.define((view) => new LivePreviewPlugin(view, options), {
-    decorations: (instance) => instance.decorations,
+function buildPreview(state: EditorState, options: LivePreviewOptions): Preview {
+  let decorations: DecorationSet
+  try {
+    decorations = buildDecorations(state, options)
+  } catch (error) {
+    // Text that cannot be dressed is still text: shown as written, not lost.
+    console.error('litmark: the live preview could not be built', error)
+    decorations = Decoration.none
+  }
+  return { decorations, atomic: widgetsOnly(decorations) }
+}
+
+/**
+ * The preview, held in the state rather than drawn by a view plugin.
+ *
+ * A link whose label runs over a line break, and an equation set over several
+ * lines, are each replaced by one widget — and CodeMirror refuses, by throwing
+ * while it draws, a replacement across a line break that comes from a plugin.
+ * That left the whole note blank. Only decorations held in the state may
+ * replace a line break, so that is where these are.
+ */
+function previewField(options: LivePreviewOptions): StateField<Preview> {
+  return StateField.define<Preview>({
+    create: (state) => buildPreview(state, options),
+    update(value, transaction) {
+      const before = transaction.startState
+      const after = transaction.state
+      if (
+        transaction.docChanged ||
+        transaction.selection !== undefined ||
+        before.field(sourceMode, false) !== after.field(sourceMode, false) ||
+        before.field(activeCitation, false) !== after.field(activeCitation, false) ||
+        before.field(readingMode, false) !== after.field(readingMode, false) ||
+        before.field(knownPapers, false) !== after.field(knownPapers, false) ||
+        // The parser works in the background and reaches the end of a long note
+        // late; what it finds there has to be drawn when it does.
+        syntaxTree(before) !== syntaxTree(after)
+      ) {
+        return buildPreview(after, options)
+      }
+      return value
+    },
+    provide: (field) => [
+      EditorView.decorations.from(field, (preview) => preview.decorations),
+      EditorView.atomicRanges.of(
+        (view) => view.state.field(field, false)?.atomic ?? Decoration.none,
+      ),
+    ],
   })
+}
+
+export function livePreview(options: LivePreviewOptions = {}): Extension {
   return [
     sourceMode,
     activeCitation,
     readingMode.init(() => options.reading ?? false),
     knownPapers,
     tableField(options),
-    plugin,
-    EditorView.atomicRanges.of((view) => view.plugin(plugin)?.atomic ?? Decoration.none),
+    previewField(options),
     theme,
   ]
 }

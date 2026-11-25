@@ -21,6 +21,7 @@ import type {
 import { ago } from './chat/ConversationMenu'
 import { describeOrigin } from './chat/describe'
 import { IngestionStatus } from './Library'
+import { renderMathText } from './markdown'
 import type { Heading } from './outline'
 import { nameOf } from './papers'
 import type { PdfOutlineItem } from './pdf/PdfViewer'
@@ -148,9 +149,12 @@ export function Sidebar(props: SidebarProps) {
               <ul class="toc">
                 {props.headings.map((heading, index) => (
                   <li key={`${heading.line}-${heading.text}`} style={{ '--depth': heading.level - 1 }}>
-                    <button type="button" onClick={() => props.onGotoHeading(index)}>
-                      {heading.text}
-                    </button>
+                    <button
+                      type="button"
+                      onClick={() => props.onGotoHeading(index)}
+                      // Escaped, and nothing but its math drawn.
+                      dangerouslySetInnerHTML={{ __html: renderMathText(heading.text) }}
+                    />
                   </li>
                 ))}
               </ul>

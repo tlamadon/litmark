@@ -26,14 +26,21 @@ function renderMath(text: string): string {
   return text
     .replace(/\$\$([\s\S]+?)\$\$/g, (_match, tex: string) => katexOrRaw(tex, true))
     .replace(
-      // Inline math: the opening `$` must not be followed by whitespace or a
-      // digit, and the closing one must not be preceded by whitespace. Without
-      // the digit rule, prose like "it cost $5 and then $7" parses as math.
-      // The cost is that `$5x$` is not treated as math — rare, and preferable
-      // to mangling currency.
-      /(^|[^\\$])\$(?![\s\d])([^$\n]*[^\s$])\$/g,
+      // Inline math, told from money as Pandoc tells them: no whitespace
+      // just inside either `$`, and no digit just after the closing one. That
+      // leaves "it cost $5 and then $7" and "$5–$7" as prose, and lets a
+      // number be math — `$0.758$`, which is how an estimate is written.
+      /(^|[^\\$])\$(?!\s)([^$\n]*[^\s$])\$(?!\d)/g,
       (_match, lead: string, tex: string) => lead + katexOrRaw(tex, false),
     )
+}
+
+/**
+ * Text with no Markdown in it but its math: a heading, where it is listed.
+ * Escaped first, like everything here.
+ */
+export function renderMathText(source: string): string {
+  return renderMath(escapeHtml(source))
 }
 
 function katexOrRaw(tex: string, display: boolean): string {
@@ -58,6 +65,15 @@ function decodeEntities(value: string): string {
     .replace(/&amp;/g, '&')
 }
 
+/**
+ * `[label](destination)`. The label of a citation is a quotation, and papers
+ * say `E[g|G]`: so a label may hold brackets of its own, paired, and brackets
+ * written with a backslash before them.
+ */
+const LINK = /\[((?:\\.|[^[\]\\\n]|\[(?:\\.|[^[\]\\\n])*\])*)\]\(([^)\s]+)\)/g
+/** A backslash before punctuation says "this character, as it is". */
+const ESCAPED = /\\([!-/:-@[-`{-~])/g
+
 function inline(text: string): string {
   let out = text
 
@@ -72,24 +88,22 @@ function inline(text: string): string {
 
   out = renderMath(out)
 
-  out = out.replace(
-    /\[([^\]\n]*)\]\(([^)\s]+)\)/g,
-    (match, label: string, href: string): string => {
-      if (href.startsWith('source:')) {
-        const id = href.slice('source:'.length)
-        if (!/^[A-Za-z0-9][A-Za-z0-9-]*$/.test(id)) return match
-        return `<a class="source-link" role="button" tabindex="0" data-source-ref="${id}" title="${id}">${label || id}</a>`
-      }
-      if (href.startsWith('paper:')) {
-        // A paper of the library, named in passing: a click opens it.
-        const id = href.slice('paper:'.length)
-        if (!/^[A-Za-z0-9][A-Za-z0-9-]*$/.test(id)) return match
-        return `<a class="paper-link" role="button" tabindex="0" data-paper="${id}" title="Open this paper">${label || id}</a>`
-      }
-      if (!ALLOWED_SCHEME.test(decodeEntities(href))) return match
-      return `<a href="${href}" target="_blank" rel="noopener noreferrer">${label || href}</a>`
-    },
-  )
+  out = out.replace(LINK, (match, written: string, href: string): string => {
+    const label = written.replace(ESCAPED, '$1')
+    if (href.startsWith('source:')) {
+      const id = href.slice('source:'.length)
+      if (!/^[A-Za-z0-9][A-Za-z0-9-]*$/.test(id)) return match
+      return `<a class="source-link" role="button" tabindex="0" data-source-ref="${id}" title="${id}">${label || id}</a>`
+    }
+    if (href.startsWith('paper:')) {
+      // A paper of the library, named in passing: a click opens it.
+      const id = href.slice('paper:'.length)
+      if (!/^[A-Za-z0-9][A-Za-z0-9-]*$/.test(id)) return match
+      return `<a class="paper-link" role="button" tabindex="0" data-paper="${id}" title="Open this paper">${label || id}</a>`
+    }
+    if (!ALLOWED_SCHEME.test(decodeEntities(href))) return match
+    return `<a href="${href}" target="_blank" rel="noopener noreferrer">${label || href}</a>`
+  })
 
   out = out
     .replace(/\*\*([^*\n]+)\*\*/g, '<strong>$1</strong>')
@@ -192,6 +206,8 @@ export function renderMarkdown(source: string): string {
   const html: string[] = []
   let paragraph: string[] = []
   let listType: 'ul' | 'ol' | null = null
+  // The item being read: it may run on to further lines, as a paragraph does.
+  let item: string[] | null = null
   let inFence = false
   let fence: string[] = []
 
@@ -201,7 +217,14 @@ export function renderMarkdown(source: string): string {
       paragraph = []
     }
   }
+  const closeItem = (): void => {
+    if (item) {
+      html.push(`<li>${inline(item.join(' '))}</li>`)
+      item = null
+    }
+  }
   const closeList = (): void => {
+    closeItem()
     if (listType) {
       html.push(`</${listType}>`)
       listType = null
@@ -290,7 +313,8 @@ export function renderMarkdown(source: string): string {
         html.push(`<${wanted}>`)
         listType = wanted
       }
-      html.push(`<li>${inline((bullet ?? ordered)![1]!)}</li>`)
+      closeItem()
+      item = [(bullet ?? ordered)![1]!]
       continue
     }
 
@@ -301,7 +325,9 @@ export function renderMarkdown(source: string): string {
       continue
     }
 
-    paragraph.push(line.trim())
+    // A line that opens nothing carries on what came before it.
+    if (item) item.push(line.trim())
+    else paragraph.push(line.trim())
   }
 
   if (inFence) html.push(`<pre><code>${fence.join('\n')}</code></pre>`)

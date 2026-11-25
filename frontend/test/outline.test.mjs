@@ -25,3 +25,16 @@ test('a hash inside a code block is a comment, not a heading', () => {
     ['Real', 'After'],
   )
 })
+
+test('math in a heading is kept as written, for whoever lists it to draw', () => {
+  const text = '## Test 1 — *additive* separability: the lagged gap $Z^A_{t-1}$ and [E[x] = 0](source:ref-001)'
+  assert.deepEqual(
+    headingsOf(text).map((heading) => heading.text),
+    ['Test 1 — additive separability: the lagged gap $Z^A_{t-1}$ and E[x] = 0'],
+  )
+  // Prices are not math, and are read as before.
+  assert.deepEqual(
+    headingsOf('# From $5 to $7_a').map((heading) => heading.text),
+    ['From $5 to $7a'],
+  )
+})

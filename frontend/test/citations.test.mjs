@@ -10,13 +10,12 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 
-import { markdown, markdownLanguage } from '@codemirror/lang-markdown'
 import { EditorState } from '@codemirror/state'
 
-import { citationsOf } from './bundle/editor/livePreview.mjs'
+import { citationsOf, noteMarkdown } from './bundle/editor/livePreview.mjs'
 
 const stateOf = (doc) =>
-  EditorState.create({ doc, extensions: [markdown({ base: markdownLanguage, codeLanguages: [] })] })
+  EditorState.create({ doc, extensions: [noteMarkdown()] })
 
 const textAt = (state, spots) => spots.map((spot) => state.doc.sliceString(spot.from, spot.to))
 
@@ -53,4 +52,19 @@ test('a citation far down a long note is found before the editor has parsed that
   assert.ok(spot, 'the citation at the end of a long note was not found')
   assert.ok(spot.from > 100000, `expected a position far into the note, got ${spot.from}`)
   assert.equal(state.doc.sliceString(spot.from, spot.to), '[p. 2](source:ref-001)')
+})
+
+test('a citation is found though its quotation runs over a line break or holds brackets', () => {
+  const state = stateOf(
+    [
+      'First [the fit of the model—is',
+      'similar in both samples.](source:ref-001), then [E[g|G, f] = 0 by (A17).](source:ref-002),',
+      'then [E\\[x\\] = 0](source:ref-003).',
+    ].join('\n'),
+  )
+  assert.deepEqual(textAt(state, citationsOf(state, 'ref-001')), [
+    '[the fit of the model—is\nsimilar in both samples.](source:ref-001)',
+  ])
+  assert.deepEqual(textAt(state, citationsOf(state, 'ref-002')), ['[E[g|G, f] = 0 by (A17).](source:ref-002)'])
+  assert.deepEqual(textAt(state, citationsOf(state, 'ref-003')), ['[E\\[x\\] = 0](source:ref-003)'])
 })

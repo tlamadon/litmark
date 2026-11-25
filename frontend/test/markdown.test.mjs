@@ -9,7 +9,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 
-import { findTables, renderInline, renderMarkdown } from './bundle/markdown.mjs'
+import { findTables, renderInline, renderMarkdown, renderMathText } from './bundle/markdown.mjs'
 
 test('escapes raw HTML rather than rendering it', () => {
   const html = renderMarkdown('<img src=x onerror="alert(1)">')
@@ -179,4 +179,35 @@ test('markup inside a table cell cannot escape it', () => {
   const html = renderMarkdown('| a |\n| --- |\n| <img src=x onerror=alert(1)> |')
   assert.doesNotMatch(html, /<img/)
   assert.match(html, /&lt;img/)
+})
+
+test('a number set as math is math, and a range of prices is not', () => {
+  const html = renderMarkdown('The slope is $0.758$ here; tickets are $5-$7.')
+  assert.equal((html.match(/class="katex"/g) ?? []).length, 1, html)
+  assert.ok(html.includes('$5-$7'), html)
+})
+
+test('a citation whose quotation holds brackets is a citation in chat too', () => {
+  const html = renderMarkdown(
+    'Kills it — [a function of f, E[g ∆f|G, f] = 0 by (A17).](source:ref-430) — and [E\\[˜ϵ ˜ϵ |G\\] = 0](source:ref-385); an interval [0, 1] is not one.',
+  )
+  assert.ok(html.includes('data-source-ref="ref-430" title="ref-430">a function of f, E[g ∆f|G, f] = 0 by (A17).</a>'), html)
+  assert.ok(html.includes('data-source-ref="ref-385" title="ref-385">E[˜ϵ ˜ϵ |G] = 0</a>'), html)
+  assert.ok(html.includes('an interval [0, 1] is not one.'), html)
+  assert.ok(!html.includes('](source:'), html)
+})
+
+test('a list item that runs on to the next line is one item, and a citation broken there one link', () => {
+  const html = renderMarkdown(
+    ['- AKM fits alike — [the fit of the AKM model—is', 'similar in both samples.](source:ref-455)', '- Next item', '', 'After.'].join('\n'),
+  )
+  assert.equal((html.match(/<li>/g) ?? []).length, 2, html)
+  assert.ok(html.includes('>the fit of the AKM model—is similar in both samples.</a></li>'), html)
+  assert.ok(html.includes('<p>After.</p>'), html)
+})
+
+test('a heading is listed with its math drawn and the rest of it as text', () => {
+  const html = renderMathText('The lagged gap $Z^A_{t-1}$ & <b>more</b>')
+  assert.equal((html.match(/class="katex"/g) ?? []).length, 1, html)
+  assert.ok(html.includes('&amp; &lt;b&gt;more&lt;/b&gt;'), html)
 })

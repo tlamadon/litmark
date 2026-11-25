@@ -6,7 +6,6 @@
  * conflict prompt when the file changed underneath a dirty buffer.
  */
 
-import { markdown, markdownLanguage } from '@codemirror/lang-markdown'
 import { history, historyKeymap, defaultKeymap, indentWithTab } from '@codemirror/commands'
 import { Annotation, Compartment, EditorState, type Extension } from '@codemirror/state'
 import { search, searchKeymap } from '@codemirror/search'
@@ -26,6 +25,7 @@ import type { KnownPaper } from '../papers'
 import {
   citationsOf,
   livePreview,
+  noteMarkdown,
   readingMode,
   setActiveReference,
   setKnownPapers,
@@ -34,6 +34,7 @@ import {
   setSourceMode,
   sourceReferenceAt,
 } from './livePreview'
+import { mountResilientEditor, type ResilientEditor } from './mount'
 
 export type SaveState =
   | { kind: 'clean' }
@@ -107,6 +108,10 @@ export function MarkdownEditor(props: MarkdownEditorProps) {
   // Reading or editing. A different buffer is a different instance of this
   // component, so each opens in the mode it was asked to.
   const [reading, setReading] = useState(!props.startEditing || Boolean(props.readOnly))
+  const readingNow = useRef(reading)
+  readingNow.current = reading
+  // The preview could not draw this text, so it is shown as written instead.
+  const [plain, setPlain] = useState(false)
   const editability = useRef(new Compartment())
   // Whether the reader has put the selection somewhere in this buffer: until
   // they have, "where the cursor is" means nothing.
@@ -185,7 +190,8 @@ export function MarkdownEditor(props: MarkdownEditorProps) {
   useEffect(() => {
     if (!host.current) return
 
-    const extensions: Extension[] = [
+    // With the preview; or, if it turns out it cannot draw this text, without.
+    const extensionsFor = (preview: boolean): Extension[] => [
       history(),
       drawSelection(),
       rectangularSelection(),
@@ -193,13 +199,15 @@ export function MarkdownEditor(props: MarkdownEditorProps) {
       highlightActiveLine(),
       search({ top: true }),
       EditorView.lineWrapping,
-      markdown({ base: markdownLanguage, codeLanguages: [] }),
-      livePreview({
-        onOpenSource: (id) => latest.current.onOpenSource?.(id),
-        onOpenPaper: (id) => latest.current.onOpenPaper?.(id),
-        onOpenLink: (href) => window.open(href, '_blank', 'noopener,noreferrer'),
-        reading,
-      }),
+      noteMarkdown(),
+      preview
+        ? livePreview({
+            onOpenSource: (id) => latest.current.onOpenSource?.(id),
+            onOpenPaper: (id) => latest.current.onOpenPaper?.(id),
+            onOpenLink: (href) => window.open(href, '_blank', 'noopener,noreferrer'),
+            reading: readingNow.current,
+          })
+        : readingMode.init(() => readingNow.current),
       EditorView.domEventHandlers({
         // Reading, a double-click on the text is "let me change this": edit,
         // with the cursor where the click was.
@@ -267,14 +275,31 @@ export function MarkdownEditor(props: MarkdownEditorProps) {
           setSourceAtCursor(sourceReferenceAt(update.state, head))
         }
       }),
-      editability.current.of(editable(reading)),
+      editability.current.of(editable(readingNow.current)),
     ]
 
-    const editor = new EditorView({
-      state: EditorState.create({ doc: props.text, extensions }),
+    setPlain(false)
+    let mounted: ResilientEditor | null = null
+    mounted = mountResilientEditor({
       parent: host.current,
+      doc: props.text,
+      extensions: extensionsFor,
+      onFallback: (_error, applying) => {
+        setPlain(true)
+        setShowSource(false)
+        // Null while the editor is first put up; it is taken just below then.
+        if (mounted) view.current = mounted.view
+        // What was being typed when the preview failed was kept, and the
+        // editor that would have noticed it is gone: notice it here.
+        if (applying.some((tr) => tr.docChanged) && !applying.some((tr) => tr.annotation(fromDisk))) {
+          setState({ kind: 'dirty' })
+          latest.current.onDirtyChange?.(true)
+          schedule()
+        }
+      },
     })
-    view.current = editor
+    const editor = mounted
+    view.current = editor.view
     revision.current = props.revision
     setState({ kind: 'clean' })
 
@@ -351,7 +376,7 @@ export function MarkdownEditor(props: MarkdownEditorProps) {
       if (timer.current !== null) {
         window.clearTimeout(timer.current)
         timer.current = null
-        const text = editor.state.doc.toString()
+        const text = editor.view.state.doc.toString()
         const lost = latest.current.onSaveLost
         void (inFlight.current ?? Promise.resolve())
           .then(() => saveThisBuffer(text, revision.current))
@@ -467,6 +492,15 @@ export function MarkdownEditor(props: MarkdownEditorProps) {
           </h2>
         )}
         <SaveIndicator state={state} />
+        {plain && (
+          <span
+            class="save-state error"
+            data-state="plain"
+            title="This text could not be drawn with its formatting, so it is shown as it is written. Nothing is lost, and it can be edited as usual."
+          >
+            Shown as written
+          </span>
+        )}
         {reading && !props.readOnly && (
           <span class="mode-hint">Double-click the text to edit it</span>
         )}
@@ -513,7 +547,7 @@ export function MarkdownEditor(props: MarkdownEditorProps) {
             {sourceAtCursor ? `Open source · ${sourceAtCursor}` : 'Open source'}
           </button>
           )}
-          {!reading && (
+          {!reading && !plain && (
           <button
             type="button"
             class={showSource ? 'toggle active' : 'toggle'}
