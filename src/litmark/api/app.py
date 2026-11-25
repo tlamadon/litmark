@@ -29,6 +29,7 @@ from .. import __version__
 from ..errors import InvalidInput, WorkspaceError
 from ..mcpserver import MCP_PATH, TOKEN_ENV, UPLOAD_PATH, UploadTickets
 from ..services import Services
+from .access import ASSERTION_HEADER, AccessVerifier
 from . import login
 from .routes import build_router
 
@@ -59,6 +60,7 @@ def create_app(
     allowed_hosts: set[str] | None = None,
     password: str | None = None,
     mcp_token: str | None = None,
+    access: AccessVerifier | None = None,
 ) -> FastAPI:
     """Build the application.
 
@@ -72,6 +74,12 @@ def create_app(
     ``mcp_token``, when set, opens the project to sessions elsewhere: the MCP
     endpoint at ``/mcp``, which asks for that token as a bearer credential, and
     the one-time upload addresses it hands out. Unset, neither is served.
+
+    ``access``, when set, is a second way into the MCP endpoint, for clients
+    that sign in with OAuth and cannot be given the token: a request that
+    Cloudflare Access let through, carrying its signed assertion (see
+    :mod:`.access`). It opens the endpoint on its own as well; with both set,
+    either credential is enough.
 
     ``allowed_hosts`` widens host and origin validation for a reverse proxy or
     port-forward. Pass ``{"*"}`` to accept any hostname, which is what a proxy
@@ -94,7 +102,8 @@ def create_app(
     mcp_endpoint: object | None = None
     mcp_sessions: object | None = None
     mcp_running = contextlib.AsyncExitStack()
-    if mcp_token:
+    mcp_enabled = bool(mcp_token or access)
+    if mcp_enabled:
         from ..mcpserver import asgi_endpoint, build_server
 
         mcp_endpoint, mcp_sessions = asgi_endpoint(build_server(services, tickets))
@@ -142,11 +151,13 @@ def create_app(
                 status_code=400,
             )
         path = request.url.path
-        outside = _outside_route(path, request.method, enabled=bool(mcp_token))
+        outside = _outside_route(path, request.method, enabled=mcp_enabled)
         if outside == "mcp":
             # Its own credential, for a program rather than a person: a bearer
             # token, which cannot share a header with the browser's password.
-            if not mcp_token:
+            # Or, for a connector that signed in with OAuth, the assertion
+            # Cloudflare Access forwards with what it let through.
+            if not mcp_enabled:
                 return JSONResponse(
                     {
                         "error": {
@@ -159,7 +170,8 @@ def create_app(
                     },
                     status_code=404,
                 )
-            if not _bearer_given(request, mcp_token):
+            token_given = bool(mcp_token) and _bearer_given(request, mcp_token or "")
+            if not token_given and not await _access_given(request, access):
                 return JSONResponse(
                     {
                         "error": {
@@ -498,6 +510,19 @@ def _bearer_given(request: Request, token: str) -> bool:
     if scheme.lower() != "bearer" or not supplied.strip():
         return False
     return hmac.compare_digest(supplied.strip().encode("utf-8"), token.encode("utf-8"))
+
+
+async def _access_given(request: Request, access: AccessVerifier | None) -> bool:
+    """Whether Cloudflare Access let this request through, by its signed assertion."""
+    if access is None:
+        return False
+    assertion = request.headers.get(ASSERTION_HEADER)
+    if not assertion:
+        return False
+    from starlette.concurrency import run_in_threadpool
+
+    # Off the event loop: the first check fetches the team's keys.
+    return await run_in_threadpool(access.identity, assertion) is not None
 
 
 def _render_index(assets: Path, token: str) -> str:

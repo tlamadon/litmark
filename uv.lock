@@ -700,6 +700,7 @@ claude = [
 ]
 mcp = [
     { name = "mcp" },
+    { name = "pyjwt", extra = ["crypto"] },
 ]
 s3 = [
     { name = "boto3" },
@@ -724,6 +725,7 @@ requires-dist = [
     { name = "mcp", marker = "extra == 'mcp'", specifier = ">=2.3,<3.0" },
     { name = "pdfplumber", specifier = ">=0.11,<1.0" },
     { name = "pydantic", specifier = ">=2.7,<3.0" },
+    { name = "pyjwt", extras = ["crypto"], marker = "extra == 'mcp'", specifier = ">=2.8,<3.0" },
     { name = "pypdf", specifier = ">=4.2,<7.0" },
     { name = "python-multipart", specifier = ">=0.0.9" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.30,<1.0" },
