@@ -35,6 +35,8 @@ WRITE_SUMMARY_STEP = "__write_summary_with_citation"
 
 class FakeBackend(AgentBackend):
     name = "fake"
+    models = ("opus", "sonnet", "haiku")
+    efforts = ("low", "medium", "high", "xhigh", "max")
 
     def __init__(self, tools: ProjectTools, script: list[Step] | None = None) -> None:
         self._tools = tools
@@ -44,6 +46,8 @@ class FakeBackend(AgentBackend):
         # end to end rather than reporting "finished without writing".
         self.summary_script: list[Step] | None = None
         self._cancelled: set[str] = set()
+        # Every request as it arrived, for tests to look at.
+        self.requests: list[RunRequest] = []
         self.delay = 0.0
         # Between the fragments of a text step, to watch a reply stream.
         self.chunk_delay = 0.0
@@ -96,6 +100,7 @@ class FakeBackend(AgentBackend):
 
     async def start_run(self, request: RunRequest) -> AsyncIterator[AgentEvent]:
         self._cancelled.discard(request.run_id)
+        self.requests.append(request)
         script = self.script
         if request.kind == "summary" and self.summary_script is None:
             script = self._default_summary_steps(request)

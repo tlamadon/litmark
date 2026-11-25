@@ -21,6 +21,7 @@ import contextlib
 import dataclasses
 import json
 import logging
+import re
 import uuid
 from collections import deque
 from collections.abc import AsyncIterator
@@ -65,6 +66,8 @@ PLACEHOLDER_TITLES = {"", "Conversation", "Research chat", UNTITLED}
 MAX_TITLE = 80
 # A view is a handful of IDs and a page number; this is room to spare.
 MAX_VIEW_CHARS = 8000
+# A model's name or ID, as a runtime takes it on its command line.
+MODEL_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:/\[\]-]{0,99}")
 
 
 def _view_of(encoded: str | None) -> dict[str, Any] | None:
@@ -249,6 +252,32 @@ class AgentRunner:
         self._announce(conversation_id, "closed" if closed else "reopened")
         return self._summary_of(self._require(conversation_id))
 
+    def set_agent_choice(
+        self, conversation_id: str, model: str | None, effort: str | None
+    ) -> dict[str, Any]:
+        """What answers in this session from its next message on.
+
+        ``None`` hands the choice back to the project. A turn already running
+        keeps what it started with.
+        """
+        row = self._require(conversation_id)
+        if row["kind"] != CHAT:
+            raise InvalidInput("Background work runs on the project's own settings.")
+        model = (model or "").strip() or None
+        if model is not None and not MODEL_ID.fullmatch(model):
+            raise InvalidInput("That is not the name of a model.")
+        if effort is not None and effort not in self._backend.efforts:
+            raise InvalidInput(
+                f"No effort level {effort!r}; choose one of "
+                f"{', '.join(self._backend.efforts) or 'none'}."
+            )
+        self._db.execute(
+            "UPDATE conversations SET model = ?, effort = ? WHERE id = ?",
+            (model, effort, conversation_id),
+        )
+        self._announce(conversation_id, "agent")
+        return self._summary_of(self._require(conversation_id))
+
     def delete_conversation(self, conversation_id: str) -> dict[str, Any]:
         """Forget a conversation. Notes and summaries it edited are files; they stay."""
         row = self._require(conversation_id)
@@ -370,6 +399,9 @@ class AgentRunner:
             # What was on screen with it, as the window last left it.
             "view": _view_of(row["view_json"]),
             "closed": bool(row["closed_at"]),
+            # Chosen for this session; null is the project's default.
+            "model": row["model"],
+            "effort": row["effort"],
         }
 
     def _announce(self, conversation_id: str, change: str) -> None:
@@ -625,7 +657,8 @@ class AgentRunner:
         kind = row["kind"]
 
         conversation = self._db.query_one(
-            "SELECT backend_session_id, kind FROM conversations WHERE id = ?", (conversation_id,)
+            "SELECT backend_session_id, kind, model, effort FROM conversations WHERE id = ?",
+            (conversation_id,),
         )
         # A chat carries on where the backend left it. Background work does not:
         # each summary starts clean, with nothing of the last paper in mind.
@@ -638,9 +671,22 @@ class AgentRunner:
         self._db.execute(
             "UPDATE runs SET status = ? WHERE id = ?", (RUNNING, run_id)
         )
+        # A session's choice is for its chat. Background work stays on the
+        # project's settings, whatever any session picked.
+        chat = bool(conversation and conversation["kind"] == CHAT)
+        model = conversation["model"] if chat else None
+        effort = conversation["effort"] if chat else None
+        default_model, default_effort = self._backend.defaults()
+
         self._bus.publish(
             RUN_STARTED,
-            {"kind": kind, "backend": self._backend.name, "label": row["label"]},
+            {
+                "kind": kind,
+                "backend": self._backend.name,
+                "label": row["label"],
+                "model": model or default_model,
+                "effort": effort or default_effort,
+            },
             conversation_id=conversation_id,
             run_id=run_id,
         )
@@ -652,6 +698,8 @@ class AgentRunner:
             context=context,
             backend_session_id=session_id,
             kind=kind,
+            model=model,
+            effort=effort,
         )
 
         text_parts: list[str] = []

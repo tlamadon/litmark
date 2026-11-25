@@ -128,12 +128,18 @@ Optional settings in `project.toml`:
 
 ```toml
 [agent]
-model = "claude-opus-5"   # what answers; the adapter's default when unset
-effort = "medium"         # reasoning effort, when the model takes one
+model = "claude-opus-5"   # what answers by default; the adapter's own choice when unset
+effort = "medium"         # reasoning effort by default, when the model takes one
 max_parallel_runs = 3     # conversations that may be working at once
 auto_summary = true       # summarize a paper when it is imported
 downloads = "ask"         # may the agent fetch a paper from the web: always, ask, never
 ```
+
+`model` and `effort` are where a session starts. Each session can choose its
+own from the button beside the message box — `opus`, `sonnet`, `haiku`, or any
+model named by its ID, and an effort from `low` to `max` — and keeps that
+choice from its next message on. Summaries always run on the project's
+settings.
 
 ## Sessions
 

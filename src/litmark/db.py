@@ -116,6 +116,9 @@ ADDED_COLUMNS = (
     ("runs", "usage_json", "TEXT"),
     ("conversations", "view_json", "TEXT"),
     ("conversations", "closed_at", "TEXT"),
+    # What a session chose to be answered by; NULL is the project's default.
+    ("conversations", "model", "TEXT"),
+    ("conversations", "effort", "TEXT"),
 )
 
 

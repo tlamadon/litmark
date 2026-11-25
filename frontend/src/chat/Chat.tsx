@@ -24,6 +24,7 @@ import {
   type NoteSummary,
 } from '../api'
 import type { EventStream } from '../events'
+import type { AgentChoice } from './AgentMenu'
 import { Composer } from './Composer'
 import { ConversationMenu } from './ConversationMenu'
 import { transcriptOf, type Names, type OpenTarget } from './describe'
@@ -69,6 +70,7 @@ export function Chat(props: ChatProps) {
   const view = useConversation(props.currentId, props.stream)
   const [mode, setMode] = useState<'chat' | 'transcript'>('chat')
   const [problem, setProblem] = useState<string | null>(null)
+  const [picked, setPicked] = useState<{ id: string; choice: AgentChoice } | null>(null)
   // What is being typed belongs to the conversation it was typed in.
   const drafts = useRef(new Map<string, string>())
   const [draft, setDraftState] = useState('')
@@ -126,6 +128,26 @@ export function Chat(props: ChatProps) {
       await api.cancelRun(runId)
     } catch (error) {
       setProblem(error instanceof Error ? error.message : 'Stopping failed.')
+    }
+  }
+
+  // The session's choice of model and effort. What was just picked shows at
+  // once; the list of conversations catches up when the server announces it.
+  const current = props.conversations.find((c) => c.conversation_id === props.currentId)
+  const saved: AgentChoice = { model: current?.model ?? null, effort: current?.effort ?? null }
+  const choice = picked !== null && picked.id === props.currentId ? picked.choice : saved
+  // Once the server's word arrives it stands, whichever window it came from.
+  useEffect(() => setPicked(null), [props.currentId, saved.model, saved.effort])
+  const choose = async (next: AgentChoice): Promise<void> => {
+    const id = props.currentId
+    if (!id) return
+    setProblem(null)
+    setPicked({ id, choice: next })
+    try {
+      await api.setAgentChoice(id, next.model, next.effort)
+    } catch (error) {
+      setPicked(null)
+      setProblem(error instanceof Error ? error.message : 'The model could not be changed.')
     }
   }
 
@@ -276,6 +298,8 @@ export function Chat(props: ChatProps) {
         readOnly={background}
         downloads={props.downloads}
         onDownloads={props.onDownloads}
+        choice={choice}
+        onChoice={(next) => void choose(next)}
         onDraft={setDraft}
         onContextChange={props.onContextChange}
         onSend={() => {

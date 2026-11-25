@@ -188,6 +188,13 @@ export interface AgentStatus {
   ready: boolean
   message: string
   detail: string | null
+  /** Models a session may pick by name; any other can be typed. */
+  models?: string[]
+  /** Effort levels a session may pick. */
+  efforts?: string[]
+  /** What a session gets when it picks nothing. */
+  default_model?: string | null
+  default_effort?: string | null
 }
 
 /** Whether the agent may fetch papers from the web. */
@@ -310,6 +317,9 @@ export interface ConversationSummary {
   view?: unknown
   /** Put away: out of the row of sessions, with nothing of it gone. */
   closed?: boolean
+  /** Chosen for this session; null is the project's default. */
+  model?: string | null
+  effort?: string | null
 }
 
 export interface RunUsage {
@@ -616,6 +626,11 @@ export const api = {
       `/conversations/${encodeURIComponent(id)}/messages`,
       { method: 'POST', body: JSON.stringify({ prompt, context }) },
     ),
+  setAgentChoice: (id: string, model: string | null, effort: string | null) =>
+    request<ConversationSummary>(`/conversations/${encodeURIComponent(id)}/agent`, {
+      method: 'PUT',
+      body: JSON.stringify({ model, effort }),
+    }),
   setDownloads: (downloads: DownloadMode) =>
     request<{ downloads: DownloadMode }>('/settings', {
       method: 'PUT',

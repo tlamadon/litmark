@@ -10,6 +10,7 @@
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks'
 
 import type { AgentStatus, DocumentRecord, DownloadMode, MessageContext } from '../api'
+import { AgentMenu, type AgentChoice } from './AgentMenu'
 import { shorten, type Names } from './describe'
 
 export interface ComposerProps {
@@ -28,6 +29,9 @@ export interface ComposerProps {
   onStop: () => void
   downloads: DownloadMode
   onDownloads: (mode: DownloadMode) => void
+  /** The model and effort this session is answered with, and the way to change them. */
+  choice: AgentChoice
+  onChoice: (choice: AgentChoice) => void
 }
 
 /** Past this many attached papers, the chips give way to a count. */
@@ -182,6 +186,7 @@ export function Composer(props: ComposerProps) {
             ? 'Working — a new message waits its turn'
             : 'Enter to send · Shift-Enter for a new line'}
         </span>
+        <AgentMenu agent={props.agent} choice={props.choice} onChoice={props.onChoice} />
         <label
           class="downloads-setting"
           title="Whether the agent may download a paper from the web when you ask it to add one"

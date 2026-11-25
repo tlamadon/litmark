@@ -40,6 +40,11 @@ log = logging.getLogger(__name__)
 
 MCP_SERVER_NAME = "research"
 DEFAULT_MODEL = "claude-opus-5"
+# Names the runtime resolves to the current model of each family, so the list
+# does not go stale; any other model can be named by its ID.
+MODELS = ("opus", "sonnet", "haiku")
+# The SDK's `EffortLevel`. A model that lacks a level falls back to one it has.
+EFFORT_LEVELS = ("low", "medium", "high", "xhigh", "max")
 
 # Tool names as the SDK exposes them once the MCP server is registered.
 ALLOWED_TOOLS = [f"mcp__{MCP_SERVER_NAME}__{schema['name']}" for schema in TOOL_SCHEMAS]
@@ -113,6 +118,8 @@ def sdk_available() -> tuple[bool, str | None]:
 
 class ClaudeAgentBackend(AgentBackend):
     name = "claude"
+    models = MODELS
+    efforts = EFFORT_LEVELS
 
     def __init__(
         self,
@@ -128,6 +135,9 @@ class ClaudeAgentBackend(AgentBackend):
         self._effort = effort
         self._clients: dict[str, Any] = {}
         self._cancelled: set[str] = set()
+
+    def defaults(self) -> tuple[str | None, str | None]:
+        return self._model, self._effort
 
     # --------------------------------------------------------- availability
 
@@ -200,9 +210,12 @@ class ClaudeAgentBackend(AgentBackend):
         from claude_agent_sdk import ClaudeAgentOptions, ClaudeSDKClient
 
         self._cancelled.discard(request.run_id)
+        # A session's own choice, or the project's. Options are built for every
+        # run and the session resumed by ID, so either can change between turns.
+        effort = request.effort or self._effort
         options = ClaudeAgentOptions(
             system_prompt=SYSTEM_PROMPT,
-            model=self._model,
+            model=request.model or self._model,
             cwd=self._cwd,
             mcp_servers={MCP_SERVER_NAME: self._build_mcp_server(request)},
             # The research agent is hermetic. Left to its defaults the runtime
@@ -228,7 +241,7 @@ class ClaudeAgentBackend(AgentBackend):
             include_partial_messages=True,
             resume=request.backend_session_id,
             max_turns=40,
-            **({"effort": self._effort} if self._effort else {}),
+            **({"effort": effort} if effort else {}),
         )
 
         session_id: str | None = request.backend_session_id

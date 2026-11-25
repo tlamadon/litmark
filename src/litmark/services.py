@@ -516,7 +516,14 @@ class Services:
                 "root": str(self.workspace.root),
                 "schema_version": settings.get("schema_version", 1),
             },
-            "agent": self.agent_availability().to_json(),
+            "agent": {
+                **self.agent_availability().to_json(),
+                # What a session may choose from, and what it gets if it does not.
+                "models": list(self.backend.models),
+                "efforts": list(self.backend.efforts),
+                "default_model": self.backend.defaults()[0],
+                "default_effort": self.backend.defaults()[1],
+            },
             "settings": {"downloads": downloads.mode_of(settings)},
             "documents": documents,
             "tags": self.documents.all_tags(),

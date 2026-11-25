@@ -103,6 +103,9 @@ class RunRequest:
     context: RunContext
     backend_session_id: str | None = None
     kind: str = "chat"  # "chat" or "summary"
+    # What the session chose to be answered by; None is the backend's default.
+    model: str | None = None
+    effort: str | None = None
 
 
 @dataclass
@@ -134,6 +137,14 @@ class AgentBackend(abc.ABC):
     """A chat backend that can read the project and propose file edits."""
 
     name: str = "unknown"
+    # What a session may choose from. A model outside `models` can still be
+    # named; an effort outside `efforts` cannot.
+    models: tuple[str, ...] = ()
+    efforts: tuple[str, ...] = ()
+
+    def defaults(self) -> tuple[str | None, str | None]:
+        """The model and effort a run gets when its session chose neither."""
+        return None, None
 
     @abc.abstractmethod
     def availability(self) -> Availability:

@@ -13,7 +13,7 @@ from typing import Annotated, Any
 from fastapi import APIRouter, File, Query, Request, Response, UploadFile
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import JSONResponse, PlainTextResponse, StreamingResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from ..agent.base import RunContext
 from ..agent.tools import USER, dispatch
@@ -121,6 +121,15 @@ class BibliographyWrite(BaseModel):
 
 class TagsSet(BaseModel):
     tags: list[str] = Field(default_factory=list)
+
+
+class AgentChoice(BaseModel):
+    """What answers in a session. Both are given; null is the project's default."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    model: str | None = Field(max_length=100)
+    effort: str | None = Field(max_length=40)
 
 
 class TagsChange(BaseModel):
@@ -673,6 +682,15 @@ def build_router() -> APIRouter:
         if body.closed is not None:
             changed = runner.set_closed(conversation_id, body.closed)
         return changed
+
+    @router.put("/conversations/{conversation_id}/agent")
+    async def choose_agent(
+        request: Request, conversation_id: str, body: AgentChoice
+    ) -> dict[str, Any]:
+        """The model and effort this session's next message is answered with."""
+        return services_of(request).runner.set_agent_choice(
+            conversation_id, body.model, body.effort
+        )
 
     @router.put("/conversations/{conversation_id}/view", status_code=204)
     async def save_view(request: Request, conversation_id: str, body: ViewSave) -> Response:

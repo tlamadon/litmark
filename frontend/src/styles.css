@@ -2369,6 +2369,80 @@ button.tag:hover {
   color: var(--muted-strong);
 }
 
+.agent-wrap {
+  flex: none;
+  position: relative;
+}
+
+.composer-actions .agent-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  max-width: 14rem;
+  font-size: 0.74rem;
+  padding: 0.05rem 0.35rem;
+  border: 1px solid var(--rule);
+  border-radius: 5px;
+  background: var(--bg);
+  color: var(--muted-strong);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.composer-actions .agent-button:hover,
+.composer-actions .agent-button.on {
+  border-color: var(--muted);
+}
+
+/* Opens upward: the composer sits at the foot of the panel. */
+.agent-menu {
+  position: absolute;
+  bottom: calc(100% + 4px);
+  left: 0;
+  z-index: 30;
+  min-width: 13rem;
+  max-height: min(70vh, 30rem);
+  overflow: auto;
+  background: var(--panel);
+  border: 1px solid var(--rule);
+  border-radius: 10px;
+  box-shadow: 0 10px 30px rgba(20, 16, 10, 0.18);
+  padding: 0.35rem;
+  font-size: 0.86rem;
+}
+
+.agent-menu .menu-kicker {
+  padding: 0.25rem 0.5rem 0.2rem;
+}
+
+/* Lines of a menu, not the composer's own buttons. */
+.composer-actions .agent-option {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  width: 100%;
+  white-space: nowrap;
+  background: none;
+  border: 0;
+  border-radius: 7px;
+  padding: 0.3rem 0.5rem;
+}
+
+.composer-actions .agent-option:hover {
+  background: var(--accent-soft);
+}
+
+.composer-actions .agent-option.on {
+  font-weight: 600;
+}
+
+.agent-tick {
+  flex: none;
+  width: 0.9rem;
+  color: var(--accent);
+}
+
 .turn-working {
   display: flex;
   align-items: center;

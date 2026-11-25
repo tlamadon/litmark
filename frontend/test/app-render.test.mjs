@@ -24,6 +24,10 @@ const STATE = {
     ready: true,
     message: 'ready',
     detail: null,
+    models: ['opus', 'sonnet', 'haiku'],
+    efforts: ['low', 'medium', 'high', 'xhigh', 'max'],
+    default_model: 'claude-opus-5',
+    default_effort: null,
   },
   documents: [
     {
@@ -66,6 +70,8 @@ const CONVERSATION = {
   status: 'idle',
   last_run_status: 'succeeded',
   resumable: true,
+  model: 'haiku',
+  effort: 'low',
 }
 STATE.conversations = [CONVERSATION]
 
@@ -163,6 +169,12 @@ function buildDom({ serverToken = 'test-token', routes = ROUTES } = {}) {
       })
       return { ok: true, status: 204, text: async () => '' }
     }
+    // What answers in a session is kept with its conversation too.
+    const agentOf = /^\/api\/conversations\/([^/]+)\/agent$/.exec(path)
+    if (init.method === 'PUT' && agentOf) {
+      window.choices.push(JSON.parse(init.body))
+      return { ok: true, status: 200, text: async () => JSON.stringify({ ...CONVERSATION, ...JSON.parse(init.body) }) }
+    }
     if (init.method === 'POST' && path === '/api/conversations') {
       const created = {
         ...CONVERSATION,
@@ -212,6 +224,7 @@ function buildDom({ serverToken = 'test-token', routes = ROUTES } = {}) {
   }
   window.streams = []
   window.requests = []
+  window.choices = []
   class FakeEventSource {
     constructor(url) {
       window.streams.push(url)
@@ -308,6 +321,30 @@ test('the built application bundle runs and renders without throwing', async (t)
 
   const header = root.querySelector('.conv-button')?.textContent ?? ''
   assert.ok(header.includes('What does the paper assume?'), `conversation not named: ${header}`)
+
+  // The composer says what answers in this session, and its menu changes it.
+  const agentButton = root.querySelector('[data-setting="agent"]')
+  assert.ok(agentButton, 'no model and effort button')
+  assert.ok((agentButton.textContent ?? '').includes('haiku · low'), agentButton.textContent)
+  agentButton.click()
+  await new Promise((resolve) => setTimeout(resolve, 20))
+  const options = [...root.querySelectorAll('.agent-menu [role="menuitemradio"]')]
+  assert.deepEqual(
+    options.map((node) => (node.textContent ?? '').replace('✓', '').trim()),
+    ['Default (claude-opus-5)', 'opus', 'sonnet', 'haiku', 'Other…', 'Default', 'low', 'medium', 'high', 'xhigh', 'max'],
+  )
+  assert.deepEqual(
+    options.filter((node) => node.getAttribute('aria-checked') === 'true').map((node) => (node.textContent ?? '').replace('✓', '').trim()),
+    ['haiku', 'low'],
+  )
+  options[1].click()
+  await new Promise((resolve) => setTimeout(resolve, 20))
+  assert.deepEqual(window.choices, [{ model: 'opus', effort: 'low' }])
+  assert.equal(root.querySelector('.agent-menu'), null, 'the menu stayed open after a choice')
+  assert.ok(
+    (root.querySelector('[data-setting="agent"]')?.textContent ?? '').includes('opus · low'),
+    'the new choice is not shown',
+  )
 })
 
 test('a page left open across a server restart picks up the new credential', async (t) => {

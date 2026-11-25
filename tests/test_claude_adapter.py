@@ -114,6 +114,60 @@ def test_built_in_file_and_shell_tools_are_disabled(services, monkeypatch):
     assert captured.get("skills") == []
 
 
+def _options_for(services, monkeypatch, instance: ClaudeAgentBackend, **choice: str) -> dict:
+    """The options the adapter builds for one run with the given choice."""
+    import asyncio
+
+    from litmark.agent.base import RunContext, RunRequest
+
+    captured: dict[str, object] = {}
+
+    class FakeOptions:
+        def __init__(self, **kwargs: object) -> None:
+            captured.update(kwargs)
+
+    monkeypatch.setattr(claude_sdk, "sdk_available", lambda: (True, None))
+    module = pytest.importorskip("claude_agent_sdk")
+    monkeypatch.setattr(module, "ClaudeAgentOptions", FakeOptions, raising=False)
+    request = RunRequest(
+        run_id="run-1", conversation_id="conv-1", prompt="hello", context=RunContext(), **choice
+    )
+
+    async def collect() -> None:
+        async for event in instance.start_run(request):
+            if event.type == "done":
+                break
+
+    asyncio.run(asyncio.wait_for(collect(), timeout=15))
+    return captured
+
+
+def test_a_session_chooses_its_model_and_effort(services, monkeypatch):
+    """What a run asks for is what the runtime is started with."""
+    instance = ClaudeAgentBackend(
+        services.tools, cwd=str(services.workspace.root), model="claude-sonnet-5", effort="medium"
+    )
+    assert instance.defaults() == ("claude-sonnet-5", "medium")
+
+    chosen = _options_for(services, monkeypatch, instance, model="haiku", effort="low")
+    assert (chosen["model"], chosen["effort"]) == ("haiku", "low")
+
+    # One of the two chosen: the other is still the project's.
+    half = _options_for(services, monkeypatch, instance, effort="max")
+    assert (half["model"], half["effort"]) == ("claude-sonnet-5", "max")
+
+    # Nothing chosen: the project's settings stand.
+    plain = _options_for(services, monkeypatch, instance)
+    assert (plain["model"], plain["effort"]) == ("claude-sonnet-5", "medium")
+
+
+def test_effort_is_left_to_the_runtime_when_nobody_set_it(services, monkeypatch):
+    options = _options_for(services, monkeypatch, backend(services))
+    assert options["model"] == claude_sdk.DEFAULT_MODEL
+    assert "effort" not in options
+    assert set(claude_sdk.EFFORT_LEVELS) == {"low", "medium", "high", "xhigh", "max"}
+
+
 @requires_sdk
 def test_adapter_uses_options_the_installed_sdk_accepts():
     """Guards against drift between the adapter and the installed SDK."""
@@ -135,6 +189,7 @@ def test_adapter_uses_options_the_installed_sdk_accepts():
         "strict_mcp_config",
         "setting_sources",
         "skills",
+        "effort",
     }
     assert used <= fields, f"the installed SDK lacks: {sorted(used - fields)}"
 

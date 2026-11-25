@@ -485,6 +485,8 @@ def test_a_project_from_an_older_version_still_opens(tmp_path):
         assert row["kind"] == "chat" and row["backend_session_id"] == "abc"
         # Nothing was on screen with it yet, and it is not put away.
         assert row["view_json"] is None and row["closed_at"] is None
+        # And it has chosen no model or effort of its own.
+        assert row["model"] is None and row["effort"] is None
         run = db.query_one("SELECT * FROM runs WHERE id = 'run-old'")
         assert run["label"] is None and run["usage_json"] is None
     finally:
@@ -580,3 +582,96 @@ def test_a_session_is_put_away_and_brought_back_with_nothing_lost(client, servic
     ).json()
     assert (renamed["title"], renamed["closed"]) == ("Markups", False)
     assert client.patch(f"/api/conversations/{conversation_id}", json={}).status_code == 422
+
+
+# ------------------------------------------------------- model and effort
+
+
+def test_a_session_is_answered_by_the_model_and_effort_it_chose(client, services):
+    """Each session keeps its own choice, and its runs are started with it."""
+    quick = services.runner.create_conversation(None)
+    deep = services.runner.create_conversation(None)
+
+    state = client.get("/api/state").json()
+    assert state["agent"]["models"] == ["opus", "sonnet", "haiku"]
+    assert state["agent"]["efforts"] == ["low", "medium", "high", "xhigh", "max"]
+    assert "default_model" in state["agent"] and "default_effort" in state["agent"]
+
+    changed = client.put(
+        f"/api/conversations/{quick}/agent", json={"model": "haiku", "effort": "low"}
+    )
+    assert changed.status_code == 200, changed.text
+    assert (changed.json()["model"], changed.json()["effort"]) == ("haiku", "low")
+    # A model the list does not name can still be asked for by its ID.
+    client.put(
+        f"/api/conversations/{deep}/agent",
+        json={"model": "claude-opus-5[1m]", "effort": None},
+    ).raise_for_status()
+    # Every window is told, so the choice shows wherever the session is open.
+    assert [e["change"] for e in events_of(services, "conversation_updated")][-2:] == [
+        "agent",
+        "agent",
+    ]
+
+    # Handing the choice back to the project: the run is given none.
+    back = services.runner.create_conversation(None)
+    for choice in ({"model": "sonnet", "effort": "high"}, {"model": None, "effort": None}):
+        client.put(f"/api/conversations/{back}/agent", json=choice).raise_for_status()
+
+    services.runner.submit(conversation_id=quick, prompt="A quick one")
+    services.runner.submit(conversation_id=deep, prompt="A long one")
+    services.runner.submit(conversation_id=back, prompt="An ordinary one")
+    # The client's own loop is running the scheduler; wait on it from here.
+    from test_acceptance import run_until_idle
+
+    run_until_idle(services)
+    asked = {r.conversation_id: (r.model, r.effort) for r in services.backend.requests}
+    assert asked == {
+        quick: ("haiku", "low"),
+        deep: ("claude-opus-5[1m]", None),
+        back: (None, None),
+    }
+    started = {e["conversation_id"]: e for e in events_of(services, "run_started")}
+    assert (started[quick]["model"], started[quick]["effort"]) == ("haiku", "low")
+
+    # It is kept with the session, and read back with it.
+    listed = {
+        c["conversation_id"]: c for c in client.get("/api/conversations").json()["conversations"]
+    }
+    assert (listed[quick]["model"], listed[quick]["effort"]) == ("haiku", "low")
+    assert (listed[deep]["model"], listed[deep]["effort"]) == ("claude-opus-5[1m]", None)
+    assert (listed[back]["model"], listed[back]["effort"]) == (None, None)
+
+
+def test_a_choice_that_names_nothing_is_refused(client, services):
+    chat = services.runner.default_conversation()
+    address = f"/api/conversations/{chat}/agent"
+    for body in (
+        {"model": "opus", "effort": "enormous"},
+        {"model": "--dangerously-skip-permissions", "effort": None},
+        {"model": "two words", "effort": None},
+        {"model": "x" * 101, "effort": None},
+        {"model": "opus"},  # Both are said, so neither is cleared by omission.
+        {"model": "opus", "effort": "low", "temperature": 2},
+    ):
+        assert client.put(address, json=body).status_code == 422, body
+    assert services.runner.conversation(chat)["model"] is None
+    assert client.put("/api/conversations/conv-none/agent", json={"model": None, "effort": None}).status_code == 404
+
+
+def test_summaries_run_on_the_projects_settings(client, services, paper_one):
+    """What a session chose is for its chat; background work is not moved by it."""
+    from test_acceptance import run_until_idle
+
+    chat = services.runner.default_conversation()
+    services.runner.set_agent_choice(chat, "haiku", "low")
+    document = upload(client, "paper.pdf", paper_one)["imported"][0]["document"]
+    wait_for_extraction(client, document["document_id"])
+    run_until_idle(services)
+
+    summaries = [r for r in services.backend.requests if r.kind == "summary"]
+    assert summaries, "no summary was run"
+    assert all(r.model is None and r.effort is None for r in summaries)
+    background = services.runner.system_conversation()
+    with pytest.raises(InvalidInput):
+        services.runner.set_agent_choice(background, "haiku", "low")
