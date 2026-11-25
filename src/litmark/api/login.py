@@ -28,6 +28,17 @@ COOKIE = "litmark_session"
 LOGIN_PATH = "/login"
 LOGOUT_PATH = "/logout"
 SESSION_SECONDS = 30 * 24 * 3600
+
+# The icon in the browser's tab. The sign-in page is served before anything
+# else may be, so it carries its own copy of `frontend/src/favicon.svg`; a test
+# holds the two to each other.
+FAVICON_SVG = (
+    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">'
+    '<rect x="1" y="1" width="30" height="30" rx="7" fill="#fbfaf8" stroke="#d6cdbf" stroke-width="1"/>'
+    '<rect x="5" y="17" width="22" height="10.5" rx="2.5" fill="#f2b84f"/>'
+    '<path d="M8.5 6h10v2.6h-3V21.8h5.4v-4h3.1V25H8.5v-2.6h3V8.6h-3z" fill="#23201c"/></svg>'
+)
+
 # A password is one person's, typed or filled: a handful of wrong ones in a
 # few minutes is somebody guessing.
 MAX_FAILURES = 8
@@ -127,7 +138,7 @@ def login_page(*, next_path: str = "/", problem: str | None = None) -> str:
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="light dark">
 <meta name="robots" content="noindex">
-<link rel="icon" href="data:,">
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,{quote(FAVICON_SVG)}">
 <title>Sign in — Litmark</title>
 <style>
   :root {{

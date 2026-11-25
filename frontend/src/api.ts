@@ -417,10 +417,22 @@ export interface SyncState {
   running: boolean
 }
 
+/** The version running, and a later one if one has been released. */
+export interface VersionInfo {
+  version: string
+  /** Whether the server asks about later releases at all. */
+  checks_for_updates: boolean
+  /** The latest release known; null until the server has an answer. */
+  latest: string | null
+  update_available: boolean
+  release_url: string | null
+}
+
 // ------------------------------------------------------------------- api
 
 export const api = {
   state: () => request<ProjectState>('/state'),
+  version: () => request<VersionInfo>('/version'),
 
   listNotes: () => request<{ notes: NoteSummary[] }>('/notes'),
   readNote: (id: string) => request<Note>(`/notes/${encodeURIComponent(id)}`),

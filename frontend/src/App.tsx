@@ -52,6 +52,7 @@ import {
 import { Sidebar, type Subject } from './Sidebar'
 import { UNTAGGED } from './Tags'
 import { SyncStatus } from './SyncStatus'
+import { Version } from './Version'
 
 type MainTarget =
   | { kind: 'note'; noteId: string }
@@ -1259,6 +1260,7 @@ export function App() {
             Sign out
           </button>
         )}
+        <Version connected={connected} />
       </header>
 
       {insertNotice !== null && (

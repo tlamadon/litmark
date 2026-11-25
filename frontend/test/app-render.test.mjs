@@ -291,6 +291,9 @@ test('the built application bundle runs and renders without throwing', async (t)
   // No password is asked for here, so there is no session to offer to end.
   assert.equal(root.querySelector('[data-action="sign-out"]'), null)
 
+  // A server that says nothing of its version is not given one.
+  assert.equal(root.querySelector('.topbar .version'), null)
+
   const header = root.querySelector('.conv-button')?.textContent ?? ''
   assert.ok(header.includes('What does the paper assume?'), `conversation not named: ${header}`)
 })
@@ -362,6 +365,13 @@ test('the library, what is open, and the panel about it', async (t) => {
   ].join('\n')
   const routes = new Map(ROUTES)
   routes.set('/api/state', { ...state, auth: { password: true } })
+  routes.set('/api/version', {
+    version: '0.3.1',
+    checks_for_updates: true,
+    latest: '0.4.0',
+    update_available: true,
+    release_url: 'https://github.com/tlamadon/litmark/releases/tag/v0.4.0',
+  })
   routes.set('/api/notes/welcome', { ...ROUTES.get('/api/notes/welcome'), text })
   routes.set('/api/related?note', { papers: [{ document_id: 'doc-002', count: 2 }] })
   routes.set('/api/documents/doc-003/summary', { document_id: 'doc-003', text: '## Summary\n\nUses intermediate inputs.\n', revision: 'rev-3', status: 'ready' })
@@ -411,6 +421,15 @@ test('the library, what is open, and the panel about it', async (t) => {
           [...section.querySelectorAll('li')].map((item) => item.textContent),
         ]),
     )
+
+  // The version running is in the top bar, with a mark beside it that leads
+  // to the later release there is.
+  assert.equal(root.querySelector('.topbar .version-number')?.textContent, 'v0.3.1')
+  const update = root.querySelector('.topbar a.version-update')
+  assert.equal(update?.getAttribute('href'), 'https://github.com/tlamadon/litmark/releases/tag/v0.4.0')
+  assert.ok(update.getAttribute('title').includes('0.4.0'), update.getAttribute('title'))
+  // The page is the one the server sent: nothing to reload for.
+  assert.equal(root.querySelector('.topbar [data-action="reload"]'), null)
 
   // Behind a password, the way to end the session is in the top bar.
   assert.equal(root.querySelector('.topbar [data-action="sign-out"]')?.textContent, 'Sign out')

@@ -341,6 +341,7 @@ def cmd_serve(args: argparse.Namespace) -> int:
 
     from .api.app import create_app, static_root
     from .mcpserver import MCP_PATH, TOKEN_ENV, check_token, require_library
+    from .updates import UpdateCheck, check_enabled
     from .services import open_services
 
     services = open_services(args.path, backend_name=args.backend)
@@ -366,6 +367,7 @@ def cmd_serve(args: argparse.Namespace) -> int:
         allowed_hosts=allowed_hosts,
         password=password,
         mcp_token=mcp_token,
+        update_check=UpdateCheck() if check_enabled() else None,
     )
 
     display_host = "127.0.0.1" if args.host == "0.0.0.0" else args.host

@@ -8,6 +8,8 @@ pin both the strict default and the widened behaviour.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -265,3 +267,14 @@ def test_without_a_password_there_is_nothing_to_sign_in_to(client):
 
 def test_without_a_password_none_is_asked_for(client):
     assert client.get("/api/state").status_code == 200
+
+
+def test_the_sign_in_page_carries_the_same_icon_as_the_application() -> None:
+    """The form is served before the assets may be, so it holds its own copy."""
+    from urllib.parse import quote
+
+    from litmark.api import login
+
+    source = Path(__file__).resolve().parents[1] / "frontend" / "src" / "favicon.svg"
+    assert login.FAVICON_SVG == source.read_text("utf-8").strip()
+    assert f'href="data:image/svg+xml,{quote(login.FAVICON_SVG)}"' in login.login_page()

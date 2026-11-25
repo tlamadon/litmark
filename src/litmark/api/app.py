@@ -29,6 +29,7 @@ from .. import __version__
 from ..errors import InvalidInput, WorkspaceError
 from ..mcpserver import MCP_PATH, TOKEN_ENV, UPLOAD_PATH, UploadTickets
 from ..services import Services
+from ..updates import UpdateCheck
 from . import login
 from .routes import build_router
 
@@ -59,6 +60,7 @@ def create_app(
     allowed_hosts: set[str] | None = None,
     password: str | None = None,
     mcp_token: str | None = None,
+    update_check: UpdateCheck | None = None,
 ) -> FastAPI:
     """Build the application.
 
@@ -72,6 +74,10 @@ def create_app(
     ``mcp_token``, when set, opens the project to sessions elsewhere: the MCP
     endpoint at ``/mcp``, which asks for that token as a bearer credential, and
     the one-time upload addresses it hands out. Unset, neither is served.
+
+    ``update_check``, when given, is asked whether a later version has been
+    released, which the page shows beside the version running. Left out, the
+    page shows the version and nothing more, and nothing is asked of anyone.
 
     ``allowed_hosts`` widens host and origin validation for a reverse proxy or
     port-forward. Pass ``{"*"}`` to accept any hostname, which is what a proxy
@@ -90,6 +96,7 @@ def create_app(
     app.state.services = services
     app.state.dev_origin = dev_origin
     app.state.password_enabled = bool(password)
+    app.state.update_check = update_check
     tickets = UploadTickets()
     mcp_endpoint: object | None = None
     mcp_sessions: object | None = None

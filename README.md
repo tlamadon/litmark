@@ -428,6 +428,7 @@ is the same thing as a Compose file.
 | `ANTHROPIC_API_KEY` or `CLAUDE_CODE_OAUTH_TOKEN` | The agent's credential. The second is what `claude setup-token` issues, for using a subscription where no browser sign-in is possible. |
 | `LITMARK_PASSWORD` | Asked for, at a sign-in page, before anything is served. |
 | `LITMARK_MCP_TOKEN` | Opens `/mcp` to other sessions holding this token. Unset, it is not served. See [A memory for other sessions](#a-memory-for-other-sessions-mcp). |
+| `LITMARK_UPDATE_CHECK` | `off` stops the server asking GitHub, a few times a day, whether a later release exists. The top bar shows the version running either way; with the check on, it marks when a later one is out. |
 
 **Set a password, and put TLS in front.** Without `LITMARK_PASSWORD`, anyone
 who can reach the port can read the project and run the agent on your account.

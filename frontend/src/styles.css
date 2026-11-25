@@ -257,6 +257,36 @@ select {
   color: var(--muted-strong);
 }
 
+/* The version running: one quiet number, and a mark when a later one is out. */
+.version {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.76rem;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.version-update {
+  display: inline-flex;
+  color: var(--accent);
+  border-radius: 50%;
+}
+
+.version-update:hover {
+  filter: brightness(1.15);
+}
+
+.version-reload {
+  background: none;
+  border: 1px solid var(--accent);
+  border-radius: 999px;
+  padding: 0.05rem 0.45rem;
+  font-size: inherit;
+  color: var(--accent);
+}
+
 .topbar .path {
   overflow: hidden;
   text-overflow: ellipsis;

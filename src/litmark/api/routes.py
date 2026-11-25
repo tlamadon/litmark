@@ -148,6 +148,13 @@ def build_router() -> APIRouter:
         payload["auth"] = {"password": bool(getattr(request.app.state, "password_enabled", False))}
         return payload
 
+    @router.get("/version")
+    async def version(request: Request) -> dict[str, Any]:
+        """The version running, and a later one if one has been released."""
+        from ..updates import version_status
+
+        return version_status(getattr(request.app.state, "update_check", None))
+
     @router.get("/doctor")
     async def doctor(request: Request) -> dict[str, Any]:
         services = services_of(request)
