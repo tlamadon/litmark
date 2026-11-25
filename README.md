@@ -6,6 +6,39 @@ that can search the project and edit its files.
 
 **Import papers → ask questions → write a sourced note → inspect the evidence → refine the note.**
 
+![A note with its citations on the left, the cited paper with the passages highlighted in the middle, and the agent's answer on the right](docs/screenshots/reading.png)
+
+![The library: every paper as a card, named by author and year, with tags to filter by and sessions along the top](docs/screenshots/library.png)
+
+<sub>The papers in these screenshots are invented.</sub>
+
+## What it does
+
+- **A library for your papers.** Drop in PDFs and get a grid you can search,
+  tag and sort, each paper named the way it is cited —
+  [*Olley & Pakes (1996)*](#papers-by-author-and-year).
+- **Summaries with their evidence, written your way.** Every paper gets a short
+  summary whose claims link to the passage they rest on. A
+  [summarizing skill](#the-summarizing-skill) learns from what you tell it how
+  you want them written.
+- **Notes you can check.** Notes are Markdown, with tables and math. A
+  [citation](#citations) opens the paper at the highlighted passage, and a
+  highlight in the paper leads back to the sentence that cites it.
+- **An agent that reads the papers.** Ask a question and it searches, reads the
+  pages it needs, quotes them, and edits your notes — every step shown, every
+  edit listed with an undo.
+- **[Sessions](#sessions).** Several lines of work side by side, each with its
+  own conversation and its own place: the note, the paper, the page.
+- **A memory for other Claude sessions, and a command line.** A session
+  elsewhere can recall what the library holds and add to it
+  [over MCP](#a-memory-for-other-sessions-mcp); so can you,
+  [from a terminal](#from-a-terminal).
+- **Plain files, kept in step.** Everything is Markdown and PDFs in a
+  directory you can move. [Text syncs through git and papers through
+  S3](#sync-text-in-git-papers-in-storage), with a BibTeX export.
+- **Runs on your machine or [in a container](#running-it-in-a-container)**,
+  behind a sign-in page when it is reachable by more than you.
+
 Everything you write stays as ordinary files in a movable project directory:
 `notes/*.md`, `documents/<id>/original.pdf`, `references.json`. The application
 is a convenient view onto those files, not their owner.
