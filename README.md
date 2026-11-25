@@ -186,6 +186,38 @@ behind TLS. Whoever holds the token can read every paper and note and rewrite
 them. With `LITMARK_PASSWORD` also set, the browser is still asked for the
 password; `/mcp` asks for the token instead.
 
+### For connectors on the web: Cloudflare Access
+
+A connector in claude.ai or ChatGPT cannot be given the token. It connects from
+its provider's cloud, not from your machine, and signs in with OAuth, sending
+only what that sign-in gave it. Cloudflare Access can run the sign-in: put `/mcp`
+behind a self-hosted Access application with **Managed OAuth** turned on, and
+the connector signs in to Access, which means you sign in, under the
+application's policy. Access then forwards each request it lets through with
+an assertion it signed, in the `Cf-Access-Jwt-Assertion` header.
+
+Litmark checks that assertion when it is told which team and application to
+expect:
+
+```bash
+export LITMARK_ACCESS_TEAM_DOMAIN=<team>.cloudflareaccess.com
+export LITMARK_ACCESS_AUD=<the application's AUD tag>
+```
+
+A request is then let in if the assertion is signed with one of the team's keys
+(fetched from `https://<team>.cloudflareaccess.com/cdn-cgi/access/certs` and
+cached), was issued by that team for that application, and has not expired.
+Either credential is enough when the token is set as well, so Claude Code can
+keep its token on the private network. The other headers Access adds, the
+user's email among them, are not trusted: anything that reached the server
+another way could have set them, but it cannot sign an assertion.
+
+On the Cloudflare side, send only `/mcp` to the server, so that the page and the
+upload addresses stay private, and allow the connectors' sign-in callbacks in
+the application's Managed OAuth settings (claude.ai's is
+`https://claude.ai/api/mcp/auth_callback`). A web connector cannot send
+`X-Litmark-Client`, so its edits are recorded under the name it gives itself.
+
 ## From a terminal
 
 The same memory, without a session in between. `litmark serve` runs where the
@@ -397,6 +429,7 @@ is the same thing as a Compose file.
 | `ANTHROPIC_API_KEY` or `CLAUDE_CODE_OAUTH_TOKEN` | The agent's credential. The second is what `claude setup-token` issues, for using a subscription where no browser sign-in is possible. |
 | `LITMARK_PASSWORD` | Asked for, at a sign-in page, before anything is served. |
 | `LITMARK_MCP_TOKEN` | Opens `/mcp` to other sessions holding this token. Unset, it is not served. See [A memory for other sessions](#a-memory-for-other-sessions-mcp). |
+| `LITMARK_ACCESS_TEAM_DOMAIN`, `LITMARK_ACCESS_AUD` | Open `/mcp` to requests Cloudflare Access let through, by its signed assertion: the team's domain and the application's AUD tag, both or neither. See [For connectors on the web](#for-connectors-on-the-web-cloudflare-access). |
 
 **Set a password, and put TLS in front.** Without `LITMARK_PASSWORD`, anyone
 who can reach the port can read the project and run the agent on your account.

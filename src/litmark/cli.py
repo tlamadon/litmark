@@ -339,6 +339,7 @@ def _run_jobs(services: object) -> None:
 def cmd_serve(args: argparse.Namespace) -> int:
     import uvicorn
 
+    from .api.access import access_from_environment
     from .api.app import create_app, static_root
     from .mcpserver import MCP_PATH, TOKEN_ENV, check_token, require_library
     from .services import open_services
@@ -360,12 +361,19 @@ def cmd_serve(args: argparse.Namespace) -> int:
     if mcp_token:
         mcp_token = check_token(mcp_token)
         require_library()
+    # Cloudflare Access in front of /mcp, for connectors that sign in with
+    # OAuth: the team and the application's audience. Not secrets, but read
+    # from the environment like the rest of the MCP settings.
+    access = access_from_environment()
+    if access:
+        require_library()
     app = create_app(
         services,
         dev_origin=args.dev_origin,
         allowed_hosts=allowed_hosts,
         password=password,
         mcp_token=mcp_token,
+        access=access,
     )
 
     display_host = "127.0.0.1" if args.host == "0.0.0.0" else args.host
@@ -397,9 +405,12 @@ def cmd_serve(args: argparse.Namespace) -> int:
         print(f"  text: committed to git as you work" + (f", synced with {remote}" if remote else ""))
     elif reason and usable:
         print(f"  text: {reason}")
-    if mcp_token:
+    if mcp_token or access:
         print(f"  mcp: {url.rstrip('/')}{MCP_PATH} — other sessions may read and write here,")
-        print(f"       with the token in {TOKEN_ENV} as a bearer credential.")
+        if mcp_token:
+            print(f"       with the token in {TOKEN_ENV} as a bearer credential.")
+        if access:
+            print(f"       through Cloudflare Access ({access.team_domain}), by its signed assertion.")
     if availability.ready:
         print(f"  agent: {availability.backend} ready")
     else:
