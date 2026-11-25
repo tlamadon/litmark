@@ -112,6 +112,8 @@ export function TurnView({ turn, names, ...actions }: TurnViewProps) {
   // A paper named in a reply opens beside it, like a step that read one.
   const openPaper = (documentId: string): void =>
     actions.onOpen({ kind: 'document', documentId, page: 1 })
+  // And a note named in one opens as the note it is.
+  const openNote = (noteId: string): void => actions.onOpen({ kind: 'note', noteId })
 
   return (
     <article class={`turn ${turn.status}`} data-run={turn.runId}>
@@ -149,6 +151,7 @@ export function TurnView({ turn, names, ...actions }: TurnViewProps) {
                   unfinished={block.unfinished}
                   onOpenSource={actions.onOpenSource}
                   onOpenPaper={openPaper}
+                  onOpenNote={openNote}
                 />
               )
             }
@@ -187,6 +190,7 @@ export function TurnView({ turn, names, ...actions }: TurnViewProps) {
               streaming
               onOpenSource={actions.onOpenSource}
               onOpenPaper={openPaper}
+              onOpenNote={openNote}
             />
           )}
           {turn.status === 'running' && !turn.streaming && (
@@ -308,10 +312,31 @@ function AttachedContext({
     )
   }
   if (context.selection) {
+    // Where it was selected, when the message said: a click goes back there.
+    const where = context.selection_in
+    const target: OpenTarget | null = !where
+      ? null
+      : where.kind === 'paper'
+        ? { kind: 'document', documentId: where.id, page: where.page ?? 1 }
+        : where.kind === 'summary'
+          ? { kind: 'summary', documentId: where.id }
+          : { kind: 'note', noteId: where.id }
     pieces.push(
-      <span key="selection" class="turn-selection" title={context.selection}>
-        “{shorten(context.selection, 40)}”
-      </span>,
+      target ? (
+        <button
+          key="selection"
+          type="button"
+          class="turn-selection"
+          title={context.selection}
+          onClick={() => onOpen(target)}
+        >
+          “{shorten(context.selection, 40)}”
+        </button>
+      ) : (
+        <span key="selection" class="turn-selection" title={context.selection}>
+          “{shorten(context.selection, 40)}”
+        </span>
+      ),
     )
   }
   if (pieces.length === 0) return null
@@ -473,12 +498,14 @@ function Prose({
   unfinished = false,
   onOpenSource,
   onOpenPaper,
+  onOpenNote,
 }: {
   text: string
   streaming?: boolean
   unfinished?: boolean
   onOpenSource: (referenceId: string) => void
   onOpenPaper: (documentId: string) => void
+  onOpenNote: (noteId: string) => void
 }) {
   const html = useMemo(() => renderMarkdown(text), [text])
   const classes = ['prose', streaming ? 'streaming' : '', unfinished ? 'unfinished' : '']
@@ -499,6 +526,13 @@ function Prose({
         if (paper) {
           event.preventDefault()
           onOpenPaper(paper)
+          return
+        }
+        const note = (event.target as HTMLElement).closest<HTMLElement>('[data-note]')?.dataset
+          .note
+        if (note) {
+          event.preventDefault()
+          onOpenNote(note)
         }
       }}
       // Markdown is sanitized in renderMarkdown before it reaches the DOM.

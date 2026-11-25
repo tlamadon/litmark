@@ -88,6 +88,14 @@ export interface PdfViewerProps {
   onOutline?: (items: PdfOutlineItem[]) => void
   /** The page most in view, as it changes: where the reader is in the paper. */
   onPage?: (page: number) => void
+  /**
+   * The way back to where the reader was before being taken somewhere — by a
+   * citation, a contents entry, another paper: null when there is nowhere to
+   * go back to, and left out where there is no going back at all.
+   */
+  back?: { to: string; go: () => void } | null
+  /** A page number typed in is a jump too: said before it is made. */
+  onJump?: () => void
 }
 
 /** One entry of a PDF's bookmarks: a section, and the page it starts on. */
@@ -451,6 +459,19 @@ export function PdfViewer(props: PdfViewerProps) {
     <section class="pdf" aria-label="Source panel">
       {/* One line: what the paper is, where in it, how large, and the way out. */}
       <header class="pdf-bar pdf-controls">
+        {props.back !== undefined && (
+          <button
+            type="button"
+            class="back-step"
+            data-action="pdf-back"
+            disabled={props.back === null}
+            aria-label="Back"
+            title={props.back ? `Back to ${props.back.to}` : 'Nowhere to go back to'}
+            onClick={() => props.back?.go()}
+          >
+            ←
+          </button>
+        )}
         <strong
           class="pdf-title"
           title={`${props.document.display_title} — ${props.document.original_filename}`}
@@ -464,7 +485,9 @@ export function PdfViewer(props: PdfViewerProps) {
           onSubmit={(event) => {
             event.preventDefault()
             const parsed = Number.parseInt(pageInput, 10)
-            if (Number.isFinite(parsed)) go(parsed)
+            if (!Number.isFinite(parsed)) return
+            props.onJump?.()
+            go(parsed)
           }}
         >
           <input

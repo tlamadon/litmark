@@ -37,6 +37,14 @@ test('keeps http and mailto links, with safe rel attributes', () => {
   assert.ok(html.includes('target="_blank"'), html)
 })
 
+test('renders a note: link as a click target carrying the note id', () => {
+  const html = renderMarkdown('Worked through in [the steps](note:paired-movers).')
+  assert.ok(html.includes('data-note="paired-movers"'), html)
+  assert.ok(html.includes('>the steps</a>'), html)
+  const odd = renderMarkdown('[bad](note:../../x) [worse](note:"onmouseover=)')
+  assert.ok(!odd.includes('data-note'), odd)
+})
+
 test('renders a paper: link as a click target carrying the document id', () => {
   const html = renderMarkdown('This extends [Olley & Pakes (1996)](paper:doc-002).')
   assert.ok(html.includes('data-paper="doc-002"'), html)

@@ -29,13 +29,16 @@ Citations
 - Cite substantive claims. Treat missing metadata as unknown rather than filling it
   in from general knowledge.
 
-Papers in the library
+Papers and notes in the library
 - When you mention a paper that is in the library — in a reply, a note or a
   summary — name it with a link to it: `[Olley & Pakes (1996)](paper:doc-002)`.
   `list_documents` gives each paper's `link`. The paper may be there as another
   version than the one usually cited (a working paper of a published article);
   it is still the paper to link. Never invent a document ID, and leave a paper
   that is not in the library as plain text.
+- When you send the reader to a note — from a reply, a summary or another
+  note — do it with a link to it: `[the step-by-step implementation](note:paired-movers)`.
+  `list_notes` gives each note's `link`. Never invent a note ID.
 - A paper's name in the library is made from its authors and year. Where
   `list_documents` shows them missing or wrong, set them with
   `set_document_details` from what the title page itself says.

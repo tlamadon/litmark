@@ -394,10 +394,21 @@ export interface ChangeRecord {
   created_at: string
 }
 
+/** Where a selection sent with a message was made: a note, a summary, a page of a paper. */
+export interface SelectionIn {
+  kind: 'note' | 'summary' | 'paper'
+  /** The note's ID; for a summary or a paper, the document's. */
+  id: string
+  /** For a paper: the page of the PDF, counted from one. */
+  page?: number
+}
+
 export interface MessageContext {
   note_id?: string | null
   note_revision?: string | null
   selection?: string | null
+  /** Where `selection` was made, so the agent need not go looking for it. */
+  selection_in?: SelectionIn | null
   document_ids?: string[]
   reference_id?: string | null
   page_number?: number | null

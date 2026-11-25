@@ -144,6 +144,29 @@ export const knownPapers = StateField.define<readonly KnownPaper[]>({
   },
 })
 
+/** A note of the project, as a link to it needs to know it. */
+export interface KnownNote {
+  note_id: string
+  title: string
+}
+
+/**
+ * The notes of the project, so a `note:` link can say what it names, and a
+ * note's name set in backticks — which is how one is usually spoken of — can
+ * be told from any other piece of code.
+ */
+export const setKnownNotes = StateEffect.define<readonly KnownNote[]>()
+
+export const knownNotes = StateField.define<readonly KnownNote[]>({
+  create: () => [],
+  update(value, transaction) {
+    for (const effect of transaction.effects) {
+      if (effect.is(setKnownNotes)) return effect.value
+    }
+    return value
+  },
+})
+
 /** How a citation is shown: of the passage on show, or of some other. */
 type CitationTone = 'active' | 'other'
 
@@ -183,6 +206,11 @@ export interface LivePreviewOptions {
    * Cmd/Ctrl-click while editing.
    */
   onOpenPaper?: (documentId: string) => void
+  /**
+   * Invoked for a `note:` link, and for a note's name in backticks: on a
+   * click while reading, and on Cmd/Ctrl-click while editing.
+   */
+  onOpenNote?: (noteId: string) => void
   onOpenLink?: (href: string) => void
   /** Whether the buffer opens for reading rather than editing. */
   reading?: boolean
@@ -259,8 +287,13 @@ class LinkWidget extends WidgetType {
     readonly revealed = false,
     /** Reading: a click follows the link rather than opening it for editing. */
     readonly reading = false,
-    /** For a `paper:` link: the paper's title, or null if it is not in the library. */
-    readonly paper: string | null = null,
+    /**
+     * For a `paper:` or `note:` link: the title of what it names, or null if
+     * that is not in the project.
+     */
+    readonly named: string | null = null,
+    /** A note's name written in backticks: a link that still reads as code. */
+    readonly code = false,
   ) {
     super()
   }
@@ -273,7 +306,8 @@ class LinkWidget extends WidgetType {
       other.tone === this.tone &&
       other.revealed === this.revealed &&
       other.reading === this.reading &&
-      other.paper === this.paper
+      other.named === this.named &&
+      other.code === this.code
     )
   }
 
@@ -281,21 +315,29 @@ class LinkWidget extends WidgetType {
     const anchor = document.createElement('span')
     const isSource = this.href.startsWith('source:')
     const isPaper = this.href.startsWith(PAPER_SCHEME)
+    const isNote = this.href.startsWith(NOTE_SCHEME)
+    const missing = this.named === null ? ' missing' : ''
     anchor.className = isSource
       ? `cm-source-link ${citationClass(this.tone, this.revealed)}`
       : isPaper
-        ? `cm-paper-link${this.paper === null ? ' missing' : ''}`
-        : 'cm-link'
+        ? `cm-paper-link${missing}`
+        : isNote
+          ? `cm-note-link${missing}${this.code ? ' cm-inline-code' : ''}`
+          : 'cm-link'
     anchor.textContent = this.label
     anchor.title = isSource
       ? this.reading
         ? `${this.href} — open the cited page`
         : `${this.href} — Cmd/Ctrl-click to open the cited page`
       : isPaper
-        ? this.paper === null
+        ? this.named === null
           ? 'This paper is not in the library (any more)'
-          : `${this.paper} — ${this.reading ? 'open' : 'Cmd/Ctrl-click to open'} the paper`
-        : this.href
+          : `${this.named} — ${this.reading ? 'open' : 'Cmd/Ctrl-click to open'} the paper`
+        : isNote
+          ? this.named === null
+            ? 'There is no note by this name (any more)'
+            : `${this.named} — ${this.reading ? 'open' : 'Cmd/Ctrl-click to open'} the note`
+          : this.href
     anchor.setAttribute('role', 'link')
     anchor.setAttribute('tabindex', '0')
     const open = (event: Event) => {
@@ -303,7 +345,9 @@ class LinkWidget extends WidgetType {
       event.stopPropagation()
       if (isSource) this.options.onOpenSource?.(this.href.slice('source:'.length))
       else if (isPaper) {
-        if (this.paper !== null) this.options.onOpenPaper?.(this.href.slice(PAPER_SCHEME.length))
+        if (this.named !== null) this.options.onOpenPaper?.(this.href.slice(PAPER_SCHEME.length))
+      } else if (isNote) {
+        if (this.named !== null) this.options.onOpenNote?.(this.href.slice(NOTE_SCHEME.length))
       } else this.options.onOpenLink?.(this.href)
     }
     anchor.addEventListener('mousedown', (event) => {
@@ -333,22 +377,35 @@ class LinkWidget extends WidgetType {
 }
 
 const PAPER_SCHEME = 'paper:'
+const NOTE_SCHEME = 'note:'
 
 class MathWidget extends WidgetType {
   constructor(
     readonly tex: string,
     readonly display: boolean,
+    /**
+     * For an equation set on its own: whether it has to hold the text above
+     * and below off itself, there being no blank line that does.
+     */
+    readonly skip: { above: boolean; below: boolean } = { above: false, below: false },
   ) {
     super()
   }
 
   eq(other: MathWidget): boolean {
-    return other.tex === this.tex && other.display === this.display
+    return (
+      other.tex === this.tex &&
+      other.display === this.display &&
+      other.skip.above === this.skip.above &&
+      other.skip.below === this.skip.below
+    )
   }
 
   toDOM(): HTMLElement {
     const host = document.createElement('span')
     host.className = this.display ? 'cm-math cm-math-display' : 'cm-math'
+    if (this.skip.above) host.classList.add('cm-math-skip-above')
+    if (this.skip.below) host.classList.add('cm-math-skip-below')
     try {
       // `throwOnError: false` renders invalid math as flagged output rather
       // than throwing, and the source is still revealed when the cursor enters.
@@ -384,6 +441,7 @@ class TableWidget extends WidgetType {
     readonly options: LivePreviewOptions,
     readonly activeReference: string | null,
     readonly papers: readonly KnownPaper[],
+    readonly notes: readonly KnownNote[],
     readonly reading: boolean,
   ) {
     super()
@@ -395,6 +453,7 @@ class TableWidget extends WidgetType {
       other.from === this.from &&
       other.activeReference === this.activeReference &&
       other.papers === this.papers &&
+      other.notes === this.notes &&
       other.reading === this.reading
     )
   }
@@ -432,6 +491,11 @@ class TableWidget extends WidgetType {
       link.className = known ? 'cm-paper-link' : 'cm-paper-link missing'
       link.title = known ? known.title : 'This paper is not in the library (any more)'
     }
+    for (const link of wrap.querySelectorAll<HTMLElement>('[data-note]')) {
+      const known = this.notes.find((note) => note.note_id === link.dataset.note)
+      link.className = known ? 'cm-note-link' : 'cm-note-link missing'
+      link.title = known ? known.title : 'There is no note by this name (any more)'
+    }
 
     wrap.addEventListener('mousedown', (event) => {
       const target = event.target as HTMLElement | null
@@ -446,6 +510,12 @@ class TableWidget extends WidgetType {
       if (follow && paper) {
         event.preventDefault()
         if (!paper.classList.contains('missing')) this.options.onOpenPaper?.(paper.dataset.paper!)
+        return
+      }
+      const note = target?.closest<HTMLElement>('[data-note]')
+      if (follow && note) {
+        event.preventDefault()
+        if (!note.classList.contains('missing')) this.options.onOpenNote?.(note.dataset.note!)
         return
       }
       // An ordinary link opens as links do; and reading, a click is only a click.
@@ -477,6 +547,7 @@ function tableDecorations(state: EditorState, options: LivePreviewOptions): Deco
   const reading = state.field(readingMode, false) ?? false
   const active = state.field(activeCitation, false)?.referenceId ?? null
   const papers = state.field(knownPapers, false) ?? []
+  const notes = state.field(knownNotes, false) ?? []
   const lines = doc.toString().split('\n')
   const ranges: Range<Decoration>[] = []
   for (const table of findTables(lines)) {
@@ -492,7 +563,7 @@ function tableDecorations(state: EditorState, options: LivePreviewOptions): Deco
     const source = lines.slice(table.fromLine, table.toLine + 1).join('\n')
     ranges.push(
       Decoration.replace({
-        widget: new TableWidget(source, table, from, options, active, papers, reading),
+        widget: new TableWidget(source, table, from, options, active, papers, notes, reading),
         block: true,
       }).range(from, to),
     )
@@ -512,6 +583,7 @@ function tableField(options: LivePreviewOptions): StateField<DecorationSet> {
         before.field(sourceMode, false) !== after.field(sourceMode, false) ||
         before.field(readingMode, false) !== after.field(readingMode, false) ||
         before.field(knownPapers, false) !== after.field(knownPapers, false) ||
+        before.field(knownNotes, false) !== after.field(knownNotes, false) ||
         before.field(activeCitation, false)?.referenceId !==
           after.field(activeCitation, false)?.referenceId
       ) {
@@ -632,6 +704,7 @@ function buildDecorations(state: EditorState, options: LivePreviewOptions): Deco
   const ranges: Range<Decoration>[] = []
   const codeRanges: [number, number][] = []
   const papers = state.field(knownPapers, false) ?? []
+  const notes = state.field(knownNotes, false) ?? []
   const doc = state.doc
 
   const tree = syntaxTree(state)
@@ -716,13 +789,40 @@ function buildDecorations(state: EditorState, options: LivePreviewOptions): Deco
       }
 
       if (name === 'InlineCode') {
-        ranges.push(INLINE_CODE.range(from, to))
         codeRanges.push([from, to])
-        if (!touched(from, to)) {
-          for (const child of node.node.getChildren('CodeMark')) {
-            ranges.push(hidden.range(child.from, child.to))
+        if (touched(from, to)) {
+          ranges.push(INLINE_CODE.range(from, to))
+          return
+        }
+        const ticks = node.node.getChildren('CodeMark')
+        // A note is spoken of by its name in backticks — "see the note
+        // `paired-movers`" — by people and agents alike. Where that is the
+        // name of a note there is, it is the way to it.
+        if (ticks.length === 2) {
+          const written = doc.sliceString(ticks[0]!.to, ticks[1]!.from)
+          const noteId = written.replace(/\.md$/, '')
+          const note = notes.find((known) => known.note_id === noteId)
+          if (note) {
+            ranges.push(
+              Decoration.replace({
+                widget: new LinkWidget(
+                  written,
+                  NOTE_SCHEME + noteId,
+                  from,
+                  options,
+                  'other',
+                  false,
+                  reading,
+                  note.title,
+                  true,
+                ),
+              }).range(from, to),
+            )
+            return
           }
         }
+        ranges.push(INLINE_CODE.range(from, to))
+        for (const child of ticks) ranges.push(hidden.range(child.from, child.to))
         return
       }
 
@@ -752,13 +852,16 @@ function buildDecorations(state: EditorState, options: LivePreviewOptions): Deco
         const label = labelText(doc.sliceString(labelFrom, labelTo))
         const href = doc.sliceString(url.from, url.to)
         if (!label.trim()) return
-        const paper = href.startsWith(PAPER_SCHEME)
+        const named = href.startsWith(PAPER_SCHEME)
           ? (papers.find((known) => known.documentId === href.slice(PAPER_SCHEME.length))?.title ??
             null)
-          : null
+          : href.startsWith(NOTE_SCHEME)
+            ? (notes.find((known) => known.note_id === href.slice(NOTE_SCHEME.length))?.title ??
+              null)
+            : null
         ranges.push(
           Decoration.replace({
-            widget: new LinkWidget(label, href, from, options, tone, revealed, reading, paper),
+            widget: new LinkWidget(label, href, from, options, tone, revealed, reading, named),
           }).range(from, to),
         )
         return
@@ -771,11 +874,34 @@ function buildDecorations(state: EditorState, options: LivePreviewOptions): Deco
   for (const math of findMath(text)) {
     const insideCode = codeRanges.some(([from, to]) => math.from >= from && math.to <= to)
     if (insideCode) continue
-    if (touched(math.from, math.to)) continue
+    if (!math.display) {
+      if (touched(math.from, math.to)) continue
+      ranges.push(
+        Decoration.replace({ widget: new MathWidget(math.tex, false) }).range(math.from, math.to),
+      )
+      continue
+    }
+    // An equation is set as wide as the line, so whatever shares the line
+    // with it is put on a line of its own — and the indent of a list item,
+    // which is nothing to look at, was: an empty line above every equation in
+    // a list. The equation takes the blank around it on its line with it.
+    const first = doc.lineAt(math.from)
+    const last = doc.lineAt(math.to)
+    const opens = doc.sliceString(first.from, math.from).trim() === ''
+    const closes = doc.sliceString(math.to, last.to).trim() === ''
+    const from = opens ? first.from : math.from
+    const to = closes ? last.to : math.to
+    if (touched(from, to)) continue
+    // A blank line above or below is all the room an equation needs, as the
+    // skip around a display is in LaTeX. Where there is none, it keeps its own.
+    const blank = (number: number): boolean =>
+      number < 1 || number > doc.lines || doc.line(number).text.trim() === ''
+    const skip = {
+      above: !(opens && blank(first.number - 1)),
+      below: !(closes && blank(last.number + 1)),
+    }
     ranges.push(
-      Decoration.replace({
-        widget: new MathWidget(math.tex, math.display),
-      }).range(math.from, math.to),
+      Decoration.replace({ widget: new MathWidget(math.tex, true, skip) }).range(from, to),
     )
   }
 
@@ -843,6 +969,7 @@ function previewField(options: LivePreviewOptions): StateField<Preview> {
         before.field(activeCitation, false) !== after.field(activeCitation, false) ||
         before.field(readingMode, false) !== after.field(readingMode, false) ||
         before.field(knownPapers, false) !== after.field(knownPapers, false) ||
+        before.field(knownNotes, false) !== after.field(knownNotes, false) ||
         // The parser works in the background and reaches the end of a long note
         // late; what it finds there has to be drawn when it does.
         syntaxTree(before) !== syntaxTree(after)
@@ -866,6 +993,7 @@ export function livePreview(options: LivePreviewOptions = {}): Extension {
     activeCitation,
     readingMode.init(() => options.reading ?? false),
     knownPapers,
+    knownNotes,
     tableField(options),
     previewField(options),
     theme,
@@ -928,7 +1056,23 @@ const theme = EditorView.baseTheme({
     borderBottom: '1px dashed var(--muted-strong)',
     cursor: 'default',
   },
+  // Another note of the project, named in the text.
+  '.cm-note-link': {
+    color: 'var(--accent)',
+    borderBottom: '1px solid var(--accent)',
+    cursor: 'pointer',
+  },
+  '.cm-note-link.missing': {
+    color: 'var(--muted-strong)',
+    borderBottom: '1px dashed var(--muted-strong)',
+    cursor: 'default',
+  },
   '.cm-math-display': { display: 'inline-block', width: '100%', textAlign: 'center' },
+  // KaTeX puts 1em above and below a display. Between blank lines, which is
+  // how an equation is written, that was the skip twice over.
+  '.cm-math-display .katex-display': { margin: '0' },
+  '.cm-math-skip-above .katex-display': { marginTop: '1em' },
+  '.cm-math-skip-below .katex-display': { marginBottom: '1em' },
   // A table wider than the note scrolls within itself. Padding, not margin:
   // the editor measures the block, and a margin would be left out of it.
   '.cm-table-wrap': {

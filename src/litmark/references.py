@@ -30,6 +30,7 @@ MISSING_SOURCE = "missing_source"
 _REF_ID_RE = re.compile(r"^ref-[0-9a-z][0-9a-z-]{0,30}$")
 _SOURCE_LINK_RE = re.compile(r"\]\(source:([A-Za-z0-9][A-Za-z0-9\-]*)\)")
 _PAPER_LINK_RE = re.compile(r"\]\(paper:([A-Za-z0-9][A-Za-z0-9\-]*)\)")
+_NOTE_LINK_RE = re.compile(r"\]\(note:([A-Za-z0-9][A-Za-z0-9_\-]*)\)")
 
 
 @dataclass
@@ -420,6 +421,14 @@ def paper_ids_in_markdown(text: str) -> set[str]:
     a whole — `[Olley & Pakes (1996)](paper:doc-002)`.
     """
     return set(_PAPER_LINK_RE.findall(strip_code(text)))
+
+
+def note_ids_in_markdown(text: str) -> set[str]:
+    """Note IDs named by ``note:`` links: one note, or a summary, pointing at a note.
+
+    `[the implementation, step by step](note:paired-movers)`.
+    """
+    return set(_NOTE_LINK_RE.findall(strip_code(text)))
 
 
 def links_in_markdown(text: str) -> tuple[list[str], list[str]]:

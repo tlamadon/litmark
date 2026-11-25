@@ -24,10 +24,12 @@ import { headingsOf } from '../outline'
 import type { KnownPaper } from '../papers'
 import {
   citationsOf,
+  type KnownNote,
   livePreview,
   noteMarkdown,
   readingMode,
   setActiveReference,
+  setKnownNotes,
   setKnownPapers,
   setReadingMode,
   setRevealedCitation,
@@ -61,6 +63,20 @@ export interface MarkdownEditorProps {
   /** The papers of the library, so a `paper:` link can say what it names. */
   papers?: readonly KnownPaper[]
   onOpenPaper?: (documentId: string) => void
+  /** The notes of the project, so a link to one can say what it names. */
+  notes?: readonly KnownNote[]
+  onOpenNote?: (noteId: string) => void
+  /**
+   * The way back to what was open before this: null when there is nothing to
+   * go back to, and left out where there is no going back at all.
+   */
+  back?: BackStep | null
+  /**
+   * Where the reader is in the text, as it changes: the position at the top
+   * of the view. Given back as `startAt`, it is where the text opens.
+   */
+  onPlace?: (position: number) => void
+  startAt?: number
   onSelectionChange?: (selection: string) => void
   onDirtyChange?: (dirty: boolean) => void
   registerInsert?: (insert: (markdown: string) => void) => void
@@ -81,6 +97,12 @@ export interface MarkdownEditorProps {
   registerGoto?: (goto: (headingIndex: number) => void) => void
   /** What is open, named in the bar itself rather than on a line of its own. */
   title?: string
+}
+
+/** A step back: what it goes to, and the going. */
+export interface BackStep {
+  to: string
+  go: () => void
 }
 
 export interface RevealResult {
@@ -204,6 +226,7 @@ export function MarkdownEditor(props: MarkdownEditorProps) {
         ? livePreview({
             onOpenSource: (id) => latest.current.onOpenSource?.(id),
             onOpenPaper: (id) => latest.current.onOpenPaper?.(id),
+            onOpenNote: (id) => latest.current.onOpenNote?.(id),
             onOpenLink: (href) => window.open(href, '_blank', 'noopener,noreferrer'),
             reading: readingNow.current,
           })
@@ -216,7 +239,7 @@ export function MarkdownEditor(props: MarkdownEditorProps) {
           // On a link, the two clicks were two openings of the link.
           if (
             (event.target as HTMLElement | null)?.closest?.(
-              '.cm-source-link, .cm-link, .cm-paper-link',
+              '.cm-source-link, .cm-link, .cm-paper-link, .cm-note-link',
             )
           ) {
             return false
@@ -303,6 +326,23 @@ export function MarkdownEditor(props: MarkdownEditorProps) {
     revision.current = props.revision
     setState({ kind: 'clean' })
 
+    // Come back to: opened where it was left, not at its first line.
+    if (props.startAt !== undefined && props.startAt > 0) {
+      const at = Math.min(props.startAt, editor.view.state.doc.length)
+      editor.view.dispatch({ effects: EditorView.scrollIntoView(at, { y: 'start' }) })
+    }
+    // Where the reader is, kept as a place in the text rather than a distance
+    // scrolled: the text may be drawn at another width when it is come back to.
+    const surface = host.current
+    const onScrolled = (): void => {
+      const target = view.current
+      if (!target || !latest.current.onPlace) return
+      const top = surface.getBoundingClientRect().top - target.documentTop
+      latest.current.onPlace(top <= 0 ? 0 : target.lineBlockAtHeight(top).from)
+    }
+    // Scrolling is not an event that bubbles: caught on its way down instead.
+    surface.addEventListener('scroll', onScrolled, { capture: true, passive: true })
+
     props.registerInsert?.((snippet: string) => {
       const target = view.current
       if (!target) return
@@ -370,6 +410,7 @@ export function MarkdownEditor(props: MarkdownEditorProps) {
     const saveThisBuffer = props.save
     return () => {
       document.removeEventListener('visibilitychange', onHidden)
+      surface.removeEventListener('scroll', onScrolled, { capture: true })
       // Leaving within the autosave delay must not drop what was just typed.
       // The timer is the mark of edits not yet sent; a save already under way
       // goes first, so this one is checked against the revision it produced.
@@ -399,6 +440,10 @@ export function MarkdownEditor(props: MarkdownEditorProps) {
   useEffect(() => {
     view.current?.dispatch({ effects: setKnownPapers.of(props.papers ?? []) })
   }, [props.papers, props.docKey])
+
+  useEffect(() => {
+    view.current?.dispatch({ effects: setKnownNotes.of(props.notes ?? []) })
+  }, [props.notes, props.docKey])
 
   // Reload a clean buffer when the file changed on disk; keep a dirty one.
   useEffect(() => {
@@ -486,6 +531,19 @@ export function MarkdownEditor(props: MarkdownEditorProps) {
   return (
     <div class={reading ? 'editor reading' : 'editor'}>
       <div class="editor-bar">
+        {props.back !== undefined && (
+          <button
+            type="button"
+            class="ghost back-step"
+            data-action="back"
+            disabled={props.back === null}
+            aria-label="Back"
+            title={props.back ? `Back to ${props.back.to}` : 'Nothing to go back to'}
+            onClick={() => props.back?.go()}
+          >
+            ←
+          </button>
+        )}
         {props.title && (
           <h2 class="editor-title" title={props.title}>
             {props.title}

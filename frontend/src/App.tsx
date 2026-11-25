@@ -25,8 +25,10 @@ import {
   type RelatedToNote,
   type RelatedToPaper,
   type SearchHit,
+  type SelectionIn,
   type SyncState,
 } from './api'
+import { AskAbout, type AskPane, type Passage } from './AskAbout'
 import { Chat } from './chat/Chat'
 import type { OpenTarget } from './chat/describe'
 import { MarkdownEditor, type RevealResult } from './editor/MarkdownEditor'
@@ -76,6 +78,30 @@ const keyOf = (target: MainTarget): string =>
       : target.kind === 'skill'
         ? 'skill:summary'
         : 'empty'
+
+/** Whether what a target names is still in the project. */
+function stillThere(project: ProjectState, target: MainTarget): boolean {
+  if (target.kind === 'note') {
+    return project.notes.some((note) => note.note_id === target.noteId)
+  }
+  if (target.kind === 'summary') {
+    return project.documents.some((document) => document.document_id === target.documentId)
+  }
+  return target.kind === 'skill'
+}
+
+/**
+ * Where the reader has been in a session, most recent last: the texts that
+ * were open, each with the place it was read to, and the pages of the papers
+ * they were taken away from. A link followed is a step that can be taken back.
+ */
+interface Trail {
+  text: { target: MainTarget; at: number }[]
+  paper: { documentId: string; page: number }[]
+}
+
+/** Further back than this is not somewhere one is still on the way from. */
+const TRAIL_LENGTH = 50
 
 const NARROW_QUERY = '(max-width: 1100px)'
 
@@ -216,6 +242,106 @@ export function App() {
   const conversationRef = useRef<string | null>(null)
   const refreshTimer = useRef<number | null>(null)
   conversationRef.current = conversationId
+
+  // The way back, for each session. Kept by this window only: it is where
+  // this reader has just been, not part of what the session is.
+  const trails = useRef(new Map<string, Trail>())
+  const [, redrawTrail] = useState(0)
+  const trailOf = useCallback((id: string): Trail => {
+    let trail = trails.current.get(id)
+    if (!trail) {
+      trail = { text: [], paper: [] }
+      trails.current.set(id, trail)
+    }
+    return trail
+  }, [])
+  // How far each text on screen has been read: the position at the top of the view.
+  const textPlaces = useRef(new Map<string, number>())
+  // A step back is not itself somewhere to go back from.
+  const steppingBack = useRef(false)
+  const lastShown = useRef<{ session: string | null; target: MainTarget } | null>(null)
+  const openDocumentRef = useRef<DocumentRecord | null>(null)
+  openDocumentRef.current = openDocument
+  const pdfPageRef = useRef<number | null>(null)
+  pdfPageRef.current = pdfPage
+
+  // Whatever takes the place of a text — a link in it, the panel, the chat —
+  // leaves that text behind as somewhere to come back to.
+  useEffect(() => {
+    const last = lastShown.current
+    lastShown.current = { session: conversationId, target }
+    const back = steppingBack.current
+    steppingBack.current = false
+    const leaving = last ? keyOf(last.target) : null
+    if (leaving === docKey) return
+    // A text newly opened is at its first line; one come back to is where it was left.
+    if (!back) textPlaces.current.set(docKey, 0)
+    // A session come to has its own trail; nothing was left to get there.
+    if (back || !last || !conversationId || last.session !== conversationId) return
+    if (leaving === null || last.target.kind === 'empty') return
+    const trail = trailOf(conversationId).text
+    trail.push({ target: last.target, at: textPlaces.current.get(leaving) ?? 0 })
+    if (trail.length > TRAIL_LENGTH) trail.shift()
+    redrawTrail((tick) => tick + 1)
+  }, [docKey, conversationId])
+
+  /** Back to the text that was open before this one, where it was left. */
+  const stepBackText = useCallback((): void => {
+    const id = conversationRef.current
+    const project = stateRef.current
+    if (!id || !project) return
+    const trail = trailOf(id).text
+    while (trail.length > 0) {
+      const place = trail.pop()!
+      const key = keyOf(place.target)
+      // Deleted since, or where the reader already is: further back, then.
+      if (key === docKeyRef.current || !stillThere(project, place.target)) continue
+      steppingBack.current = true
+      textPlaces.current.set(key, place.at)
+      setTarget(place.target)
+      setSourceTakesOver(false)
+      break
+    }
+    redrawTrail((tick) => tick + 1)
+  }, [trailOf])
+
+  /**
+   * The page on show is about to be left for another — a citation opened, an
+   * entry of the contents, another paper: it is kept as somewhere to return to.
+   */
+  const leavePage = useCallback((): void => {
+    const id = conversationRef.current
+    const documentId = openDocumentRef.current?.document_id
+    if (!id || !documentId) return
+    const trail = trailOf(id).paper
+    const page = pdfPageRef.current ?? 1
+    const top = trail[trail.length - 1]
+    if (top && top.documentId === documentId && top.page === page) return
+    trail.push({ documentId, page })
+    if (trail.length > TRAIL_LENGTH) trail.shift()
+    redrawTrail((tick) => tick + 1)
+  }, [trailOf])
+
+  /** Back to the page, and the paper, the reader was taken away from. */
+  const stepBackPaper = useCallback((): void => {
+    const id = conversationRef.current
+    const project = stateRef.current
+    if (!id || !project) return
+    const trail = trailOf(id).paper
+    const here = openDocumentRef.current?.document_id ?? null
+    while (trail.length > 0) {
+      const place = trail.pop()!
+      const paper = project.documents.find((item) => item.document_id === place.documentId)
+      if (!paper || (place.documentId === here && place.page === pdfPageRef.current)) continue
+      setOpenDocument(paper)
+      // A passage picked out in one paper means nothing in another.
+      if (place.documentId !== here) setHighlight(null)
+      setGotoPage(place.page)
+      setGotoNonce((value) => value + 1)
+      break
+    }
+    redrawTrail((tick) => tick + 1)
+  }, [trailOf])
 
   // -------------------------------------------------------------- loading
 
@@ -473,9 +599,69 @@ export function App() {
     }))
   }, [target, buffer?.revision])
 
+  // What is selected in the text, and which text that is.
+  const selectionIn = useMemo<SelectionIn | null>(
+    () =>
+      target.kind === 'note'
+        ? { kind: 'note', id: target.noteId }
+        : target.kind === 'summary'
+          ? { kind: 'summary', id: target.documentId }
+          : null,
+    [docKey],
+  )
   useEffect(() => {
-    setContext((current) => ({ ...current, selection: selection || null }))
-  }, [selection])
+    setContext((current) => ({
+      ...current,
+      selection: selection || null,
+      selection_in: selection ? selectionIn : null,
+    }))
+  }, [selection, selectionIn])
+
+  const contextRef = useRef(context)
+  contextRef.current = context
+
+  /** What can be asked about in a pane: the passage selected there. */
+  const passageIn = useCallback(
+    (pane: AskPane): Passage | null => {
+      if (pane === 'text') return selection.trim() ? { quote: selection, in: selectionIn } : null
+      if (!pdfSelection) return null
+      return {
+        quote: pdfSelection.quote,
+        in: { kind: 'paper', id: pdfSelection.documentId, page: pdfSelection.pageNumber },
+      }
+    },
+    [selection, selectionIn, pdfSelection],
+  )
+
+  /**
+   * Ask about a passage, from where it is: a turn in the session on screen,
+   * sent with everything a message from the chat is sent with, and the passage
+   * in place of whatever else was selected.
+   */
+  const askAbout = useCallback(async (prompt: string, passage: Passage): Promise<boolean> => {
+    const id = conversationRef.current
+    if (!id) return false
+    const base = contextRef.current
+    const papers = base.document_ids ?? []
+    // The paper a passage is from is one the agent is to start from.
+    const from = passage.in?.kind === 'paper' ? passage.in.id : null
+    try {
+      await api.sendMessage(id, prompt, {
+        ...base,
+        selection: passage.quote,
+        selection_in: passage.in,
+        document_ids: from && !papers.includes(from) ? [...papers, from] : papers,
+      })
+    } catch (error) {
+      setInsertNotice(
+        error instanceof ApiError ? error.body.message : 'The request could not be sent.',
+      )
+      return false
+    }
+    // The answer is read in the chat: brought out if it was put away.
+    setShowChat(true)
+    return true
+  }, [])
 
   const reloadReferences = useCallback(async (): Promise<void> => {
     if (!openDocument) {
@@ -634,6 +820,7 @@ export function App() {
     async (referenceId: string): Promise<void> => {
       try {
         const reference = await api.getReference(referenceId)
+        leavePage()
         setHighlight(reference)
         setGotoPage(reference.page_number)
         setGotoNonce((value) => value + 1)
@@ -663,7 +850,7 @@ export function App() {
         )
       }
     },
-    [state?.documents, narrow],
+    [state?.documents, narrow, leavePage],
   )
 
   const insertReference = useCallback(
@@ -776,6 +963,7 @@ export function App() {
     (documentId: string): void => {
       const document = state?.documents.find((item) => item.document_id === documentId)
       if (!document) return
+      leavePage()
       setOpenDocument(document)
       setHighlight(null)
       setGotoPage(1)
@@ -787,7 +975,7 @@ export function App() {
         document_ids: Array.from(new Set([...(current.document_ids ?? []), documentId])),
       }))
     },
-    [state?.documents, narrow],
+    [state?.documents, narrow, leavePage],
   )
 
   /** Drag the drawer's edge to trade room between the chat and the page. */
@@ -864,6 +1052,7 @@ export function App() {
         setInsertNotice('That paper is no longer in this project.')
         return
       }
+      leavePage()
       setOpenDocument(document)
       setHighlight(null)
       setGotoPage(page)
@@ -871,7 +1060,7 @@ export function App() {
       setShowSourcePanel(true)
       if (narrow) setSourceTakesOver(true)
     },
-    [state?.documents, narrow],
+    [state?.documents, narrow, leavePage],
   )
 
   /** Open whatever a line of the conversation refers to. */
@@ -1162,17 +1351,36 @@ export function App() {
     return nameOf(state.documents.find((d) => d.document_id === paperId)) ?? 'New session'
   }
 
-  const currentTitle =
-    target.kind === 'note'
-      ? (notesById.get(target.noteId)?.title ?? target.noteId)
-      : target.kind === 'summary'
+  const titleOf = (shown: MainTarget): string =>
+    shown.kind === 'note'
+      ? (notesById.get(shown.noteId)?.title ?? shown.noteId)
+      : shown.kind === 'summary'
         ? `Summary — ${
-            nameOf(state.documents.find((d) => d.document_id === target.documentId)) ??
-            target.documentId
+            nameOf(state.documents.find((d) => d.document_id === shown.documentId)) ??
+            shown.documentId
           }`
-        : target.kind === 'skill'
+        : shown.kind === 'skill'
           ? 'How papers are summarized'
           : 'Nothing open'
+  const currentTitle = titleOf(target)
+
+  // Where a step back would go, in the text and in the paper: the last place
+  // on each trail that is still there and is not where the reader already is.
+  const trail = conversationId ? trails.current.get(conversationId) : undefined
+  const textBefore = [...(trail?.text ?? [])]
+    .reverse()
+    .find((place) => keyOf(place.target) !== docKey && stillThere(state, place.target))
+  const paperBefore = [...(trail?.paper ?? [])]
+    .reverse()
+    .find(
+      (place) =>
+        !(place.documentId === openDocument?.document_id && place.page === pdfPage) &&
+        state.documents.some((d) => d.document_id === place.documentId),
+    )
+  const paperBeforeName =
+    paperBefore && paperBefore.documentId !== openDocument?.document_id
+      ? nameOf(state.documents.find((d) => d.document_id === paperBefore.documentId))
+      : null
 
   // The library shows when it is asked for, and when nothing at all is open.
   const inLibrary = library || (target.kind === 'empty' && openDocument === null)
@@ -1279,6 +1487,7 @@ export function App() {
             openDocumentId={openDocument?.document_id ?? null}
             outline={outline}
             onGotoPage={(page) => {
+              leavePage()
               setGotoPage(page)
               setGotoNonce((value) => value + 1)
               if (narrow) setSourceTakesOver(true)
@@ -1373,6 +1582,15 @@ export function App() {
                 onOpenSource={(id) => void openSource(id)}
                 papers={papers}
                 onOpenPaper={(id) => showDocument(id, 1)}
+                notes={state.notes}
+                onOpenNote={(noteId) => {
+                  setTarget({ kind: 'note', noteId })
+                  setSourceTakesOver(false)
+                }}
+                back={textBefore ? { to: titleOf(textBefore.target), go: stepBackText } : null}
+                onPlace={(position) => textPlaces.current.set(docKey, position)}
+                // Where it was left: stepped back to, or put back from under the library.
+                startAt={textPlaces.current.get(docKey)}
                 onSelectionChange={setSelection}
                 onDirtyChange={setDirty}
                 activeReference={highlight?.reference_id ?? null}
@@ -1440,6 +1658,15 @@ export function App() {
               }}
               onOutline={setOutline}
               onPage={setPdfPage}
+              back={
+                paperBefore
+                  ? {
+                      to: `p. ${paperBefore.page}${paperBeforeName ? ` of ${paperBeforeName}` : ''}`,
+                      go: stepBackPaper,
+                    }
+                  : null
+              }
+              onJump={leavePage}
               onClose={() => {
                 setOpenDocument(null)
                 // No passage is on show any more, here or in the note.
@@ -1449,6 +1676,8 @@ export function App() {
             />
           </aside>
         )}
+
+        <AskAbout available={state.agent.ready} passageIn={passageIn} onAsk={askAbout} />
 
         {showChat ? (
           <aside class="chat-drawer">

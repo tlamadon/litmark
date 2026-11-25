@@ -7,6 +7,7 @@ fake used by tests. Everything above this module sees only normalized events.
 from __future__ import annotations
 
 import abc
+import re
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from typing import Any
@@ -35,6 +36,28 @@ class AgentEvent:
         return cls(ERROR, {"message": message, "kind": kind})
 
 
+_SELECTED_IN = {"note", "summary", "paper"}
+_PLAIN_ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.\-]{0,120}")
+
+
+def _selection_in(value: Any) -> dict[str, Any] | None:
+    """Where a selection was made, as the browser said — kept only if it is well formed.
+
+    It is put into what the agent reads, so nothing passes but a kind that is
+    known, an ID that is plainly one, and a page that is a number.
+    """
+    if not isinstance(value, dict):
+        return None
+    kind, ident = value.get("kind"), value.get("id")
+    if kind not in _SELECTED_IN or not isinstance(ident, str) or not _PLAIN_ID_RE.fullmatch(ident):
+        return None
+    where: dict[str, Any] = {"kind": kind, "id": ident}
+    page = value.get("page")
+    if kind == "paper" and isinstance(page, int) and not isinstance(page, bool) and page >= 1:
+        where["page"] = page
+    return where
+
+
 @dataclass
 class RunContext:
     """The explicit context attached to a chat message.
@@ -46,6 +69,9 @@ class RunContext:
     note_id: str | None = None
     note_revision: str | None = None
     selection: str | None = None
+    # Where the selection was made: {"kind": "note" | "summary" | "paper",
+    # "id": ..., "page": ...}. Said to the agent, so it need not go looking.
+    selection_in: dict[str, Any] | None = None
     document_ids: list[str] = field(default_factory=list)
     reference_id: str | None = None
     page_number: int | None = None
@@ -55,6 +81,7 @@ class RunContext:
             "note_id": self.note_id,
             "note_revision": self.note_revision,
             "selection": self.selection,
+            "selection_in": self.selection_in,
             "document_ids": self.document_ids,
             "reference_id": self.reference_id,
             "page_number": self.page_number,
@@ -67,6 +94,7 @@ class RunContext:
             note_id=data.get("note_id"),
             note_revision=data.get("note_revision"),
             selection=data.get("selection"),
+            selection_in=_selection_in(data.get("selection_in")),
             document_ids=list(data.get("document_ids") or []),
             reference_id=data.get("reference_id"),
             page_number=data.get("page_number"),
@@ -85,7 +113,9 @@ class RunContext:
             lines.append(f"- Currently open page: {self.page_number}")
         if self.selection:
             snippet = self.selection if len(self.selection) < 2000 else self.selection[:2000] + "…"
-            lines.append(f"- Selected text:\n<selection>\n{snippet}\n</selection>")
+            lines.append(
+                f"- Selected text{self._where_selected()}:\n<selection>\n{snippet}\n</selection>"
+            )
         if not lines:
             return ""
         header = (
@@ -93,6 +123,17 @@ class RunContext:
             "attached paper has been read):"
         )
         return header + "\n" + "\n".join(lines)
+
+    def _where_selected(self) -> str:
+        where = self.selection_in
+        if not where:
+            return ""
+        if where["kind"] == "note":
+            return f" (in the note {where['id']})"
+        if where["kind"] == "summary":
+            return f" (in the summary of {where['id']})"
+        page = f", page {where['page']} of the PDF" if "page" in where else ""
+        return f" (in the paper {where['id']}{page})"
 
 
 @dataclass

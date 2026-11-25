@@ -86,7 +86,9 @@ export function Composer(props: ComposerProps) {
             <button
               type="button"
               aria-label="Do not send the selection"
-              onClick={() => props.onContextChange({ ...context, selection: null })}
+              onClick={() =>
+                props.onContextChange({ ...context, selection: null, selection_in: null })
+              }
             >
               ×
             </button>

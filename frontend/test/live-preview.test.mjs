@@ -99,6 +99,77 @@ test('an equation set over several lines is drawn, and so is inline math broken 
   })
 })
 
+test('an equation is spaced by the blank lines around it, and by itself where there are none', () => {
+  const doc = [
+    '- In a list, the equation is indented:',
+    '',
+    '  $$a = b$$',
+    '',
+    '  and the item goes on.',
+    '',
+    'No blank line here:',
+    '$$c = d$$',
+    'nor here.',
+  ].join('\n')
+  reading(doc, (view) => {
+    const [spaced, crowded] = view.contentDOM.querySelectorAll('.cm-math-display')
+    // Between blank lines it adds nothing of its own, and the indent in front
+    // of it is not left on a line to itself above it.
+    assert.equal(spaced.className, 'cm-math cm-math-display')
+    assert.equal(spaced.parentElement.textContent, spaced.textContent)
+    // Against text, it holds the text off.
+    assert.ok(crowded.classList.contains('cm-math-skip-above'), crowded.className)
+    assert.ok(crowded.classList.contains('cm-math-skip-below'), crowded.className)
+    // The text is as written, indent and all.
+    assert.equal(view.state.doc.toString(), doc)
+  })
+})
+
+test('a note named in the text is a link to it, by a link or by its name in backticks', () => {
+  const doc = [
+    'See [the steps](note:paired-movers), or the note `paired-movers`, or `paired-movers.md`.',
+    'Not [this one](note:gone), nor `some-code`.',
+  ].join('\n')
+  const opened = []
+  const view = new EditorView({
+    state: EditorState.create({
+      doc,
+      extensions: [
+        preview.noteMarkdown(),
+        preview.livePreview({ reading: true, onOpenNote: (id) => opened.push(id) }),
+      ],
+    }),
+    parent: document.getElementById('host'),
+  })
+  try {
+    const links = () => [...view.contentDOM.querySelectorAll('.cm-note-link')]
+    // Until the notes are known, a name in backticks is only code.
+    assert.deepEqual(links().map((link) => link.textContent), ['the steps', 'this one'])
+    view.dispatch({
+      effects: preview.setKnownNotes.of([{ note_id: 'paired-movers', title: 'Paired movers' }]),
+    })
+    assert.deepEqual(
+      links().map((link) => [link.textContent, link.classList.contains('missing')]),
+      [
+        ['the steps', false],
+        ['paired-movers', false],
+        ['paired-movers.md', false],
+        ['this one', true],
+      ],
+    )
+    assert.match(links()[1].title, /^Paired movers/)
+    // Reading, a click goes there — and nowhere, for a note that is not there.
+    const MouseEvent = document.defaultView.MouseEvent
+    for (const link of links()) {
+      link.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }))
+    }
+    assert.deepEqual(opened, ['paired-movers', 'paired-movers', 'paired-movers'])
+    assert.equal(view.state.doc.toString(), doc)
+  } finally {
+    view.destroy()
+  }
+})
+
 test('a citation whose quotation holds brackets is still a link', () => {
   const doc = [
     'Kills the term — [a function of f, E[g ∆f|G, f] = ∆fE[g |G, f] = 0 by (A17).](source:ref-430) — and',

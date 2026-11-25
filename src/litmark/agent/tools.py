@@ -29,6 +29,7 @@ from ..references import (
     ReferenceStore,
     find_page,
     locate_quote,
+    note_ids_in_markdown,
     paper_ids_in_markdown,
     source_ids_in_markdown,
 )
@@ -64,6 +65,18 @@ RUN_TOOLS = frozenset(
 # Tools only this application's own agent has: a session elsewhere can fetch a
 # file itself, and there is no conversation here in which to ask about it.
 LOCAL_TOOLS = frozenset({"download_paper"})
+
+# What a write is told when it links to something that is not there.
+_UNKNOWN_LINKS = (
+    "These links are to nothing that exists: {links}. A source: link needs a "
+    "reference ID from resolve_source; a paper: link needs a document ID from "
+    "list_documents; a note: link needs a note ID from list_notes."
+)
+
+
+def _link_label(title: str) -> str:
+    """A title as the label of a Markdown link: its own brackets kept from closing it."""
+    return title.replace("[", "\\[").replace("]", "\\]")
 
 
 def _excerpts(text: str, terms: list[str], *, also: str = "") -> dict[str, Any] | None:
@@ -263,7 +276,12 @@ class ProjectTools:
     def list_notes(self) -> dict[str, Any]:
         return {
             "notes": [
-                {"note_id": note.note_id, "title": note.title, "revision": note.revision}
+                {
+                    "note_id": note.note_id,
+                    "title": note.title,
+                    "revision": note.revision,
+                    "link": f"[{_link_label(note.title)}](note:{note.note_id})",
+                }
                 for note in self.workspace.list_notes()
             ]
         }
@@ -548,17 +566,13 @@ class ProjectTools:
         origin: str = AGENT,
     ) -> dict[str, Any]:
         """Version-checked whole-note write with a persisted change record."""
-        unknown = self._unknown_references(text)
+        # A note may point at itself, and is not there yet while it is first written.
+        unknown = self._unknown_references(text, writing_note=note_id)
         if unknown:
             return {
                 "ok": False,
                 "error": "unregistered_references",
-                "message": (
-                    "These links are to nothing that exists: "
-                    f"{', '.join(sorted(unknown))}. A source: link needs a reference "
-                    "ID from resolve_source; a paper: link needs a document ID from "
-                    "list_documents."
-                ),
+                "message": _UNKNOWN_LINKS.format(links=", ".join(sorted(unknown))),
             }
 
         exists = self.workspace.note_exists(note_id)
@@ -755,12 +769,7 @@ class ProjectTools:
             return {
                 "ok": False,
                 "error": "unregistered_references",
-                "message": (
-                    "These links are to nothing that exists: "
-                    f"{', '.join(sorted(unknown))}. A source: link needs a reference "
-                    "ID from resolve_source; a paper: link needs a document ID from "
-                    "list_documents."
-                ),
+                "message": _UNKNOWN_LINKS.format(links=", ".join(sorted(unknown))),
             }
         try:
             revision, previous = self.documents.write_summary(
@@ -954,12 +963,13 @@ class ProjectTools:
             return str(path.relative_to(self.workspace.root))
         return None
 
-    def _unknown_references(self, text: str) -> set[str]:
+    def _unknown_references(self, text: str, *, writing_note: str | None = None) -> set[str]:
         """Referenced IDs must exist before generated content is published.
 
         A link to a passage (`source:ref-012`) must be to a registered
-        reference, and a link to a paper (`paper:doc-002`) to a paper in the
-        library: neither kind of ID may be made up.
+        reference, a link to a paper (`paper:doc-002`) to a paper in the
+        library, and a link to a note (`note:paired-movers`) to a note there
+        is: no kind of ID may be made up.
         """
         unknown: set[str] = set()
         cited = source_ids_in_markdown(text)
@@ -970,6 +980,11 @@ class ProjectTools:
         if papers:
             held = {document.document_id for document in self.documents.list()}
             unknown |= {f"paper:{paper}" for paper in papers if paper not in held}
+        unknown |= {
+            f"note:{note}"
+            for note in note_ids_in_markdown(text)
+            if note != writing_note and not self.workspace.note_exists(note)
+        }
         return unknown
 
 
@@ -1119,7 +1134,9 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
         "name": "list_notes",
         "description": (
             "List the project's notes with their IDs, titles, and current revisions. "
-            "Start here to learn which notes exist before reading or editing one."
+            "Start here to learn which notes exist before reading or editing one. Each "
+            "comes with `link`, the Markdown that points at it: use it wherever a note "
+            "or a summary sends the reader to another note."
         ),
         "input_schema": {"type": "object", "properties": {}, "additionalProperties": False},
     },

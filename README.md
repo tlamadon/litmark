@@ -613,6 +613,34 @@ note."* Like a citation, a link naming a paper that is not in the library is
 refused when an agent writes it, and one whose paper has since been removed is
 shown greyed out.
 
+### Sending the reader to a note
+
+A note is pointed at the same way, by its ID — the name of its file:
+
+```markdown
+The estimator is worked through in [the step-by-step note](note:paired-movers).
+```
+
+A click opens the note, and the **←** at the head of the text goes back to
+what was open before, at the place it was left. A note's ID set in backticks —
+`` `paired-movers` ``, which is how one is usually spoken of — is a link to it
+too, wherever there is a note of that name. The paper has a **←** of its own:
+after a citation, an entry of its contents or a page number has taken you
+somewhere in it, that goes back to the page you were on.
+
+### Asking about a passage
+
+Select some text — in a note or a summary, or on a page of the paper — and a
+small **✦** appears at the end of it. Click it, or press **Cmd/Ctrl-K**, and a
+box opens by the passage: type what you want to know and press **Enter**.
+
+It is an ordinary message in the session on screen, sent with the passage and
+with where it is — which note, or which page of which paper — so the agent
+does not have to go looking for it. The answer is read in the chat, which
+comes back out if it was put away; the passage quoted under the question there
+is a way back to where it was selected. **Esc** closes the box, and so does a
+click elsewhere while nothing is typed in it.
+
 ## The summarizing skill
 
 How a paper is summarized is not fixed: it is a **skill** the project keeps and

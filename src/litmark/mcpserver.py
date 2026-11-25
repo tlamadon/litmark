@@ -104,6 +104,8 @@ Setting something down
 - When what you write mentions a paper that is in the library, name it with
   its link from `list_documents` — `[Olley & Pakes (1996)](paper:doc-002)` —
   so the user can click through to it. Never invent a document ID.
+- When what you write sends the reader to a note, link to it the same way,
+  with its link from `list_notes` — `[the implementation](note:paired-movers)`.
 - Your edits are recorded under your client's name, and the user can undo them.
 
 Summarizing a paper

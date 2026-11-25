@@ -20,7 +20,7 @@ from litmark.api.app import TOKEN_HEADER, create_app
 from litmark.documents import Document, author_names, surname_of
 from litmark.extraction import clean_authors, clean_title
 from litmark.mcpserver import ATTRIBUTED
-from litmark.references import paper_ids_in_markdown
+from litmark.references import note_ids_in_markdown, paper_ids_in_markdown
 
 
 def paper(**fields: Any) -> Document:
@@ -271,3 +271,32 @@ def test_a_note_and_a_paper_know_what_they_are_tied_to(services, client, paper_o
     assert client.get("/api/related").status_code == 422
     assert client.get("/api/related", params={"note_id": "absent"}).status_code == 404
     assert client.get("/api/related", params={"document_id": "doc-404"}).status_code == 404
+
+
+# -------------------------------------------------------- one note in another
+
+
+def test_a_link_to_a_note_must_be_to_one_that_is_there(services, client, paper_one):
+    document_id = upload(client, "mobility.pdf", paper_one)["imported"][0]["document"]["document_id"]
+    assert note_ids_in_markdown("See [it](note:steps_1). Not `[x](note:nothing)`.") == {"steps_1"}
+
+    # A note may point at itself, though it is not there until it is written.
+    first = dispatch(
+        services.tools, "write_note", {"note_id": "steps", "text": "# Steps [in full]\n\n[Top](note:steps)."}
+    )
+    assert first["ok"] is True
+    listed = {note["note_id"]: note for note in dispatch(services.tools, "list_notes", {})["notes"]}
+    assert listed["steps"]["link"] == "[Steps \\[in full\\]](note:steps)"
+
+    # A summary may send the reader to a note; neither may send them nowhere.
+    sent = dispatch(
+        services.tools,
+        "write_summary",
+        {"document_id": document_id, "text": "Worked through in [the steps](note:steps)."},
+    )
+    assert sent["ok"] is True
+    made_up = dispatch(
+        services.tools, "append_note", {"note_id": "log", "text": "See [the rest](note:no-such-note)."}
+    )
+    assert made_up["error"] == "unregistered_references"
+    assert "note:no-such-note" in made_up["message"] and "list_notes" in made_up["message"]

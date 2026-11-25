@@ -1173,8 +1173,9 @@ button.tag:hover {
   background: var(--accent-soft);
 }
 
-/* A paper of the library, named in a reply. */
-.prose a.paper-link {
+/* A paper of the library, or a note, named in a reply. */
+.prose a.paper-link,
+.prose a.note-link {
   color: var(--accent);
   border-bottom: 1px solid var(--accent);
   cursor: pointer;
@@ -1318,6 +1319,20 @@ button.tag:hover {
 
 .editor-bar .editor-actions {
   margin-left: auto;
+}
+
+/* The way back to what was open before. */
+.editor-bar .back-step {
+  flex: none;
+  padding: 0.05rem 0.4rem;
+  margin: 0 -0.2rem 0 -0.4rem;
+  color: var(--muted-strong);
+}
+
+.editor-bar .back-step:disabled {
+  opacity: 0.35;
+  cursor: default;
+  border-color: transparent;
 }
 
 .save-state {
@@ -3016,4 +3031,133 @@ button.tag:hover {
   background: color-mix(in srgb, var(--danger) 14%, transparent);
   border-color: var(--danger);
   color: var(--danger);
+}
+
+/* Asking about a passage, from where it is read: the ✦ at the end of a
+   selection, and the box it opens. Both are placed in the window, over
+   whichever pane the passage is in. */
+
+.ask-button {
+  position: fixed;
+  z-index: 45;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  display: grid;
+  place-items: center;
+  border: 1px solid var(--accent);
+  border-radius: 50%;
+  background: var(--panel);
+  color: var(--accent);
+  font-size: 0.82rem;
+  line-height: 1;
+  box-shadow: 0 2px 6px rgba(35, 32, 28, 0.18);
+  cursor: pointer;
+}
+
+.ask-button:hover {
+  background: var(--accent);
+  color: var(--panel);
+}
+
+.ask-box {
+  position: fixed;
+  z-index: 45;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  padding: 0.55rem 0.6rem;
+  border: 1px solid var(--rule);
+  border-radius: 9px;
+  background: var(--panel);
+  box-shadow: 0 6px 24px rgba(35, 32, 28, 0.2);
+}
+
+.ask-quote {
+  margin: 0;
+  padding-left: 0.5rem;
+  border-left: 2px solid var(--accent);
+  color: var(--muted-strong);
+  font-family: var(--serif);
+  font-size: 0.86rem;
+  line-height: 1.35;
+  max-height: 3.6em;
+  overflow: hidden;
+}
+
+.ask-box textarea {
+  width: 100%;
+  box-sizing: border-box;
+  resize: vertical;
+  min-height: 2.6rem;
+  max-height: 40vh;
+  padding: 0.35rem 0.45rem;
+  border: 1px solid var(--rule);
+  border-radius: 6px;
+  background: var(--bg);
+  color: inherit;
+  font: inherit;
+  font-size: 0.92rem;
+}
+
+.ask-box textarea:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.ask-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.ask-actions .hint {
+  flex: 1;
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+
+.ask-actions .hint.refused {
+  color: var(--danger);
+}
+
+.ask-actions button {
+  border: 1px solid var(--rule);
+  border-radius: 6px;
+  padding: 0.2rem 0.65rem;
+  font-size: 0.85rem;
+  background: var(--panel);
+}
+
+.ask-actions button.ghost {
+  border-color: transparent;
+  background: none;
+}
+
+.ask-actions button.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--panel);
+  font-weight: 600;
+}
+
+.ask-actions button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+/* What a turn was asked about, when it says where: a way to go there. */
+button.turn-selection {
+  background: none;
+  border: 0;
+  padding: 0;
+  color: inherit;
+  font: inherit;
+  font-style: italic;
+  text-align: left;
+  cursor: pointer;
+}
+
+button.turn-selection:hover {
+  text-decoration: underline;
 }
