@@ -971,3 +971,44 @@ def test_saving_a_note_back_to_earlier_text_records_a_new_change(client):
     mine = [c for c in changes if c["target_id"] == note["note_id"]]
     assert len(mine) >= 3, "each save should record its own change"
     assert len({c["change_id"] for c in mine}) == len(mine), "change IDs must be unique"
+
+
+def test_references_registered_at_once_each_get_an_id_of_their_own(services):
+    """A reader citing a passage while the agent cites another: two references.
+
+    The ID used to be asked for and then written under, as two steps, so two
+    callers could be handed the same one and the second written replaced the
+    first. The A13 test above caught it, now and then, against the summary
+    that is written in the background of an upload.
+    """
+    import threading
+
+    from litmark.references import RESOLVED, Reference
+
+    count = 24
+    start = threading.Barrier(count)
+    given: list[str] = []
+
+    def register(page: int) -> None:
+        start.wait()
+        reference = Reference(
+            reference_id="",
+            document_id="doc-001",
+            document_sha256="0" * 64,
+            page_number=page,
+            status=RESOLVED,
+            quote=f"passage {page}",
+        )
+        given.append(services.references.add(reference).reference_id)
+
+    threads = [threading.Thread(target=register, args=(page,)) for page in range(1, count + 1)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    registry = services.references.all()
+    assert len(set(given)) == count
+    assert sorted(reference.page_number for reference in registry.values()) == list(range(1, count + 1))
+    # Each is where it was said to be: none took another's place.
+    assert all(registry[ref_id].quote == f"passage {registry[ref_id].page_number}" for ref_id in given)

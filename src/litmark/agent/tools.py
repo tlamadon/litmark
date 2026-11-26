@@ -539,7 +539,7 @@ class ProjectTools:
         note: str | None = None,
     ) -> Reference:
         reference = Reference(
-            reference_id=self.references.allocate_id(),
+            reference_id="",  # given by the registry, as it is written
             document_id=document_id,
             document_sha256=document_sha256,
             page_number=page.page_number,
@@ -552,7 +552,7 @@ class ProjectTools:
             note=note,
             created_at=utcnow(),
         )
-        return self.references.put(reference)
+        return self.references.add(reference)
 
     # --------------------------------------------------------------- writes
 

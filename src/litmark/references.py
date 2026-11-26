@@ -159,15 +159,28 @@ class ReferenceStore:
             self._write(raw)
         return reference
 
-    def allocate_id(self) -> str:
-        """Reference IDs are allocated centrally; agents never invent them."""
+    def add(self, reference: Reference) -> Reference:
+        """Register a new reference under the next free ID, which it is given here.
+
+        Reference IDs are allocated centrally; agents never invent them. And
+        choosing the ID and writing the reference under it are one step. As
+        two — ask for an ID, then put the reference there — a reader citing a
+        passage while the agent cited another were each handed the same ID,
+        and whichever was written second took the place of the first: a
+        citation in a note that pointed at somebody else's passage.
+        """
         with self._lock:
             raw = self._load_raw()
             used = raw["references"].keys()
             index = 1
             while f"ref-{index:03d}" in used:
                 index += 1
-            return f"ref-{index:03d}"
+            reference.reference_id = f"ref-{index:03d}"
+            if not reference.created_at:
+                reference.created_at = utcnow()
+            raw["references"][reference.reference_id] = reference.to_json()
+            self._write(raw)
+        return reference
 
     def remove(self, reference_id: str) -> None:
         with self._lock:

@@ -582,7 +582,7 @@ def build_router() -> APIRouter:
             message = "The selection produced no usable geometry; cited the page only."
 
         reference = Reference(
-            reference_id=services.references.allocate_id(),
+            reference_id="",  # given by the registry, as it is written
             document_id=body.document_id,
             document_sha256=document.sha256,
             page_number=page.page_number,
@@ -595,7 +595,7 @@ def build_router() -> APIRouter:
             note=message,
             created_at=utcnow(),
         )
-        services.references.put(reference)
+        services.references.add(reference)
         label = f"{document.display_title}, p. {page.page_label or page.page_number}"
         return {
             **reference.api_json(),
