@@ -541,6 +541,11 @@ the foot of it either way.
 The paper's own bar is one line — its name, the page, the zoom, the marks by
 where they are cited, and the way to close it — so the page gets the room.
 
+The text and the paper divide the room between them, and the line where they
+meet can be dragged to give the paper more of it, or less; a double-click
+there puts it back. The split is kept from one visit to the next, as the
+chat's width is.
+
 ## Reading and editing
 
 A summary or a note opens for **reading**: fully rendered, with no cursor to
@@ -640,6 +645,10 @@ does not have to go looking for it. The answer is read in the chat, which
 comes back out if it was put away; the passage quoted under the question there
 is a way back to where it was selected. **Esc** closes the box, and so does a
 click elsewhere while nothing is typed in it.
+
+A passage of the paper can be cited from the same place. Beside the ✦,
+**Cite** puts a reference to it in the note or summary that is open, and
+**Quote** the passage itself as a quotation with its reference under it.
 
 ## The summarizing skill
 

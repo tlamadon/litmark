@@ -152,7 +152,7 @@ Rectangles use `[x0, y0, x1, y1]` in `[0,1]`, relative to the visible page after
 
 ### Two ways to create a reference
 
-**Human selection:** select text on a single PDF page, then choose “Insert reference” or “Insert quotation and reference.” Insert the link at the last editor position. Multi-page selection is outside v0.1.
+**Human selection:** select text on a single PDF page, then choose “Cite” (insert a reference) or “Quote” (insert the quotation and its reference) beside the selection. Insert the link at the last editor position. Multi-page selection is outside v0.1.
 
 The browser sends the selected text with its surrounding context and the server locates it through the same resolver the agent uses, rather than storing geometry measured in the viewer. This keeps one source of truth for coordinates and means a human selection that cannot be matched uniquely reports `ambiguous` or `not_found` exactly as an agent's would, instead of silently recording a rectangle the extraction layer disagrees with.
 

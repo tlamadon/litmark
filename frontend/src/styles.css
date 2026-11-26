@@ -1530,6 +1530,7 @@ button.tag:hover {
 /* ----------------------------------------------------------------- source */
 
 .source {
+  position: relative; /* the splitter rides its left edge */
   border-left: 1px solid var(--rule);
   background: var(--panel);
   display: flex;
@@ -1540,24 +1541,6 @@ button.tag:hover {
 .source .back {
   align-self: flex-start;
   margin: 0.4rem;
-}
-
-.selection-actions {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  flex-wrap: wrap;
-  padding: 0.45rem 0.6rem;
-  border-bottom: 1px solid var(--rule);
-  background: var(--accent-soft);
-}
-
-.selection-actions button {
-  border: 1px solid var(--rule);
-  background: var(--panel);
-  border-radius: 6px;
-  padding: 0.2rem 0.55rem;
-  font-size: 0.85rem;
 }
 
 .pdf {
@@ -1856,9 +1839,10 @@ button.tag:hover {
   overflow: hidden;
 }
 
-/* Drag to trade room between the chat and the page. Wider than it looks, so
-   it can be caught without aiming. */
-.chat-splitter {
+/* Drag to trade room between the chat and the page, or between the paper and
+   the text beside it. Wider than it looks, so it can be caught without aiming. */
+.chat-splitter,
+.source-splitter {
   position: absolute;
   top: 0;
   bottom: 0;
@@ -1870,7 +1854,9 @@ button.tag:hover {
 }
 
 .chat-splitter:hover,
-.chat-splitter:active {
+.chat-splitter:active,
+.source-splitter:hover,
+.source-splitter:active {
   background: color-mix(in srgb, var(--accent) 35%, transparent);
 }
 
@@ -3037,25 +3023,41 @@ button.tag:hover {
    selection, and the box it opens. Both are placed in the window, over
    whichever pane the passage is in. */
 
-.ask-button {
+.passage-offer {
   position: fixed;
   z-index: 45;
-  width: 22px;
-  height: 22px;
-  padding: 0;
-  display: grid;
-  place-items: center;
+  display: flex;
+  align-items: stretch;
+  height: 24px;
   border: 1px solid var(--accent);
-  border-radius: 50%;
+  border-radius: 12px;
   background: var(--panel);
-  color: var(--accent);
-  font-size: 0.82rem;
-  line-height: 1;
   box-shadow: 0 2px 6px rgba(35, 32, 28, 0.18);
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.passage-offer button {
+  border: 0;
+  background: none;
+  padding: 0 0.5rem;
+  color: var(--accent);
+  font-size: 0.76rem;
+  font-weight: 550;
+  line-height: 1;
   cursor: pointer;
 }
 
-.ask-button:hover {
+.passage-offer button + button {
+  border-left: 1px solid var(--rule);
+}
+
+.passage-offer button.ask {
+  padding: 0 0.4rem;
+  font-size: 0.82rem;
+}
+
+.passage-offer button:hover {
   background: var(--accent);
   color: var(--panel);
 }

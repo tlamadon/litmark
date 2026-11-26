@@ -131,6 +131,41 @@ function storedChatWidth(): number {
   return CHAT_DEFAULT_WIDTH
 }
 
+const SOURCE_SHARE_KEY = 'litmark:source-share'
+/** How the text and the paper divide the room between them: the paper's part. */
+const SOURCE_DEFAULT_SHARE = 0.51
+const SOURCE_MIN_SHARE = 0.3
+const SOURCE_MAX_SHARE = 0.75
+/**
+ * The least the two are given between them, however short of room the window
+ * is: a readable line of text and a readable page (see `.body > .main`).
+ */
+const SPLIT_LEAST = '34ch + 360px'
+
+/**
+ * How much of the room a pane takes when the text and the paper are side by
+ * side. Its part of what there is, and the same part of the least they are
+ * given: so the split is the reader's in a small window too, where each
+ * pane's own minimum would otherwise decide it, and the chat and the panel
+ * beside them are squeezed no more than they were.
+ */
+const splitStyle = (part: number): { flexGrow: number; minWidth: string } => ({
+  flexGrow: part,
+  minWidth: `calc((${SPLIT_LEAST}) * ${part.toFixed(4)})`,
+})
+
+function storedSourceShare(): number {
+  try {
+    const stored = Number(window.localStorage.getItem(SOURCE_SHARE_KEY))
+    if (Number.isFinite(stored) && stored >= SOURCE_MIN_SHARE && stored <= SOURCE_MAX_SHARE) {
+      return stored
+    }
+  } catch {
+    /* storage can be refused; the default stands */
+  }
+  return SOURCE_DEFAULT_SHARE
+}
+
 /** Which conversation was open, so a reload comes back to it. */
 function rememberedConversation(root: string): string | null {
   try {
@@ -194,6 +229,7 @@ export function App() {
   const [showSidebar, setShowSidebar] = useState(true)
   const [showChat, setShowChat] = useState(true)
   const [chatWidth, setChatWidth] = useState(storedChatWidth)
+  const [sourceShare, setSourceShare] = useState(storedSourceShare)
   const [showSource, setShowSourcePanel] = useState(true)
   const [narrow, setNarrow] = useState(() => window.matchMedia(NARROW_QUERY).matches)
   const [sourceTakesOver, setSourceTakesOver] = useState(false)
@@ -1006,6 +1042,43 @@ export function App() {
     event.preventDefault()
   }, [])
 
+  /** Drag the paper's edge to trade room between it and the text beside it. */
+  const resizeSource = useCallback((event: PointerEvent): void => {
+    const handle = event.currentTarget as HTMLElement
+    const source = handle.parentElement
+    const main = source?.parentElement?.querySelector<HTMLElement>(':scope > .main')
+    if (!source || !main) return
+    handle.setPointerCapture(event.pointerId)
+    let share = 0
+    const onMove = (move: PointerEvent): void => {
+      // The two of them, edge to edge: the paper's part is what is right of the pointer.
+      const left = main.getBoundingClientRect().left
+      const right = source.getBoundingClientRect().right
+      if (right <= left) return
+      share = Math.min(
+        SOURCE_MAX_SHARE,
+        Math.max(SOURCE_MIN_SHARE, (right - move.clientX) / (right - left)),
+      )
+      setSourceShare(share)
+    }
+    const onUp = (): void => {
+      handle.removeEventListener('pointermove', onMove)
+      handle.removeEventListener('pointerup', onUp)
+      handle.removeEventListener('pointercancel', onUp)
+      if (share > 0) {
+        try {
+          window.localStorage.setItem(SOURCE_SHARE_KEY, String(share))
+        } catch {
+          /* the split holds for this visit */
+        }
+      }
+    }
+    handle.addEventListener('pointermove', onMove)
+    handle.addEventListener('pointerup', onUp)
+    handle.addEventListener('pointercancel', onUp)
+    event.preventDefault()
+  }, [])
+
   /**
    * Go from a highlight in the paper to where it is cited.
    *
@@ -1561,7 +1634,11 @@ export function App() {
         )}
 
         {showMain && (
-          <main class="main">
+          <main
+            class="main"
+            // Beside the paper, the two divide the room as the reader set it.
+            style={showSourceRegion ? splitStyle(1 - sourceShare) : undefined}
+          >
             {narrow && openDocument && (
               <div class="main-head">
                 <button type="button" class="ghost" onClick={() => setSourceTakesOver(true)}>
@@ -1620,7 +1697,25 @@ export function App() {
         )}
 
         {showSourceRegion && openDocument && (
-          <aside class="source">
+          <aside class="source" style={showMain ? splitStyle(sourceShare) : undefined}>
+            {showMain && !narrow && (
+              <div
+                class="source-splitter"
+                role="separator"
+                aria-orientation="vertical"
+                aria-label="Resize the paper"
+                title="Drag to resize; double-click to reset"
+                onPointerDown={resizeSource}
+                onDblClick={() => {
+                  setSourceShare(SOURCE_DEFAULT_SHARE)
+                  try {
+                    window.localStorage.removeItem(SOURCE_SHARE_KEY)
+                  } catch {
+                    /* nothing was stored */
+                  }
+                }}
+              />
+            )}
             {narrow && (
               <button
                 type="button"
@@ -1629,20 +1724,6 @@ export function App() {
               >
                 ← Back to the text
               </button>
-            )}
-            {pdfSelection && (
-              <div class="selection-actions">
-                <span class="muted">
-                  “{pdfSelection.quote.slice(0, 60)}
-                  {pdfSelection.quote.length > 60 ? '…' : ''}”
-                </span>
-                <button type="button" onClick={() => void insertReference(false)}>
-                  Insert reference
-                </button>
-                <button type="button" onClick={() => void insertReference(true)}>
-                  Insert quotation and reference
-                </button>
-              </div>
             )}
             <PdfViewer
               document={openDocument}
@@ -1677,7 +1758,13 @@ export function App() {
           </aside>
         )}
 
-        <AskAbout available={state.agent.ready} passageIn={passageIn} onAsk={askAbout} />
+        <AskAbout
+          available={state.agent.ready}
+          passageIn={passageIn}
+          onAsk={askAbout}
+          // A reference is put into the text that is open: with none, there is nowhere.
+          onCite={showMain ? (withQuote) => void insertReference(withQuote) : undefined}
+        />
 
         {showChat ? (
           <aside class="chat-drawer">

@@ -1,11 +1,16 @@
 /**
- * Asking the agent about a passage, from where it is read.
+ * What can be done with a passage, offered where it is selected.
  *
  * Select some text — in the note or summary, or on a page of the paper — and
  * a small ✦ appears at the end of it. Click it (or press Cmd/Ctrl-K) and a box
  * opens by the passage for a request. Sending it is an ordinary turn in the
  * session on screen, with the passage attached and where it was found said,
  * so the chat keeps the whole record and is where the answer is read.
+ *
+ * A passage of the paper can also be cited from there: beside the ✦, Cite
+ * puts a reference to it in the text that is open, and Quote the quotation
+ * with its reference. They used to be a bar across the top of the paper,
+ * which pushed the page down under the selection each time it appeared.
  *
  * It works from the selection the browser holds, wherever that is, rather
  * than from inside the editor or the viewer: the two panes are drawn by
@@ -32,6 +37,11 @@ export interface AskAboutProps {
   passageIn: (pane: AskPane) => Passage | null
   /** Send it. Resolves to whether it was taken. */
   onAsk: (prompt: string, passage: Passage) => Promise<boolean>
+  /**
+   * Put a reference to the passage selected in the paper into the text that
+   * is open, with the quotation or without. Left out when no text is open.
+   */
+  onCite?: (withQuote: boolean) => void
 }
 
 interface Place {
@@ -44,7 +54,8 @@ interface Place {
 
 const IS_MAC = /mac/i.test(navigator.platform)
 const BOX_WIDTH = 380
-const BUTTON_SIZE = 22
+/** The height of what is offered, and the room kept for it above a passage. */
+const OFFER_HEIGHT = 24
 /** Characters of the passage quoted at the head of the box. */
 const MAX_QUOTE = 160
 
@@ -90,7 +101,7 @@ export function AskAbout(props: AskAboutProps) {
   const state = useRef({ offer, asking, prompt, sending })
   state.current = { offer, asking, prompt, sending }
   const box = useRef<HTMLFormElement | null>(null)
-  const button = useRef<HTMLButtonElement | null>(null)
+  const offered = useRef<HTMLDivElement | null>(null)
   const input = useRef<HTMLTextAreaElement | null>(null)
 
   const open = (): void => {
@@ -115,7 +126,12 @@ export function AskAbout(props: AskAboutProps) {
   useEffect(() => {
     const mine = (target: EventTarget | null): boolean =>
       target instanceof Node &&
-      Boolean(box.current?.contains(target) || button.current?.contains(target))
+      Boolean(box.current?.contains(target) || offered.current?.contains(target))
+
+    /** Whether there is anything to offer for a passage in this pane. */
+    const offers = (pane: AskPane): boolean =>
+      latest.current.passageIn(pane) !== null &&
+      (latest.current.available || (pane === 'paper' && Boolean(latest.current.onCite)))
 
     let settle: number | null = null
     /** Offer the selection as it stands, once what made it has been taken in. */
@@ -123,9 +139,9 @@ export function AskAbout(props: AskAboutProps) {
       if (settle !== null) window.clearTimeout(settle)
       settle = window.setTimeout(() => {
         settle = null
-        if (state.current.asking || !latest.current.available) return
+        if (state.current.asking) return
         const at = locate()
-        setOffer(at && latest.current.passageIn(at.pane) ? at : null)
+        setOffer(at && offers(at.pane) ? at : null)
       }, 40)
     }
 
@@ -186,10 +202,14 @@ export function AskAbout(props: AskAboutProps) {
     }
   }, [])
 
-  // An agent that is no longer there has nothing to be asked.
-  useEffect(() => {
-    if (!props.available) setOffer(null)
-  }, [props.available])
+  // Kept inside the window, whatever is on offer and however wide that makes it.
+  useLayoutEffect(() => {
+    const node = offered.current
+    if (!node || !offer) return
+    const width = node.offsetWidth
+    node.style.left = `${clamp(offer.x + 4, 4, window.innerWidth - width - 4)}px`
+    node.style.top = `${clamp(offer.top - OFFER_HEIGHT - 2, 4, window.innerHeight - OFFER_HEIGHT - 4)}px`
+  }, [offer, props.available, props.onCite])
 
   useEffect(() => {
     if (asking) input.current?.focus()
@@ -220,27 +240,57 @@ export function AskAbout(props: AskAboutProps) {
   }
 
   const shortcut = `${IS_MAC ? 'Cmd' : 'Ctrl'}-K`
+  const canAsk = props.available
+  const canCite = offer?.pane === 'paper' && props.onCite !== undefined
+  const cite = (withQuote: boolean): void => {
+    setOffer(null)
+    props.onCite?.(withQuote)
+  }
 
   return (
     <>
-      {offer && !asking && (
-        <button
-          ref={button}
-          type="button"
-          class="ask-button"
-          data-action="ask-about"
-          title={`Ask the agent about this passage (${shortcut})`}
-          aria-label="Ask the agent about this passage"
-          style={{
-            left: `${clamp(offer.x + 4, 4, window.innerWidth - BUTTON_SIZE - 4)}px`,
-            top: `${clamp(offer.top - BUTTON_SIZE - 2, 4, window.innerHeight - BUTTON_SIZE - 4)}px`,
-          }}
-          // Keep the selection: a press on the button must not clear what it is for.
+      {offer && !asking && (canAsk || canCite) && (
+        <div
+          ref={offered}
+          class="passage-offer"
+          role="group"
+          aria-label="For the selected passage"
+          // Keep the selection: a press here must not clear what it is for.
           onMouseDown={(event) => event.preventDefault()}
-          onClick={open}
         >
-          ✦
-        </button>
+          {canAsk && (
+            <button
+              type="button"
+              class="ask"
+              data-action="ask-about"
+              title={`Ask the agent about this passage (${shortcut})`}
+              aria-label="Ask the agent about this passage"
+              onClick={open}
+            >
+              ✦
+            </button>
+          )}
+          {canCite && (
+            <>
+              <button
+                type="button"
+                data-action="cite"
+                title="Put a reference to this passage in the text"
+                onClick={() => cite(false)}
+              >
+                Cite
+              </button>
+              <button
+                type="button"
+                data-action="quote"
+                title="Put this passage in the text as a quotation, with its reference"
+                onClick={() => cite(true)}
+              >
+                Quote
+              </button>
+            </>
+          )}
+        </div>
       )}
       {asking && (
         <form
