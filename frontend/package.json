@@ -9,7 +9,7 @@
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
-    "test": "esbuild src/markdown.ts src/outline.ts src/sessionView.ts src/chat/turns.ts src/chat/describe.ts src/pdf/ink.ts --bundle --format=esm --platform=node --outdir=test/bundle --out-extension:.js=.mjs --log-level=warning && esbuild src/editor/livePreview.ts src/editor/mount.ts --bundle --packages=external --format=esm --platform=node --outdir=test/bundle/editor --out-extension:.js=.mjs --log-level=warning && node test/build-app-bundle.mjs && node --test \"test/markdown.test.mjs\" \"test/turns.test.mjs\" \"test/outline.test.mjs\" \"test/ink.test.mjs\" \"test/sessions.test.mjs\" \"test/citations.test.mjs\" \"test/live-preview.test.mjs\" \"test/app-render.test.mjs\"",
+    "test": "esbuild src/markdown.ts src/outline.ts src/sessionView.ts src/chat/turns.ts src/chat/describe.ts src/pdf/ink.ts src/phonePanes.ts --bundle --format=esm --platform=node --outdir=test/bundle --out-extension:.js=.mjs --log-level=warning && esbuild src/editor/livePreview.ts src/editor/mount.ts --bundle --packages=external --format=esm --platform=node --outdir=test/bundle/editor --out-extension:.js=.mjs --log-level=warning && node test/build-app-bundle.mjs && node --test \"test/markdown.test.mjs\" \"test/turns.test.mjs\" \"test/outline.test.mjs\" \"test/ink.test.mjs\" \"test/sessions.test.mjs\" \"test/phone.test.mjs\" \"test/citations.test.mjs\" \"test/live-preview.test.mjs\" \"test/app-render.test.mjs\"",
     "test:browser": "node --test \"test/browser.test.mjs\""
   },
   "dependencies": {

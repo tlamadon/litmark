@@ -1099,3 +1099,180 @@ describeOrSkip('the application in Firefox', () => {
     await click(client, '[data-action="ink"]')
   })
 })
+
+/**
+ * The same application at the size of a phone.
+ *
+ * Headless Firefox will not make a window that narrow, so the page is replaced
+ * by a frame of the size wanted, holding the application again, and that frame
+ * is what is driven. It is a window like any other to the page inside it:
+ * its own width, its own media queries, its own selection.
+ */
+describeOrSkip('the application on a phone, in Firefox', () => {
+  const WIDTH = 390
+  const HEIGHT = 760
+  let firefox
+  let client
+
+  /** Run a script against the frame: `W` is its window, `D` its document. */
+  const inFrame = (body, args = []) =>
+    script(
+      client,
+      `const W = document.querySelector('iframe').contentWindow; const D = W.document;
+       const one = (selector) => D.querySelector(selector);
+       const all = (selector) => [...D.querySelectorAll(selector)];
+       ${body}`,
+      args,
+    )
+  const waitInFrame = async (expression, label, timeoutMs = 20000) => {
+    const deadline = Date.now() + timeoutMs
+    let last
+    while (Date.now() < deadline) {
+      last = await inFrame(`return (${expression})`).catch(() => null)
+      if (last) return last
+      await new Promise((resolve) => setTimeout(resolve, 200))
+    }
+    throw new Error(`timed out waiting for ${label} (last: ${JSON.stringify(last)})`)
+  }
+  /** A press, as the page sees one: down, up, click, where the element is. */
+  const press = async (selector) => {
+    const ok = await inFrame(
+      `const node = one(arguments[0]); if (!node) return false;
+       const box = node.getBoundingClientRect();
+       const at = { bubbles: true, cancelable: true, view: W, clientX: box.left + box.width / 2, clientY: box.top + box.height / 2 };
+       node.dispatchEvent(new W.MouseEvent('mousedown', at));
+       node.dispatchEvent(new W.MouseEvent('mouseup', at));
+       node.dispatchEvent(new W.MouseEvent('click', at));
+       return true`,
+      [selector],
+    )
+    if (!ok) throw new Error(`no element matched ${selector}`)
+    await new Promise((resolve) => setTimeout(resolve, 300))
+  }
+  /** Which pane is on show, and what the bar along the bottom says. */
+  const where = () =>
+    inFrame(
+      `return {
+         phone: one('.shell').classList.contains('phone'),
+         library: !!one('.body > .library'),
+         on: all('.body > .pane').filter((pane) => W.getComputedStyle(pane).visibility === 'visible').map((pane) => pane.classList[0]),
+         tab: one('.phone-tab[aria-current="page"]')?.dataset.tab ?? null,
+       }`,
+    )
+
+  before(async () => {
+    firefox = await launchFirefox({ binary: process.env.LITMARK_FIREFOX ?? 'firefox', port: 2831 })
+    client = firefox.client
+    await navigate(client, BASE_URL)
+    await script(
+      client,
+      `document.documentElement.innerHTML = '<body style="margin:0"><iframe src="/" style="width:${WIDTH}px;height:${HEIGHT}px;border:0;display:block"></iframe></body>'`,
+    )
+    await waitInFrame(`!!D.querySelector('.shell')`, 'the shell to render in the frame', 30000)
+  })
+
+  after(async () => {
+    await firefox?.close()
+  })
+
+  /** A note from the library: the first one, which is to hold a citation. */
+  const openTheNote = async () => {
+    if (!(await where()).library) await press('[data-action="library"]')
+    await waitInFrame(`!!one('.body > .library')`, 'the library')
+    await press('.library [data-show="notes"]')
+    await waitInFrame(`!!one('.library .card.note')`, 'the notes')
+    await press('.library .card.note .card-open')
+    await waitInFrame(`!!one('.main .cm-content')`, 'the note to open')
+  }
+
+  test('one pane fills the window, and the bar along the bottom says which', async () => {
+    await openTheNote()
+    const seen = await where()
+    assert.ok(seen.phone, 'a window 390 wide is not laid out as a phone')
+    assert.deepEqual(seen.on, ['main'], 'more than the text is on show, or less')
+    assert.equal(seen.tab, 'text')
+    const layout = await inFrame(
+      `const box = (selector) => { const b = one(selector).getBoundingClientRect(); return [Math.round(b.left), Math.round(b.right), Math.round(b.top), Math.round(b.bottom)] }
+       return {
+         window: [W.innerWidth, W.innerHeight],
+         page: [D.documentElement.scrollWidth, D.documentElement.scrollHeight],
+         text: box('.body > .main'), bar: box('.phone-tabs'), top: box('.topbar'),
+         topbarFits: one('.topbar').scrollWidth <= one('.topbar').clientWidth,
+         rails: all('.rail, .sidebar, .sessions').length,
+       }`,
+    )
+    assert.deepEqual(layout.page, layout.window, 'the page itself scrolls')
+    assert.deepEqual(layout.text.slice(0, 2), [0, WIDTH], 'the text does not fill the width')
+    assert.equal(layout.text[3], layout.bar[2], 'the pane runs under the bar along the bottom')
+    assert.equal(layout.bar[3], HEIGHT, 'the bar is not along the bottom')
+    assert.ok(layout.topbarFits, 'the top bar does not fit')
+    assert.equal(layout.rails, 0, 'the strips and the row of sessions of a wide window are here')
+
+    // The chat is a tab away, the whole width, with its message box on screen.
+    await press('.phone-tab[data-tab="chat"]')
+    assert.deepEqual((await where()).on, ['chat-drawer'])
+    const chat = await inFrame(
+      `const send = one('.composer-actions button.primary').getBoundingClientRect()
+       const box = one('.composer textarea').getBoundingClientRect()
+       return { send: [Math.round(send.left), Math.round(send.right), Math.round(send.bottom)], box: [Math.round(box.left), Math.round(box.right)], bar: Math.round(one('.phone-tabs').getBoundingClientRect().top) }`,
+    )
+    assert.ok(chat.box[0] >= 0 && chat.box[1] <= WIDTH, `the message box is cut off: ${chat.box}`)
+    assert.ok(chat.send[0] >= 0 && chat.send[1] <= WIDTH && chat.send[2] <= chat.bar, `Send is cut off: ${chat.send}`)
+    await press('.phone-tab[data-tab="text"]')
+  })
+
+  test('a citation leads to the paper and a highlight back, each pane where it was left', async () => {
+    await openTheNote()
+    await waitInFrame(`!!one('.main .cm-source-link')`, 'a citation in the note')
+    // Somewhere down the note, so that there is a place to be kept.
+    const text = await inFrame(
+      `const scroller = one('.main .cm-scroller'); scroller.scrollTop = 40; return Math.round(scroller.scrollTop)`,
+    )
+    await new Promise((resolve) => setTimeout(resolve, 300))
+    const cited = await inFrame(
+      `const link = one('.main .cm-source-link'); link.scrollIntoView({ block: 'nearest' }); return Math.round(one('.main .cm-scroller').scrollTop)`,
+    )
+    await press('.main .cm-source-link')
+    await waitInFrame(`!!one('.pdf-highlight.active')`, 'the passage to be marked in the paper')
+    await waitInFrame(`!!one('.pdf-highlight.active').closest('.pdf-page').querySelector('canvas')`, 'the page to be drawn')
+    await new Promise((resolve) => setTimeout(resolve, 800))
+    let seen = await where()
+    assert.deepEqual([seen.on, seen.tab], [['source'], 'paper'], 'the citation did not lead to the Paper tab')
+
+    // Shown for the first time, the paper is fitted to the window it is shown
+    // in — it was laid out there while hidden — and the passage is in view.
+    const paper = await inFrame(
+      `const scroller = one('.pdf-scroll'); const view = scroller.getBoundingClientRect()
+       const mark = one('.pdf-highlight.active').getBoundingClientRect()
+       return {
+         room: scroller.clientWidth, page: Math.round(one('.pdf-page').getBoundingClientRect().width),
+         inView: mark.top >= view.top && mark.bottom <= view.bottom,
+         top: Math.round(scroller.scrollTop),
+         reference: one('.pdf-highlight.active').dataset.reference,
+       }`,
+    )
+    assert.ok(Math.abs(paper.page - (paper.room - 24)) <= 2, `the page is not fitted: ${JSON.stringify(paper)}`)
+    assert.ok(paper.inView, 'the passage is not in view')
+
+    // To the text and back: both are where they were left.
+    await press('.phone-tab[data-tab="text"]')
+    assert.equal(await inFrame(`return Math.round(one('.main .cm-scroller').scrollTop)`), cited, `the text moved (it was at ${text} before the citation was brought into view)`)
+    await press('.phone-tab[data-tab="paper"]')
+    assert.equal(await inFrame(`return Math.round(one('.pdf-scroll').scrollTop)`), paper.top, 'the paper moved')
+
+    // The highlight is the way back, to where the passage is cited.
+    await inFrame(`one('.main .cm-scroller').scrollTop = 0`)
+    await press(`.pdf-highlight[data-reference="${paper.reference}"]`)
+    await new Promise((resolve) => setTimeout(resolve, 500))
+    seen = await where()
+    assert.deepEqual([seen.on, seen.tab], [['main'], 'text'], 'the highlight did not lead to the Text tab')
+    assert.ok(
+      await inFrame(
+        `const mark = one('.main .cm-citation.revealed'); if (!mark) return false
+         const box = mark.getBoundingClientRect(); const view = one('.main .cm-scroller').getBoundingClientRect()
+         return box.top >= view.top && box.bottom <= view.bottom`,
+      ),
+      'the citation is not marked and in view',
+    )
+  })
+})

@@ -49,6 +49,16 @@ export interface ConversationMenuProps {
   onNew: () => void
   onRename: (id: string, title: string) => Promise<void>
   onDelete: (id: string) => Promise<void>
+  /**
+   * What a conversation goes by, where its own title says nothing yet: the
+   * shell's name for a session, by what is open in it. Left out, the title.
+   */
+  labelFor?: (conversation: ConversationSummary) => string
+  /**
+   * The menu stands in for the row of sessions — on a phone, in the top bar —
+   * and speaks of sessions: each is its conversation and its view.
+   */
+  sessions?: boolean
 }
 
 export function ConversationMenu(props: ConversationMenuProps) {
@@ -63,6 +73,10 @@ export function ConversationMenu(props: ConversationMenuProps) {
   }, [mode])
 
   const current = props.conversations.find((c) => c.conversation_id === props.currentId) ?? null
+  const nameOf = (conversation: ConversationSummary): string =>
+    conversation.kind === 'chat' && props.labelFor
+      ? props.labelFor(conversation)
+      : conversation.title
   const others = props.conversations.filter((c) => c.conversation_id !== props.currentId)
   const chats = others.filter((c) => c.kind === 'chat')
   const background = others.filter((c) => c.kind !== 'chat')
@@ -115,7 +129,7 @@ export function ConversationMenu(props: ConversationMenuProps) {
     >
       <span class="menu-label">
         <StatusDot conversation={conversation} unread={props.unread} />
-        {conversation.title}
+        {nameOf(conversation)}
       </span>
       <span class="menu-note">{conversationMeta(conversation)}</span>
     </button>
@@ -130,13 +144,13 @@ export function ConversationMenu(props: ConversationMenuProps) {
         aria-expanded={open}
         title={
           current
-            ? `In “${current.title}”. Click to switch, rename or start another.`
+            ? `In “${nameOf(current)}”. Click to switch, rename or start another.`
             : 'Choose a conversation'
         }
         onClick={() => (open ? close() : setOpen(true))}
       >
         {current && <StatusDot conversation={current} unread={props.unread} />}
-        <span class="conv-label">{current?.title ?? 'Conversations'}</span>
+        <span class="conv-label">{current ? nameOf(current) : 'Conversations'}</span>
         {(working > 0 || answered > 0) && (
           <span
             class={answered > 0 ? 'conv-elsewhere answered' : 'conv-elsewhere'}
@@ -180,7 +194,7 @@ export function ConversationMenu(props: ConversationMenuProps) {
                   </button>
                 </form>
               ) : (
-                <div class="conv-title">{current.title}</div>
+                <div class="conv-title">{nameOf(current)}</div>
               )}
               <div class="menu-note">{conversationMeta(current)}</div>
 
@@ -249,13 +263,17 @@ export function ConversationMenu(props: ConversationMenuProps) {
               close()
             }}
           >
-            <span class="menu-label">＋ New conversation</span>
+            <span class="menu-label">{props.sessions ? '＋ New session' : '＋ New conversation'}</span>
             <span class="menu-note">
-              The agent starts fresh; this one stays here to come back to.
+              {props.sessions
+                ? 'Its own conversation and its own view; this one stays here to come back to.'
+                : 'The agent starts fresh; this one stays here to come back to.'}
             </span>
           </button>
 
-          {chats.length > 0 && <div class="menu-section">Earlier conversations</div>}
+          {chats.length > 0 && (
+            <div class="menu-section">{props.sessions ? 'Other sessions' : 'Earlier conversations'}</div>
+          )}
           <div class="conv-list">{chats.map(item)}</div>
 
           {background.length > 0 && (

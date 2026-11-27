@@ -52,6 +52,12 @@ export interface ChatProps {
   onUndo: (changeId: string) => void
   /** Fold the chat away, to a strip at the edge that brings it back. */
   onCollapse: () => void
+  /**
+   * The shell names the conversation and goes between them itself, and has no
+   * edge to fold the chat to — a phone, where the top bar holds the menu. The
+   * header is then down to how the conversation is shown.
+   */
+  bare?: boolean
   /** Whether the agent may fetch papers from the web, and the way to change it. */
   downloads: DownloadMode
   onDownloads: (mode: DownloadMode) => void
@@ -156,25 +162,29 @@ export function Chat(props: ChatProps) {
 
   return (
     <section class="chat" aria-label="Chat">
-      <header class="chat-head">
-        <ConversationMenu
-          conversations={props.conversations}
-          currentId={props.currentId}
-          unread={props.unread}
-          onSelect={props.onSelect}
-          onNew={props.onNew}
-          onRename={props.onRename}
-          onDelete={props.onDelete}
-        />
-        <button
-          type="button"
-          class="ghost icon"
-          title="Start a new conversation"
-          aria-label="New conversation"
-          onClick={props.onNew}
-        >
-          ＋
-        </button>
+      <header class={props.bare ? 'chat-head bare' : 'chat-head'}>
+        {!props.bare && (
+          <ConversationMenu
+            conversations={props.conversations}
+            currentId={props.currentId}
+            unread={props.unread}
+            onSelect={props.onSelect}
+            onNew={props.onNew}
+            onRename={props.onRename}
+            onDelete={props.onDelete}
+          />
+        )}
+        {!props.bare && (
+          <button
+            type="button"
+            class="ghost icon"
+            title="Start a new conversation"
+            aria-label="New conversation"
+            onClick={props.onNew}
+          >
+            ＋
+          </button>
+        )}
         <div class="view-tabs" role="tablist" aria-label="How the conversation is shown">
           <button
             type="button"
@@ -196,16 +206,18 @@ export function Chat(props: ChatProps) {
             Transcript
           </button>
         </div>
-        <button
-          type="button"
-          class="ghost icon"
-          data-action="hide-chat"
-          title="Hide the chat"
-          aria-label="Hide the chat"
-          onClick={props.onCollapse}
-        >
-          »
-        </button>
+        {!props.bare && (
+          <button
+            type="button"
+            class="ghost icon"
+            data-action="hide-chat"
+            title="Hide the chat"
+            aria-label="Hide the chat"
+            onClick={props.onCollapse}
+          >
+            »
+          </button>
+        )}
       </header>
 
       {!props.agent.ready && (

@@ -44,6 +44,12 @@ export interface AskAboutProps {
    * is open, with the quotation or without. Left out when no text is open.
    */
   onCite?: (withQuote: boolean) => void
+  /**
+   * The box for the request is set along the top of the window rather than by
+   * the passage: on a phone, where the keyboard takes the lower half of the
+   * screen and a box by the passage could open underneath it.
+   */
+  docked?: boolean
 }
 
 interface Place {
@@ -241,13 +247,19 @@ export function AskAbout(props: AskAboutProps) {
   useLayoutEffect(() => {
     const node = box.current
     if (!node || !asking) return
+    if (props.docked) {
+      // Docked, it is placed by its style: nothing of an earlier place is kept.
+      node.style.top = ''
+      node.style.left = ''
+      return
+    }
     const { at } = asking
     const height = node.offsetHeight
     const below = at.bottom + 8
     const top = below + height > window.innerHeight - 8 ? at.top - height - 8 : below
     node.style.top = `${clamp(top, 8, window.innerHeight - height - 8)}px`
     node.style.left = `${clamp(at.x - BOX_WIDTH / 2, 8, window.innerWidth - BOX_WIDTH - 8)}px`
-  }, [asking, prompt, refused])
+  }, [asking, prompt, refused, props.docked])
 
   const send = async (): Promise<void> => {
     const request = prompt.trim()
@@ -329,10 +341,10 @@ export function AskAbout(props: AskAboutProps) {
       {asking && (
         <form
           ref={box}
-          class="ask-box"
+          class={props.docked ? 'ask-box docked' : 'ask-box'}
           role="dialog"
           aria-label="Ask the agent about the selected passage"
-          style={{ width: `${BOX_WIDTH}px` }}
+          style={props.docked ? undefined : { width: `${BOX_WIDTH}px` }}
           onSubmit={(event) => {
             event.preventDefault()
             void send()

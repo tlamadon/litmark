@@ -573,6 +573,37 @@ meet can be dragged to give the paper more of it, or less; a double-click
 there puts it back. The split is kept from one visit to the next, as the
 chat's width is.
 
+### On a phone
+
+In a window narrower than 700 pixels there is room for one of them at a time.
+One pane fills the screen, and a bar along the bottom goes between the three,
+in the order they sit on a desk: **Text · Paper · Chat**. The bar says which
+is on and what is behind each; a tab with nothing behind it — no paper open,
+no note or summary — is dimmed and says so.
+
+What you do takes you where it leads. Tap a citation in the text and you are
+on Paper, at the passage; tap a highlight in the paper and you are on Text, at
+the citation. A paper, a note or a passage named in a reply opens on its tab.
+**Cite** and **Quote** on a passage of the paper land in the text where the
+reference went in, and once **✦ Ask** is sent you are in the chat, where the
+answer is read.
+
+Each pane keeps its place while another is on: where the text was scrolled
+to, the page of the paper and its zoom, the message half typed. A reply that
+comes in while you are reading puts a dot on **Chat**, and the tab says
+*working…* while the agent is at it.
+
+The top bar holds **Library**, the session — its name, with a menu of the
+others and **New session**, in place of the row of tabs — and **ⓘ**, which
+slides the panel about what is open up over the pane. Tap an entry in it and
+it does what it does and is put away; a tap outside it, or its ✕, puts it away
+too. Sync, **Sign out** and the version are at its foot. The library is the
+home screen, with the page to itself.
+
+While you type, the bar along the bottom is out of the keyboard's way; it is
+back when you are done. There is no swiping between panes: a sideways swipe
+already means something in each of them.
+
 ## Reading and editing
 
 A summary or a note opens for **reading**: fully rendered, with no cursor to

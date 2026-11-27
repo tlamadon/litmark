@@ -130,7 +130,7 @@ const ROUTES = new Map([
   ['/api/changes', { changes: [{ change_id: 'chg-1', target_kind: 'note', target_id: 'welcome', origin: 'agent', summary: 'Patched note', base_revision: null, new_revision: 'rev-2', undoable: true, undone_at: null, created_at: '2026-01-01T00:00:05Z' }] }],
 ])
 
-function buildDom({ serverToken = 'test-token', routes = ROUTES } = {}) {
+function buildDom({ serverToken = 'test-token', routes = ROUTES, width = null } = {}) {
   const html = readFileSync(join(here, '..', '..', 'src', 'litmark', 'static', 'index.html'), 'utf8')
     .replace('<meta name="litmark-token" content="">', '<meta name="litmark-token" content="test-token">')
     // The bundle is injected manually below, so strip the script tags.
@@ -225,18 +225,37 @@ function buildDom({ serverToken = 'test-token', routes = ROUTES } = {}) {
   window.streams = []
   window.requests = []
   window.choices = []
+  window.sources = []
   class FakeEventSource {
     constructor(url) {
       window.streams.push(url)
+      window.sources.push(this)
       this.onopen = null
       this.onerror = null
       this.onmessage = null
+      this.listeners = new Map()
     }
-    addEventListener() {}
+    addEventListener(name, listener) {
+      this.listeners.set(name, listener)
+    }
+    /** What the server would send: one event, named by its type. */
+    emit(event) {
+      this.listeners.get(event.type)?.({ data: JSON.stringify(event) })
+    }
     close() {}
   }
   window.EventSource = FakeEventSource
-  if (!window.matchMedia) {
+  if (width !== null) {
+    // A window of a given width: what the layout asks of it is answered from that.
+    window.matchMedia = (query) => {
+      const limit = /^\(max-width: ([\d.]+)px\)$/.exec(query)
+      return {
+        matches: limit ? width <= Number(limit[1]) : false,
+        addEventListener() {},
+        removeEventListener() {},
+      }
+    }
+  } else if (!window.matchMedia) {
     window.matchMedia = () => ({ matches: false, addEventListener() {}, removeEventListener() {} })
   }
   window.scrollTo = () => {}
@@ -799,5 +818,198 @@ test('the library, what is open, and the panel about it', async (t) => {
   click(root.querySelector('.library [data-show="notes"]'))
   await settle(50)
   assert.deepEqual(cards('note'), [], 'the note is still listed')
+  assert.deepEqual(errors, [], `runtime errors: ${errors.map((e) => e?.stack ?? e).join('\n')}`)
+})
+
+test('on a phone: one pane at a time, and a bar along the bottom to go between them', async (t) => {
+  const routes = new Map(ROUTES)
+  routes.set('/api/notes/welcome', {
+    ...ROUTES.get('/api/notes/welcome'),
+    text: '# Welcome\n\nHello **world**.\n\n## Further down\n\nMore.\n',
+  })
+  routes.set('/api/documents/doc-001/summary', { document_id: 'doc-001', text: '## Summary\n\nSomething.\n', revision: 'rev-s', status: 'ready' })
+  routes.set('/api/related?note', { papers: [{ document_id: 'doc-001', count: 1 }] })
+  routes.set('/api/related?paper', { notes: [], mentions: [], mentioned_by: [], same_tags: [] })
+  routes.set('/api/state', { ...STATE, auth: { password: true } })
+  routes.set('/api/version', { version: '0.3.8', checks_for_updates: false, latest: null, update_available: false, release_url: null })
+  const dom = buildDom({ routes, width: 390 })
+  const { window } = dom
+  t.after(() => window.close())
+  const errors = []
+  window.addEventListener('error', (event) => errors.push(event.error ?? event.message))
+  window.addEventListener('unhandledrejection', (event) => errors.push(event.reason))
+  window.eval(readFileSync(join(here, 'bundle', 'app.mjs'), 'utf8'))
+  const settle = (ms = 200) => new Promise((resolve) => setTimeout(resolve, ms))
+  const click = (node) => node.dispatchEvent(new window.MouseEvent('click', { bubbles: true }))
+  await settle(300)
+  const root = window.document.getElementById('app')
+  const shell = root.querySelector('.shell')
+  const tab = (name) => root.querySelector(`.phone-tab[data-tab="${name}"]`)
+  /** Which of the three is on show, and which are there but hidden. */
+  const panes = () =>
+    Object.fromEntries(
+      [...root.querySelectorAll('.body > .pane')].map((pane) => [
+        pane.classList[0],
+        pane.classList.contains('on'),
+      ]),
+    )
+  const tabs = () =>
+    [...root.querySelectorAll('.phone-tab')].map((node) => [
+      node.dataset.tab,
+      node.getAttribute('aria-current') === 'page',
+      node.getAttribute('aria-disabled') === 'true',
+      node.querySelector('.phone-tab-what').textContent,
+    ])
+
+  // The shell knows it is a phone, and the stylesheet hangs off that.
+  assert.ok(shell.classList.contains('phone'), shell.className)
+
+  // The top bar: the project, the library, the session folded to its name
+  // with a menu — and the way to the panel. No row of tabs, nothing at the end.
+  assert.equal(root.querySelector('.topbar h1')?.textContent, 'Demo')
+  assert.equal(root.querySelector('.topbar .sessions'), null, 'the row of sessions does not fit')
+  assert.ok(
+    (root.querySelector('.topbar .conv-button')?.textContent ?? '').includes('What does the paper assume?'),
+    'the session on screen is not named',
+  )
+  assert.ok(root.querySelector('.topbar [data-action="about"]'), 'no way to the panel')
+  assert.equal(root.querySelector('.topbar .sync-button'), null)
+  assert.equal(root.querySelector('.topbar [data-action="sign-out"]'), null)
+  // The version is kept an eye on from there — its number is not drawn — and
+  // speaks up only when the page has gone stale. It has not.
+  assert.ok(root.querySelector('.topbar .version'), 'nothing in the top bar watches the version')
+  assert.equal(root.querySelector('.topbar [data-action="reload"]'), null)
+  // No panel at the side, no strips to fold things to, no edges to drag.
+  assert.equal(root.querySelector('.sidebar'), null)
+  assert.equal(root.querySelector('.rail'), null)
+  assert.equal(root.querySelector('.chat-splitter, .source-splitter'), null)
+
+  // Nothing is open: the library is the home screen, and the two tabs with
+  // nothing behind them are dimmed and say so.
+  assert.ok(root.querySelector('.body > .library'), 'the library is not where one starts')
+  assert.equal(root.querySelector('[data-action="library"]').getAttribute('aria-pressed'), 'true')
+  assert.deepEqual(tabs(), [
+    ['text', false, true, 'nothing open'],
+    ['paper', false, true, 'none open'],
+    ['chat', false, false, ''],
+  ])
+  // The chat is there already, hidden: it keeps its place from the start.
+  assert.deepEqual(panes(), { 'chat-drawer': false })
+  click(tab('paper'))
+  await settle(30)
+  assert.ok(root.querySelector('.body > .library'), 'a dimmed tab showed a blank pane')
+
+  // The chat, with nothing open. Its header is down to how it is shown: the
+  // session is named in the top bar, and there is no edge to fold it to.
+  click(tab('chat'))
+  await settle(30)
+  assert.equal(root.querySelector('.body > .library'), null)
+  assert.deepEqual(panes(), { 'chat-drawer': true })
+  assert.equal(tab('chat').getAttribute('aria-current'), 'page')
+  assert.ok(root.querySelector('.chat-drawer .turn'), 'the conversation is not drawn')
+  assert.equal(root.querySelector('.chat-head .conv-button'), null)
+  assert.equal(root.querySelector('[data-action="hide-chat"]'), null)
+  assert.ok(root.querySelector('.chat-head .view-tabs'), 'no way to the transcript')
+  window.sources.at(-1).emit({ seq: 20, type: 'done', conversation_id: 'conv-1', run_id: 'run-2' })
+  await settle(30)
+  assert.equal(tab('chat').dataset.sign, undefined, 'a reply read as it arrived was given a dot')
+
+  // A note from the library lands on Text, with the chat still there behind.
+  click(root.querySelector('[data-action="library"]'))
+  await settle(30)
+  click(root.querySelector('.library [data-show="notes"]'))
+  await settle(30)
+  click(root.querySelector('.card.note[data-note="welcome"] .card-open'))
+  await settle()
+  assert.equal(root.querySelector('.body > .library'), null)
+  assert.deepEqual(panes(), { main: true, 'chat-drawer': false })
+  assert.deepEqual(tabs(), [
+    ['text', true, false, 'Welcome'],
+    ['paper', false, true, 'none open'],
+    ['chat', false, false, ''],
+  ])
+  assert.equal(root.querySelector('.main-head'), null, 'the narrow window\'s "Show the paper" is not the phone\'s')
+
+  // The panel is a sheet: what the note is, its contents, what it is tied
+  // to — and, at its foot, what a wide window keeps at the end of the top bar.
+  click(root.querySelector('[data-action="about"]'))
+  await settle(50)
+  const sheet = root.querySelector('.sheet')
+  assert.ok(sheet, 'no sheet')
+  assert.equal(sheet.querySelector('.about strong')?.textContent, 'Welcome')
+  assert.deepEqual(
+    [...sheet.querySelectorAll('.toc button')].map((node) => node.textContent),
+    ['Welcome', 'Further down'],
+  )
+  assert.ok((sheet.querySelector('.sheet-foot .sync-button')?.textContent ?? '').includes('2 to save'))
+  assert.equal(sheet.querySelector('.sheet-foot [data-action="sign-out"]')?.textContent, 'Sign out')
+  assert.equal(sheet.querySelector('.sheet-foot .version-number')?.textContent, 'v0.3.8')
+  // An entry does what it does, and the sheet is put away.
+  click([...sheet.querySelectorAll('.related button')][0])
+  await settle()
+  assert.equal(root.querySelector('.sheet'), null, 'the sheet stayed up')
+  // A paper: its summary on Text, the PDF behind the Paper tab — all three there.
+  assert.deepEqual(panes(), { main: true, source: false, 'chat-drawer': false })
+  assert.deepEqual(tabs(), [
+    ['text', true, false, 'Summary'],
+    ['paper', false, false, 'A Paper'],
+    ['chat', false, false, ''],
+  ])
+  assert.equal(root.querySelector('.source > .back'), null, 'the narrow window\'s way back is not the phone\'s')
+  click(tab('paper'))
+  await settle(30)
+  assert.deepEqual(panes(), { main: false, source: true, 'chat-drawer': false })
+  // The sheet is put away by its own button, and by a press outside it.
+  click(root.querySelector('[data-action="about"]'))
+  await settle(30)
+  click(root.querySelector('[data-action="close-about"]'))
+  await settle(30)
+  assert.equal(root.querySelector('.sheet'), null)
+  click(root.querySelector('[data-action="about"]'))
+  await settle(30)
+  click(root.querySelector('.sheet .about'))
+  await settle(30)
+  assert.ok(root.querySelector('.sheet'), 'a press inside the sheet put it away')
+  click(root.querySelector('.sheet-backdrop'))
+  await settle(30)
+  assert.equal(root.querySelector('.sheet'), null)
+
+  // A run under way is said on the Chat tab…
+  const list = routes.get('/api/conversations').conversations
+  routes.set('/api/conversations', { conversations: list.map((c) => ({ ...c, status: 'running' })) })
+  window.sources.at(-1).emit({ seq: 21, type: 'run_started', conversation_id: 'conv-1', run_id: 'run-3' })
+  await settle(300)
+  assert.equal(tab('chat').dataset.sign, 'working')
+  assert.equal(tab('chat').querySelector('.phone-tab-what').textContent, 'working…')
+  // …and a reply that came in while the paper was being read leaves a dot.
+  routes.set('/api/conversations', { conversations: list })
+  window.sources.at(-1).emit({ seq: 22, type: 'done', conversation_id: 'conv-1', run_id: 'run-3' })
+  await settle(300)
+  assert.equal(tab('chat').dataset.sign, 'answered')
+  assert.ok(tab('chat').querySelector('.dot.answered'), 'no dot')
+  assert.deepEqual(panes(), { main: false, source: true, 'chat-drawer': false }, 'the reader was moved')
+  // Looking at the chat is what clears it.
+  click(tab('chat'))
+  await settle(30)
+  assert.equal(tab('chat').dataset.sign, undefined)
+
+  // The session's menu is the row of tabs, folded: the others, and a new one.
+  click(root.querySelector('.topbar .conv-button'))
+  await settle(30)
+  const menu = root.querySelector('.topbar .conv-menu')
+  assert.ok(menu, 'no menu of sessions')
+  assert.ok((menu.textContent ?? '').includes('New session'), menu.textContent)
+  click([...menu.querySelectorAll('.menu-item')].find((item) => item.textContent.includes('New session')))
+  await settle(300)
+  assert.equal(root.querySelector('.topbar .conv-menu'), null)
+  // From the chat of one session, a new one is at its chat; nothing else is open in it.
+  assert.deepEqual(panes(), { 'chat-drawer': true })
+  assert.deepEqual(tabs().map((entry) => entry[2]), [true, true, false])
+  assert.ok(window.location.pathname.startsWith('/s/conv-'), window.location.pathname)
+  // Which tab was on is this window's business: it is no part of the saved view.
+  await settle(900)
+  const saved = routes.get('/api/conversations').conversations.find((c) => c.conversation_id === 'conv-1')
+  assert.deepEqual(Object.keys(saved.view ?? {}).sort(), ['attached', 'documentId', 'library', 'page', 'target'])
+
   assert.deepEqual(errors, [], `runtime errors: ${errors.map((e) => e?.stack ?? e).join('\n')}`)
 })

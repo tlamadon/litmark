@@ -3444,3 +3444,478 @@ button.turn-selection {
 button.turn-selection:hover {
   text-decoration: underline;
 }
+
+/* ------------------------------------------------------------------ phone
+
+   A window too narrow for the panes side by side shows one at a time, with a
+   bar along the bottom to go between them. Nothing here is a media query on
+   the width: the shell is given the class `phone` from the one cutoff there
+   is (`PHONE_BELOW` in phonePanes.ts), so the two cannot fall out of step.
+
+   The page is laid out to the edges of the screen (`viewport-fit=cover`), so
+   that the bar along the bottom can reach the edge and keep clear of the home
+   indicator itself. Everywhere else the shell stays inside the safe area, as
+   it was when the browser kept it there: these are all zero on a desktop. */
+
+.shell {
+  padding: env(safe-area-inset-top, 0px) env(safe-area-inset-right, 0px)
+    env(safe-area-inset-bottom, 0px) env(safe-area-inset-left, 0px);
+}
+
+.shell.phone {
+  /* The bar along the bottom reaches the edge, and pads itself. */
+  padding-bottom: 0;
+}
+
+.shell.phone.typing {
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+}
+
+/* iOS zooms the page in on a box whose text is smaller than this. */
+.shell.phone input:not([type='checkbox']):not([type='radio']),
+.shell.phone textarea,
+.shell.phone select {
+  font-size: 16px;
+}
+
+/* The top bar: the project, the library, the session, the panel. */
+.shell.phone .topbar {
+  position: relative; /* the session menu hangs off it, full width */
+  gap: 0.3rem;
+  padding: 0.3rem 0.45rem;
+}
+
+.shell.phone .topbar h1 {
+  flex: 0 1 auto;
+  min-width: 3ch;
+  max-width: 26%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.shell.phone .topbar > .ghost {
+  flex: none;
+  min-height: 2.5rem;
+}
+
+.shell.phone .topbar .conv-wrap {
+  flex: 1 1 0;
+}
+
+.shell.phone .topbar .conv-button {
+  min-height: 2.5rem;
+}
+
+.shell.phone .topbar .conv-menu {
+  z-index: 60;
+  max-height: min(72vh, 34rem);
+}
+
+.shell.phone .topbar .badge {
+  flex: none;
+}
+
+/* The version's number is at the foot of the sheet. Here, only what speaks
+   up: the mark for a later release, and the offer to reload a stale page. */
+.shell.phone .topbar .version-number {
+  display: none;
+}
+
+.shell.phone .topbar .version {
+  flex: none;
+}
+
+.shell.phone .topbar .version-reload {
+  min-height: 2rem;
+  padding: 0.1rem 0.6rem;
+  font-size: 0.82rem;
+}
+
+.about-button {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 2.5rem;
+  padding: 0;
+}
+
+.about-button .dot {
+  position: absolute;
+  top: 0.35rem;
+  right: 0.3rem;
+}
+
+/* The panes, one over another in the same place: the one on show is seen, the
+   others are hidden but still laid out at their full size — so each keeps
+   where it was scrolled to, and the paper and the editor, which measure the
+   room they have, measure the room they will be shown in. */
+.shell.phone .body {
+  position: relative;
+  display: block;
+  overflow: hidden;
+}
+
+.shell.phone .body > .pane,
+.shell.phone .body > .library {
+  position: absolute;
+  inset: 0;
+  min-width: 0;
+  border: 0;
+}
+
+.shell.phone .body > .pane {
+  visibility: hidden;
+}
+
+.shell.phone .body > .pane.on {
+  visibility: visible;
+}
+
+/* The library, laid over them: what is open is still there underneath. */
+.shell.phone .body > .library {
+  z-index: 2;
+  padding: 0.7rem 0.75rem 1.5rem;
+  background: var(--bg);
+}
+
+/* The bar along the bottom: the three panes, and which is on. */
+.phone-tabs {
+  flex: none;
+  display: flex;
+  border-top: 1px solid var(--rule);
+  background: var(--panel);
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+}
+
+/* Out of the way of the keyboard, while something is being typed. */
+.shell.phone.typing .phone-tabs {
+  display: none;
+}
+
+.phone-tab {
+  flex: 1 1 0;
+  min-width: 0;
+  min-height: 3.3rem;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 0.3rem 0.4rem 0.35rem;
+  border: 0;
+  border-top: 2px solid transparent;
+  margin-top: -1px;
+  border-radius: 0;
+  background: none;
+  color: var(--muted-strong);
+  line-height: 1.25;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.phone-tab.on {
+  color: var(--ink);
+  border-top-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.phone-tab[aria-disabled='true'] {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.phone-tab-name {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.94rem;
+  font-weight: 600;
+}
+
+/* What is behind the tab, or that nothing is. */
+.phone-tab-what {
+  max-width: 100%;
+  font-size: 0.7rem;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.phone-tab.on .phone-tab-what {
+  color: var(--muted-strong);
+}
+
+.phone-tab-what:empty::before {
+  content: '\00a0';
+}
+
+.phone-tab[data-sign='working'] .phone-tab-what {
+  color: var(--accent);
+}
+
+.phone-tab[data-sign='answered'] .phone-tab-what {
+  color: var(--ok);
+}
+
+.phone-tab[data-sign='failed'] .phone-tab-what {
+  color: var(--danger);
+}
+
+/* The panel about what is open, as a sheet slid up over the pane. */
+.sheet-backdrop {
+  position: absolute;
+  inset: 0;
+  z-index: 40;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  overflow: hidden;
+  background: rgba(20, 16, 10, 0.32);
+}
+
+.sheet {
+  display: flex;
+  flex-direction: column;
+  max-height: 88%;
+  overflow: auto;
+  overscroll-behavior: contain;
+  background: var(--panel);
+  border-top: 1px solid var(--rule);
+  border-radius: 14px 14px 0 0;
+  box-shadow: 0 -8px 30px rgba(20, 16, 10, 0.22);
+  animation: sheet-up 0.18s ease-out;
+}
+
+@keyframes sheet-up {
+  from {
+    transform: translateY(24%);
+    opacity: 0.4;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sheet {
+    animation: none;
+  }
+}
+
+/* Stays at the top of the sheet as it is scrolled, over the panel's heading. */
+.sheet .sheet-close {
+  position: sticky;
+  top: 0.4rem;
+  z-index: 1;
+  flex: none;
+  align-self: flex-end;
+  width: 2.5rem;
+  height: 2.5rem;
+  margin: 0.4rem 0.5rem -2.9rem 0;
+  border-radius: 50%;
+  background: var(--panel);
+  font-size: 1rem;
+}
+
+.sheet > .sidebar {
+  flex: none;
+  min-width: 0;
+  overflow: visible;
+  padding: 0.95rem 1rem 0.8rem;
+  border: 0;
+  font-size: 1rem;
+}
+
+/* The sheet has its own way to be put away. */
+.sheet .panel-head [data-action='hide-sidebar'] {
+  display: none;
+}
+
+/* Rows and links a finger can press. */
+.sheet .toc button,
+.sheet .related button {
+  padding-top: 0.5rem;
+  padding-bottom: 0.5rem;
+}
+
+.sheet .entry-actions {
+  gap: 0.35rem 1.1rem;
+}
+
+.sheet .link {
+  padding: 0.3rem 0;
+  font-size: 0.95rem;
+}
+
+.sheet .changes summary {
+  padding: 0.4rem 0;
+}
+
+/* What was at the end of the top bar: sync, signing out, the version. */
+.sheet-foot {
+  flex: none;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem 0.9rem;
+  padding: 0.7rem 1rem 0.9rem;
+  border-top: 1px solid var(--rule);
+}
+
+.sheet-foot .version {
+  margin-left: auto;
+}
+
+/* What sync has to say opens in the sheet, under its word, not over it. */
+.sheet-foot .sync-wrap:has(.sync-panel) {
+  flex: 1 1 100%;
+}
+
+.sheet-foot .sync-panel {
+  position: static;
+  width: auto;
+  margin-top: 0.4rem;
+  box-shadow: none;
+}
+
+/* The chat: the session is named in the top bar, and there is no edge to fold
+   it to, so its header is down to how the conversation is shown. */
+.chat-head.bare {
+  justify-content: flex-end;
+  padding: 0.3rem 0.5rem;
+}
+
+/* No room for the hint beside the buttons, and no Shift-Enter to speak of. */
+.shell.phone .composer-actions {
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.shell.phone .composer-actions .hint {
+  display: none;
+}
+
+.shell.phone .composer-actions button {
+  min-height: 2.25rem;
+}
+
+/* What can be done with a passage sits above the bar along the bottom. */
+.shell.phone .passage-offer.bar {
+  bottom: calc(4.2rem + env(safe-area-inset-bottom, 0px));
+}
+
+/* The request is typed at the top of the window: the keyboard has the bottom. */
+.ask-box.docked {
+  top: calc(3.4rem + env(safe-area-inset-top, 0px));
+  left: 8px;
+  right: 8px;
+}
+
+/* The library has the page to itself: what is typed to find something gets a
+   line of its own, over the choice of papers or notes. */
+.shell.phone .library-tools {
+  flex-wrap: wrap;
+}
+
+.shell.phone .library-tools input[type='search'] {
+  flex: 1 1 100%;
+}
+
+.shell.phone .library-tools .mode-tabs {
+  flex: 1 1 auto;
+}
+
+.shell.phone .library-tools .mode-tabs button {
+  flex: 1 1 0;
+  min-height: 2.4rem;
+}
+
+/* The text's bar: what is open and how it is held on one line; while it is
+   being edited, what can be done to it on the next. */
+.shell.phone .editor-bar {
+  flex-wrap: wrap;
+  row-gap: 0.3rem;
+  padding: 0.3rem 0.75rem;
+}
+
+.shell.phone .editor-bar .editor-title {
+  flex: 1 1 0;
+}
+
+.shell.phone .editor-bar .editor-actions {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 100%;
+}
+
+/* Which citation it would open is said as far as there is room to say it. */
+.shell.phone .editor-bar .toggle.open-source {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.shell.phone .editor-bar .mode-tabs,
+.shell.phone .editor-bar .toggle:not(.open-source) {
+  flex: none;
+}
+
+.shell.phone .editor-bar .mode-tabs button,
+.shell.phone .editor-bar .toggle {
+  min-height: 2rem;
+  padding-left: 0.75rem;
+  padding-right: 0.75rem;
+  font-size: 0.86rem;
+}
+
+.shell.phone .editor-bar .back-step {
+  min-width: 2rem;
+  min-height: 2rem;
+}
+
+.shell.phone .editor-surface .cm-scroller {
+  padding-left: 0.85rem;
+  padding-right: 0.85rem;
+}
+
+/* The paper's bar: the same controls, sized to be pressed — as wide as the
+   window lets them be and still sit in one row. Should a phone be too narrow
+   even so, they go onto a second row rather than off the edge. */
+.shell.phone .pdf-bar {
+  flex-wrap: wrap;
+  gap: 0.2rem;
+  padding: 0.3rem 0.4rem;
+}
+
+.shell.phone .pdf-controls button,
+.shell.phone .pdf-controls .download {
+  min-width: clamp(1.5rem, 7.4vw, 2rem);
+  height: 2rem;
+  margin-left: 0;
+  line-height: 1;
+}
+
+.shell.phone .pdf-controls input {
+  width: 2.7rem;
+  height: 2rem;
+}
+
+.shell.phone .ink-bar .swatch {
+  width: 1.5rem;
+  min-width: 0;
+  height: 1.5rem;
+}
+
+.shell.phone .ink-bar .swatches {
+  gap: 0.35rem;
+}
+
+/* Scrolled to its end, a pane stops there: the pull is not handed on to the
+   page, where a phone's browser takes it for "reload". */
+.shell.phone .cm-scroller,
+.shell.phone .pdf-scroll,
+.shell.phone .chat-log,
+.shell.phone .library,
+.shell.phone .conv-menu {
+  overscroll-behavior: contain;
+}

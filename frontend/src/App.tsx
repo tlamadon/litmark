@@ -8,6 +8,10 @@
  * and the chat drawer is capped so it cannot squeeze the editor and the PDF
  * into unreadable columns. On a narrow window the paper takes over the main
  * view, with an explicit way back.
+ *
+ * On a phone there is room for one of them at a time: the text, the paper and
+ * the chat are each a tab along the bottom, all three kept as they were left,
+ * and the panel is a sheet. See `phonePanes.ts` and `Phone.tsx`.
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'preact/hooks'
@@ -30,12 +34,23 @@ import {
 } from './api'
 import { AskAbout, type AskPane, type Passage } from './AskAbout'
 import { Chat } from './chat/Chat'
+import { ConversationMenu } from './chat/ConversationMenu'
 import type { OpenTarget } from './chat/describe'
 import { MarkdownEditor, type RevealResult } from './editor/MarkdownEditor'
 import { EventStream, type ServerEvent } from './events'
 import { Library } from './Library'
 import { headingsOf } from './outline'
 import { nameOf, papersOf } from './papers'
+import { AboutSheet, PhoneTabs, PhoneTop, usePhone, useTyping } from './Phone'
+import {
+  AFTER_ASK,
+  afterLooking,
+  afterReply,
+  chatSign,
+  shownPane,
+  tabForPaper,
+  type PhoneTab,
+} from './phonePanes'
 import {
   PdfViewer,
   type PdfMark,
@@ -213,6 +228,8 @@ export function App() {
   const [conversationId, setConversationId] = useState<string | null>(null)
   // Conversations that finished a run while another was on screen.
   const [unread, setUnread] = useState<ReadonlySet<string>>(new Set())
+  const unreadRef = useRef(unread)
+  unreadRef.current = unread
   const [context, setContext] = useState<MessageContext>({})
   const [sync, setSync] = useState<SyncState | null>(null)
   const [changes, setChanges] = useState<ChangeRecord[]>([])
@@ -236,6 +253,39 @@ export function App() {
   const [showSource, setShowSourcePanel] = useState(true)
   const [narrow, setNarrow] = useState(() => window.matchMedia(NARROW_QUERY).matches)
   const [sourceTakesOver, setSourceTakesOver] = useState(false)
+
+  // A phone shows one pane at a time. Which one is this window's own business:
+  // the same session is open on a wide window too, where there are no tabs.
+  const phone = usePhone()
+  const [phoneTab, setPhoneTab] = useState<PhoneTab>('text')
+  const phoneTabRef = useRef(phoneTab)
+  phoneTabRef.current = phoneTab
+  // The tab each session was left on, to come back to it there.
+  const phoneTabs = useRef(new Map<string, PhoneTab>())
+  // The panel about what is open, as a sheet over the pane.
+  const [aboutOpen, setAboutOpen] = useState(false)
+  // The bar along the bottom gets out of the way of the keyboard.
+  const typing = useTyping(phone)
+  // Conversations with a reply that came in while their chat was not on show.
+  const [waiting, setWaiting] = useState<ReadonlySet<string>>(new Set())
+  const waitingRef = useRef(waiting)
+  waitingRef.current = waiting
+  // The conversation whose chat is on show now, if it is.
+  const lookingAt = useRef<string | null>(null)
+
+  /**
+   * To the paper, where it is not beside the text: it takes over a narrow
+   * window, and is the tab shown on a phone.
+   */
+  const toPaper = useCallback((): void => {
+    if (narrow) setSourceTakesOver(true)
+    setPhoneTab('paper')
+  }, [narrow])
+  /** And to the text. */
+  const toText = useCallback((): void => {
+    setSourceTakesOver(false)
+    setPhoneTab('text')
+  }, [])
 
   const insertRef = useRef<((markdown: string) => void) | null>(null)
   const revealRef = useRef<((referenceId: string) => RevealResult) | null>(null)
@@ -338,11 +388,11 @@ export function App() {
       steppingBack.current = true
       textPlaces.current.set(key, place.at)
       setTarget(place.target)
-      setSourceTakesOver(false)
+      toText()
       break
     }
     redrawTrail((tick) => tick + 1)
-  }, [trailOf])
+  }, [trailOf, toText])
 
   /**
    * The page on show is about to be left for another — a citation opened, an
@@ -483,6 +533,12 @@ export function App() {
       if (id !== leaving) {
         // What the session being left had on screen is told before it is left.
         flushView()
+        // On a phone a session comes back on the tab it was left on — or on
+        // the chat, when it has answered since. From the chat of one session
+        // to another not yet seen in this window is to its chat.
+        if (leaving) phoneTabs.current.set(leaving, phoneTabRef.current)
+        if (unreadRef.current.has(id) || waitingRef.current.has(id)) setPhoneTab('chat')
+        else setPhoneTab(phoneTabs.current.get(id) ?? (phoneTabRef.current === 'chat' ? 'chat' : 'text'))
         setConversationId(id)
         if (stateRef.current) restoreView(id, stateRef.current, conversationsRef.current)
       }
@@ -587,6 +643,9 @@ export function App() {
         const finished = event.conversation_id
         if (event.type === 'done' && finished && finished !== conversationRef.current) {
           setUnread((current) => new Set(current).add(finished))
+        }
+        if (event.type === 'done' && finished) {
+          setWaiting((current) => afterReply(current, finished, lookingAt.current))
         }
       })
       source.start(next.latest_seq)
@@ -714,6 +773,7 @@ export function App() {
     }
     // The answer is read in the chat: brought out if it was put away.
     setShowChat(true)
+    if (AFTER_ASK === 'chat') setPhoneTab('chat')
     return true
   }, [])
 
@@ -879,7 +939,7 @@ export function App() {
         setGotoPage(reference.page_number)
         setGotoNonce((value) => value + 1)
         setShowSourcePanel(true)
-        if (narrow) setSourceTakesOver(true)
+        toPaper()
         setContext((current) => ({
           ...current,
           reference_id: reference.reference_id,
@@ -904,7 +964,7 @@ export function App() {
         )
       }
     },
-    [state?.documents, narrow, leavePage],
+    [state?.documents, toPaper, leavePage],
   )
 
   const insertReference = useCallback(
@@ -922,6 +982,8 @@ export function App() {
           ? `\n\n> ${reference.quote ?? pdfSelection.quote}\n>\n> ${reference.markdown_link}\n`
           : ` ${reference.markdown_link}`
         insertRef.current?.(snippet)
+        // On a phone the text is another tab: to it, where the reference went in.
+        setPhoneTab('text')
         setHighlight(reference)
         setInsertNotice(reference.message ?? null)
         setPdfSelection(null)
@@ -963,6 +1025,7 @@ export function App() {
     await refreshState()
     startEditing.current = `note:${note.note_id}`
     setTarget({ kind: 'note', noteId: note.note_id })
+    setPhoneTab('text')
   }, [refreshState])
 
   const importFiles = useCallback(
@@ -1023,13 +1086,13 @@ export function App() {
       setGotoPage(1)
       setGotoNonce((value) => value + 1)
       setShowSourcePanel(true)
-      if (narrow) setSourceTakesOver(true)
+      toPaper()
       setContext((current) => ({
         ...current,
         document_ids: Array.from(new Set([...(current.document_ids ?? []), documentId])),
       }))
     },
-    [state?.documents, narrow, leavePage],
+    [state?.documents, toPaper, leavePage],
   )
 
   /** Drag the drawer's edge to trade room between the chat and the page. */
@@ -1118,7 +1181,7 @@ export function App() {
         const result = revealRef.current?.(reference.reference_id)
         const more = places.length > 1
         if (result?.found && !(result.wrapped && more)) {
-          setSourceTakesOver(false)
+          toText()
           return
         }
         if (!more) return // Cited here by the record, but no longer in the text.
@@ -1130,9 +1193,9 @@ export function App() {
           ? { kind: 'note', noteId: next.id }
           : { kind: 'summary', documentId: next.id },
       )
-      setSourceTakesOver(false)
+      toText()
     },
-    [],
+    [toText],
   )
 
   /** Show a paper at a page, as a step in the chat names it. Attaches nothing. */
@@ -1149,9 +1212,9 @@ export function App() {
       setGotoPage(page)
       setGotoNonce((value) => value + 1)
       setShowSourcePanel(true)
-      if (narrow) setSourceTakesOver(true)
+      toPaper()
     },
-    [state?.documents, narrow, leavePage],
+    [state?.documents, toPaper, leavePage],
   )
 
   /** Open whatever a line of the conversation refers to. */
@@ -1161,16 +1224,16 @@ export function App() {
       else if (target.kind === 'reference') void openSource(target.referenceId)
       else if (target.kind === 'note') {
         setTarget({ kind: 'note', noteId: target.noteId })
-        setSourceTakesOver(false)
+        toText()
       } else if (target.kind === 'skill') {
         setTarget({ kind: 'skill' })
-        setSourceTakesOver(false)
+        toText()
       } else {
         setTarget({ kind: 'summary', documentId: target.documentId })
-        setSourceTakesOver(false)
+        toText()
       }
     },
-    [showDocument, openSource],
+    [showDocument, openSource, toText],
   )
 
   const jumpToHit = useCallback(
@@ -1230,8 +1293,12 @@ export function App() {
       setTarget({ kind: 'summary', documentId })
       setSourceTakesOver(false)
       openDocumentById(documentId)
+      // On a phone: its summary, with the PDF behind the Paper tab — or the
+      // PDF itself, when nothing has been written about it yet.
+      const paper = state?.documents.find((item) => item.document_id === documentId)
+      setPhoneTab(tabForPaper(paper?.summary.status))
     },
-    [openDocumentById],
+    [openDocumentById, state?.documents],
   )
 
   // Going anywhere — to a note, a summary, a page of a paper — is leaving the
@@ -1404,6 +1471,24 @@ export function App() {
       })
   }, [documentReferences, target, highlight?.reference_id])
 
+  // On a phone: what fills the screen, and whether that is the chat being read.
+  const pane = phone
+    ? shownPane(phoneTab, { text: target.kind !== 'empty', paper: openDocument !== null }, library)
+    : null
+  const looking = (phone ? pane === 'chat' : showChat) ? conversationId : null
+  lookingAt.current = looking
+  useEffect(() => {
+    setWaiting((current) => afterLooking(current, looking))
+  }, [looking])
+  // A passage selected in a pane that is no longer the one on show is not
+  // something to go on offering to ask about.
+  useEffect(() => {
+    if (phone) window.getSelection()?.removeAllRanges()
+  }, [phone, pane])
+  // The sheet is the phone's; a window grown wide has the panel at its side.
+  useEffect(() => {
+    if (!phone) setAboutOpen(false)
+  }, [phone])
 
   if (fatal !== null) {
     return (
@@ -1474,25 +1559,169 @@ export function App() {
       : null
 
   // The library shows when it is asked for, and when nothing at all is open.
-  const inLibrary = library || (target.kind === 'empty' && openDocument === null)
-  const showSourceRegion =
-    !inLibrary &&
-    showSource &&
-    openDocument !== null &&
-    (!narrow || sourceTakesOver || target.kind === 'empty')
+  const inLibrary = phone
+    ? pane === 'library'
+    : library || (target.kind === 'empty' && openDocument === null)
+  // On a phone the panes are all there, whichever is on show: each keeps its
+  // place — where it was scrolled to, the page and its zoom, what was half
+  // typed — because it is hidden, not taken away.
+  const showSourceRegion = phone
+    ? openDocument !== null
+    : !inLibrary &&
+      showSource &&
+      openDocument !== null &&
+      (!narrow || sourceTakesOver || target.kind === 'empty')
   // With no note or summary open, a paper being read has the page to itself.
-  const showMain = !inLibrary && target.kind !== 'empty' && (!narrow || !sourceTakesOver)
+  const showMain = phone
+    ? target.kind !== 'empty'
+    : !inLibrary && target.kind !== 'empty' && (!narrow || !sourceTakesOver)
+  /** A pane's class on a phone: one of the three, and whether it is the one on show. */
+  const paneClass = (name: string, tab: PhoneTab): string =>
+    phone ? `${name} pane${pane === tab ? ' on' : ''}` : name
+  /** Doing what an entry of the panel does puts the sheet away, on a phone. */
+  const fromSheet = <A extends unknown[]>(act: (...args: A) => void): ((...args: A) => void) =>
+    phone
+      ? (...args) => {
+          setAboutOpen(false)
+          act(...args)
+        }
+      : act
+
+  // What sits at the end of the top bar on a wide window, and at the foot of
+  // the sheet on a phone.
+  const syncStatus = sync && (
+    <SyncStatus
+      sync={sync}
+      onOpened={() => void refreshSync()}
+      onSync={async (resolve) => {
+        const result = await api.syncNow(resolve)
+        setSync(result)
+        if (result.problems.length > 0) throw new Error(result.problems.join(' '))
+      }}
+    />
+  )
+  const agentBadge = !state.agent.ready && (
+    <span class="badge" title={state.agent.message}>
+      Agent not configured
+    </span>
+  )
+  const signOut = state.auth?.password && (
+    <button
+      type="button"
+      class="ghost sign-out"
+      data-action="sign-out"
+      title="End this session; the password is asked for again"
+      onClick={() => void api.signOut()}
+    >
+      Sign out
+    </button>
+  )
+
+  const sidebar = (
+    <Sidebar
+      onCollapse={() => (phone ? setAboutOpen(false) : setShowSidebar(false))}
+      library={inLibrary}
+      documents={state.documents}
+      notes={state.notes}
+      tags={state.tags}
+      changes={changes}
+      selectedTags={selectedTags}
+      onToggleTag={toggleTag}
+      onClearTags={() => setSelectedTags([])}
+      subject={subject}
+      headings={headings}
+      onGotoHeading={fromSheet((index) => {
+        gotoHeadingRef.current?.(index)
+        setPhoneTab('text')
+      })}
+      openDocumentId={openDocument?.document_id ?? null}
+      outline={outline}
+      onGotoPage={fromSheet((page) => {
+        leavePage()
+        setGotoPage(page)
+        setGotoNonce((value) => value + 1)
+        toPaper()
+      })}
+      related={related && related.key === subjectKey ? related.value : null}
+      onOpenNote={fromSheet((noteId) => {
+        setTarget({ kind: 'note', noteId })
+        toText()
+      })}
+      onOpenPaper={fromSheet(openPaper)}
+      onOpenSummary={fromSheet((documentId) => {
+        setTarget({ kind: 'summary', documentId })
+        toText()
+      })}
+      onOpenDocument={fromSheet(openDocumentById)}
+      onOpenSkill={fromSheet(() => {
+        setTarget({ kind: 'skill' })
+        toText()
+      })}
+      onDeleteNote={deleteNote}
+      onSetDetails={async (documentId, details) => {
+        await api.setDetails(documentId, details)
+        await refreshState()
+      }}
+      onSetTags={(documentId, tags) => void changeTags(() => api.setTags(documentId, tags))}
+      onSummarize={async (documentId) => {
+        const result = await api.summarize(documentId)
+        if (!result.queued) setInsertNotice(result.reason ?? 'No summary was queued.')
+      }}
+      onReextract={(documentId) => void api.reextract(documentId)}
+      onUndo={(change) => void undo(change)}
+      onLoadChanges={async () => setChanges((await api.changes()).changes)}
+    />
+  )
 
   return (
     <div
       class={[
         'shell',
-        showChat ? '' : 'chat-collapsed',
-        showSourceRegion ? '' : 'source-hidden',
+        phone ? 'phone' : '',
+        phone && typing ? 'typing' : '',
+        !phone && !showChat ? 'chat-collapsed' : '',
+        !phone && !showSourceRegion ? 'source-hidden' : '',
       ]
         .filter(Boolean)
         .join(' ')}
     >
+      {phone ? (
+        <PhoneTop
+          project={state.project}
+          inLibrary={inLibrary}
+          onLibrary={() => {
+            setAboutOpen(false)
+            setLibrary(!inLibrary)
+          }}
+          session={
+            // The row of sessions, folded: the one on screen, and a menu of the rest.
+            <ConversationMenu
+              conversations={conversations}
+              currentId={conversationId}
+              unread={unread}
+              onSelect={(id) => selectConversation(id)}
+              onNew={() => void newConversation()}
+              onRename={renameConversation}
+              onDelete={deleteConversation}
+              labelFor={sessionLabel}
+              sessions
+            />
+          }
+          reconnecting={!connected}
+          // Kept there for as long as the page is: it is what notices that the
+          // server has been updated beneath it.
+          version={<Version connected={connected} />}
+          aboutOpen={aboutOpen}
+          onAbout={() => setAboutOpen(!aboutOpen)}
+          aboutNeedsLooking={
+            sync !== null &&
+            (sync.git.state === 'conflict' ||
+              sync.git.state === 'error' ||
+              Boolean(sync.storage.error) ||
+              Boolean(sync.storage.problem))
+          }
+        />
+      ) : (
       <header class="topbar">
         <h1 title={state.project.root}>{state.project.name}</h1>
         <button
@@ -1521,35 +1750,12 @@ export function App() {
         />
         <span class="spacer" />
         {!connected && <span class="badge warn">Reconnecting…</span>}
-        {sync && (
-          <SyncStatus
-            sync={sync}
-            onOpened={() => void refreshSync()}
-            onSync={async (resolve) => {
-              const result = await api.syncNow(resolve)
-              setSync(result)
-              if (result.problems.length > 0) throw new Error(result.problems.join(' '))
-            }}
-          />
-        )}
-        {!state.agent.ready && (
-          <span class="badge" title={state.agent.message}>
-            Agent not configured
-          </span>
-        )}
-        {state.auth?.password && (
-          <button
-            type="button"
-            class="ghost sign-out"
-            data-action="sign-out"
-            title="End this session; the password is asked for again"
-            onClick={() => void api.signOut()}
-          >
-            Sign out
-          </button>
-        )}
+        {syncStatus}
+        {agentBadge}
+        {signOut}
         <Version connected={connected} />
       </header>
+      )}
 
       {insertNotice !== null && (
         <div class="banner" role="status">
@@ -1561,57 +1767,25 @@ export function App() {
       )}
 
       <div class="body" style={{ '--chat-width': `${chatWidth}px` }}>
-        {showSidebar ? (
-          <Sidebar
-            onCollapse={() => setShowSidebar(false)}
-            library={inLibrary}
-            documents={state.documents}
-            notes={state.notes}
-            tags={state.tags}
-            changes={changes}
-            selectedTags={selectedTags}
-            onToggleTag={toggleTag}
-            onClearTags={() => setSelectedTags([])}
-            subject={subject}
-            headings={headings}
-            onGotoHeading={(index) => gotoHeadingRef.current?.(index)}
-            openDocumentId={openDocument?.document_id ?? null}
-            outline={outline}
-            onGotoPage={(page) => {
-              leavePage()
-              setGotoPage(page)
-              setGotoNonce((value) => value + 1)
-              if (narrow) setSourceTakesOver(true)
-            }}
-            related={related && related.key === subjectKey ? related.value : null}
-            onOpenNote={(noteId) => {
-              setTarget({ kind: 'note', noteId })
-              setSourceTakesOver(false)
-            }}
-            onOpenPaper={openPaper}
-            onOpenSummary={(documentId) => {
-              setTarget({ kind: 'summary', documentId })
-              setSourceTakesOver(false)
-            }}
-            onOpenDocument={openDocumentById}
-            onOpenSkill={() => {
-              setTarget({ kind: 'skill' })
-              setSourceTakesOver(false)
-            }}
-            onDeleteNote={deleteNote}
-            onSetDetails={async (documentId, details) => {
-              await api.setDetails(documentId, details)
-              await refreshState()
-            }}
-            onSetTags={(documentId, tags) => void changeTags(() => api.setTags(documentId, tags))}
-            onSummarize={async (documentId) => {
-              const result = await api.summarize(documentId)
-              if (!result.queued) setInsertNotice(result.reason ?? 'No summary was queued.')
-            }}
-            onReextract={(documentId) => void api.reextract(documentId)}
-            onUndo={(change) => void undo(change)}
-            onLoadChanges={async () => setChanges((await api.changes()).changes)}
-          />
+        {phone ? (
+          aboutOpen && (
+            <AboutSheet
+              label={inLibrary ? 'Tags, and this window' : 'About what is open'}
+              onClose={() => setAboutOpen(false)}
+              foot={
+                <>
+                  {syncStatus}
+                  {agentBadge}
+                  {signOut}
+                  <Version connected={connected} />
+                </>
+              }
+            >
+              {sidebar}
+            </AboutSheet>
+          )
+        ) : showSidebar ? (
+          sidebar
         ) : (
           <button
             type="button"
@@ -1636,12 +1810,12 @@ export function App() {
             onOpenPaper={openPaper}
             onOpenNote={(noteId) => {
               setTarget({ kind: 'note', noteId })
-              setSourceTakesOver(false)
+              toText()
             }}
             onNewNote={() => void createNote()}
             onOpenSkill={() => {
               setTarget({ kind: 'skill' })
-              setSourceTakesOver(false)
+              toText()
             }}
             onDeleteNote={deleteNote}
             onImport={(files, tags) => void importFiles(files, tags)}
@@ -1653,11 +1827,11 @@ export function App() {
 
         {showMain && (
           <main
-            class="main"
+            class={paneClass('main', 'text')}
             // Beside the paper, the two divide the room as the reader set it.
-            style={showSourceRegion ? splitStyle(1 - sourceShare) : undefined}
+            style={showSourceRegion && !phone ? splitStyle(1 - sourceShare) : undefined}
           >
-            {narrow && openDocument && (
+            {narrow && !phone && openDocument && (
               <div class="main-head">
                 <button type="button" class="ghost" onClick={() => setSourceTakesOver(true)}>
                   Show the paper
@@ -1680,7 +1854,7 @@ export function App() {
                 notes={state.notes}
                 onOpenNote={(noteId) => {
                   setTarget({ kind: 'note', noteId })
-                  setSourceTakesOver(false)
+                  toText()
                 }}
                 back={textBefore ? { to: titleOf(textBefore.target), go: stepBackText } : null}
                 onPlace={(position) => textPlaces.current.set(docKey, position)}
@@ -1715,7 +1889,10 @@ export function App() {
         )}
 
         {showSourceRegion && openDocument && (
-          <aside class="source" style={showMain ? splitStyle(sourceShare) : undefined}>
+          <aside
+            class={paneClass('source', 'paper')}
+            style={showMain && !phone ? splitStyle(sourceShare) : undefined}
+          >
             {showMain && !narrow && (
               <div
                 class="source-splitter"
@@ -1734,7 +1911,7 @@ export function App() {
                 }}
               />
             )}
-            {narrow && (
+            {narrow && !phone && (
               <button
                 type="button"
                 class="ghost back"
@@ -1771,7 +1948,7 @@ export function App() {
                 setOpenDocument(null)
                 // No passage is on show any more, here or in the note.
                 setHighlight(null)
-                setSourceTakesOver(false)
+                toText()
               }}
             />
           </aside>
@@ -1783,10 +1960,12 @@ export function App() {
           onAsk={askAbout}
           // A reference is put into the text that is open: with none, there is nowhere.
           onCite={showMain ? (withQuote) => void insertReference(withQuote) : undefined}
+          docked={phone}
         />
 
-        {showChat ? (
-          <aside class="chat-drawer">
+        {phone || showChat ? (
+          <aside class={paneClass('chat-drawer', 'chat')}>
+            {!phone && (
             <div
               class="chat-splitter"
               role="separator"
@@ -1803,7 +1982,9 @@ export function App() {
                 }
               }}
             />
+            )}
             <Chat
+              bare={phone}
               conversations={conversations}
               currentId={conversationId}
               unread={unread}
@@ -1844,6 +2025,26 @@ export function App() {
           </button>
         )}
       </div>
+
+      {phone && pane && (
+        <PhoneTabs
+          pane={pane}
+          behind={{
+            // A summary is of the paper named on the tab beside it.
+            text:
+              target.kind === 'empty' ? null : target.kind === 'summary' ? 'Summary' : currentTitle,
+            paper: openDocument ? (nameOf(openDocument) ?? openDocument.display_title) : null,
+            chat: null,
+          }}
+          chat={chatSign(onScreen, conversationId !== null && waiting.has(conversationId))}
+          onSelect={(tab) => {
+            // A tab is somewhere to be: the library, and the sheet, give way to it.
+            setLibrary(false)
+            setAboutOpen(false)
+            setPhoneTab(tab)
+          }}
+        />
+      )}
     </div>
   )
 }
