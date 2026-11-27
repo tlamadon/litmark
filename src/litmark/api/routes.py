@@ -7,8 +7,11 @@ no arbitrary-path file API: notes and documents are addressed by ID.
 from __future__ import annotations
 
 import json
+import re
+import unicodedata
 import uuid
 from typing import Annotated, Any
+from urllib.parse import quote
 
 from fastapi import APIRouter, File, Query, Request, Response, UploadFile
 from fastapi.concurrency import run_in_threadpool
@@ -40,6 +43,37 @@ def services_of(request: Request) -> Services:
 
 
 # ------------------------------------------------------------------ schemas
+
+
+
+_NOT_IN_A_FILENAME = re.compile(r'[\\/:*?"<>|\x00-\x1f]+')
+
+
+def _download_name(document: Any) -> str:
+    """What a paper's PDF is called when it is saved: by its authors, year and title.
+
+    `Olley & Pakes (1996) - The Dynamics of Productivity.pdf`, which says what
+    it is in a folder of downloads, where the name it was imported under —
+    `w3977.pdf` — does not. A paper nothing is known of keeps that name.
+    """
+    if not document.title:
+        return document.original_filename or f"{document.document_id}.pdf"
+    name = f"{document.label} - {document.title}" if document.label else document.title
+    name = " ".join(_NOT_IN_A_FILENAME.sub(" ", name).split()).strip(" .")
+    return f"{name[:150].rstrip(' .')}.pdf" if name else f"{document.document_id}.pdf"
+
+
+def _disposition(kind: str, filename: str) -> str:
+    """A Content-Disposition header naming a file, whatever is in the name.
+
+    A header holds Latin-1 and the name is quoted, so a title with an accent
+    beyond it, or a quotation mark, could not be sent as it is. The name is
+    given twice, as browsers expect: plainly, for the ones that read nothing
+    else, and in full.
+    """
+    plain = unicodedata.normalize("NFKD", filename).encode("ascii", "ignore").decode("ascii")
+    plain = re.sub(r"[^A-Za-z0-9 ._()&,\-]+", "_", plain).strip(" .") or "paper.pdf"
+    return f"{kind}; filename=\"{plain}\"; filename*=UTF-8''{quote(filename, safe='')}"
 
 
 class NoteCreate(BaseModel):
@@ -354,16 +388,22 @@ def build_router() -> APIRouter:
         return document.api_json(summary_text=services.documents.summary_text(document_id))
 
     @router.get("/documents/{document_id}/pdf")
-    async def get_pdf(request: Request, document_id: str) -> Response:
+    async def get_pdf(request: Request, document_id: str, download: bool = False) -> Response:
+        """The paper's PDF: to be shown in the page, or — `download` — kept as a file."""
         services = services_of(request)
         document = services.documents.get(document_id)
         # Here already, or fetched from the project's storage on first opening.
         path = await run_in_threadpool(services.papers.ensure_pdf, document_id)
+        disposition = (
+            _disposition("attachment", _download_name(document))
+            if download
+            else _disposition("inline", document.original_filename)
+        )
         return Response(
             content=await run_in_threadpool(path.read_bytes),
             media_type="application/pdf",
             headers={
-                "content-disposition": f'inline; filename="{document.original_filename}"',
+                "content-disposition": disposition,
                 "cache-control": "private, max-age=3600",
                 "etag": f'"{document.sha256}"',
             },

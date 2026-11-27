@@ -10,6 +10,7 @@
 
 import { useState } from 'preact/hooks'
 
+import { api } from './api'
 import type {
   ChangeRecord,
   DocumentRecord,
@@ -301,6 +302,15 @@ function PaperAbout(props: SidebarProps & { document: DocumentRecord }) {
             Read PDF
           </button>
         )}
+        <a
+          class="link"
+          data-action="download-pdf"
+          href={api.pdfUrl(document.document_id, true)}
+          download
+          title="Save the PDF as a file — to print it, or to keep"
+        >
+          Download PDF
+        </a>
         {!editingDetails && (
           <button
             type="button"

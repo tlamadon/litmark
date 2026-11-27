@@ -554,6 +554,26 @@ export function PdfViewer(props: PdfViewerProps) {
         >
           Fit
         </button>
+        {/* A link, not a button: the browser's own saving of a file, to print it from. */}
+        <a
+          class="download"
+          data-action="download-pdf"
+          href={api.pdfUrl(props.document.document_id, true)}
+          download
+          title="Download the PDF — to print it, or to keep"
+          aria-label="Download the PDF"
+        >
+          <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true">
+            <path
+              fill="none"
+              stroke="currentColor"
+              stroke-width="1.6"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              d="M8 2.5v7.5M4.8 7.2 8 10.4l3.2-3.2M3 13.2h10"
+            />
+          </svg>
+        </a>
         {props.onClose && (
           <button
             type="button"

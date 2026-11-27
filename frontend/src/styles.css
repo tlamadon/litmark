@@ -1548,6 +1548,21 @@ button.tag:hover {
   flex-direction: column;
   min-height: 0;
   flex: 1;
+  container-type: inline-size;
+}
+
+/* In a narrow panel the bar keeps what is pressed and lets go of what is only
+   read, so the way to close the paper is never pushed out of sight. */
+@container (max-width: 470px) {
+  .pdf-bar .pdf-legend {
+    display: none;
+  }
+}
+
+@container (max-width: 420px) {
+  .pdf-controls .zoom {
+    display: none;
+  }
 }
 
 /* One line for the whole of it: the page is what the panel is for. */
@@ -1586,6 +1601,23 @@ button.tag:hover {
 
 .pdf-controls form {
   flex: none;
+}
+
+/* Saving the PDF: a link that sits among the buttons as one of them. */
+.pdf-controls .download {
+  flex: none;
+  display: grid;
+  place-items: center;
+  min-width: 1.5rem;
+  height: 1.35rem;
+  margin-left: 0.15rem;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  color: inherit;
+}
+
+.pdf-controls .download:hover {
+  border-color: var(--rule);
 }
 
 .pdf-controls .close {

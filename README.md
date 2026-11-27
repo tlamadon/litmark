@@ -540,6 +540,9 @@ the foot of it either way.
 
 The paper's own bar is one line — its name, the page, the zoom, the marks by
 where they are cited, and the way to close it — so the page gets the room.
+The arrow beside the close button, and **Download PDF** in the panel about
+the paper, save the PDF as a file — to print it, or to keep — under a name
+that says what it is: `Olley & Pakes (1996) - The Dynamics of Productivity.pdf`.
 
 The text and the paper divide the room between them, and the line where they
 meet can be dragged to give the paper more of it, or less; a double-click

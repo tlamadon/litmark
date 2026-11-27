@@ -300,3 +300,34 @@ def test_a_link_to_a_note_must_be_to_one_that_is_there(services, client, paper_o
     )
     assert made_up["error"] == "unregistered_references"
     assert "note:no-such-note" in made_up["message"] and "list_notes" in made_up["message"]
+
+
+# ------------------------------------------------------------ taking it away
+
+
+def test_a_paper_is_downloaded_under_a_name_that_says_what_it_is(services, client, paper_one):
+    document_id = upload(client, "w3977.pdf", paper_one)["imported"][0]["document"]["document_id"]
+
+    # Shown in the page, it is the file it was; saved, it is the same bytes, kept.
+    shown = client.get(f"/api/documents/{document_id}/pdf")
+    assert shown.headers["content-disposition"].startswith('inline; filename="w3977.pdf"')
+    saved = client.get(f"/api/documents/{document_id}/pdf", params={"download": "true"})
+    assert saved.status_code == 200 and saved.content == shown.content == paper_one
+    assert saved.headers["content-type"] == "application/pdf"
+    assert saved.headers["content-disposition"].startswith("attachment; ")
+
+    # By its authors, year and title, once they are known — whatever is in them.
+    services.documents.set_details(
+        document_id,
+        title='Prix, salaires: une "étude" / 1',
+        authors=["Élise Dupré", "Wei Zhang"],
+        year=1996,
+        by="user",
+    )
+    named = client.get(f"/api/documents/{document_id}/pdf", params={"download": "true"})
+    disposition = named.headers["content-disposition"]
+    assert 'filename="Dupre & Zhang (1996) - Prix, salaires une etude 1.pdf"' in disposition
+    assert (
+        "filename*=UTF-8''Dupr%C3%A9%20%26%20Zhang%20%281996%29%20-%20Prix%2C%20salaires%20"
+        "une%20%C3%A9tude%201.pdf" in disposition
+    )

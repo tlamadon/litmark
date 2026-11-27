@@ -501,8 +501,11 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ document_ids, add, remove }),
     }),
-  pdfUrl: (id: string) =>
-    `/api/documents/${encodeURIComponent(id)}/pdf?token=${encodeURIComponent(getSessionToken())}`,
+  /** Where a paper's PDF is: to be drawn in the page, or — `download` — saved as a file. */
+  pdfUrl: (id: string, download = false) =>
+    `/api/documents/${encodeURIComponent(id)}/pdf?token=${encodeURIComponent(getSessionToken())}${
+      download ? '&download=true' : ''
+    }`,
   pages: (id: string) =>
     request<{
       document_id: string
