@@ -18,17 +18,33 @@ import type { Behind, ChatSign, Held, Keyboard, PhonePane, PhoneTab } from './ph
 import { keyboardAfter, PHONE_QUERY, PHONE_TABS, takesTyping } from './phonePanes'
 import { touchFirst } from './touch'
 
-/** Whether the window is narrow enough to be laid out as a phone, as it changes. */
-export function usePhone(): boolean {
-  const [phone, setPhone] = useState(() => window.matchMedia(PHONE_QUERY).matches)
+/**
+ * How wide the window is, as the layout asks it: narrow enough to be laid out
+ * as a phone, and narrow enough that the text and the paper do not go side by
+ * side. Asked together, and answered together: a tablet turned on its side
+ * crosses both at once, and a moment in which only one had changed would be a
+ * layout the window was never in — one that takes a pane off the page.
+ */
+export function useWidths(narrowQuery: string): { phone: boolean; narrow: boolean } {
+  const read = (): { phone: boolean; narrow: boolean } => ({
+    phone: window.matchMedia(PHONE_QUERY).matches,
+    narrow: window.matchMedia(narrowQuery).matches,
+  })
+  const [widths, setWidths] = useState(read)
   useEffect(() => {
-    const media = window.matchMedia(PHONE_QUERY)
-    const onChange = (event: MediaQueryListEvent): void => setPhone(event.matches)
-    setPhone(media.matches)
-    media.addEventListener('change', onChange)
-    return () => media.removeEventListener('change', onChange)
-  }, [])
-  return phone
+    const queries = [window.matchMedia(PHONE_QUERY), window.matchMedia(narrowQuery)]
+    const onChange = (): void =>
+      setWidths((before) => {
+        const now = read()
+        return now.phone === before.phone && now.narrow === before.narrow ? before : now
+      })
+    onChange()
+    for (const query of queries) query.addEventListener('change', onChange)
+    return () => {
+      for (const query of queries) query.removeEventListener('change', onChange)
+    }
+  }, [narrowQuery])
+  return widths
 }
 
 /** How long after the typing stops the bar along the bottom comes back. */

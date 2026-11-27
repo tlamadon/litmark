@@ -33,7 +33,10 @@ import {
 } from './bundle/phonePanes.mjs'
 
 test('the cutoff is said once, and a window of exactly that width is not a phone', () => {
-  assert.equal(PHONE_BELOW, 700)
+  assert.equal(PHONE_BELOW, 900)
+  // A tablet held upright is on the phone's side of it; on its side, it is not.
+  for (const upright of [744, 768, 810, 820, 834]) assert.ok(upright < PHONE_BELOW, String(upright))
+  for (const onItsSide of [1024, 1080, 1133, 1180, 1194]) assert.ok(onItsSide >= PHONE_BELOW, String(onItsSide))
   const limit = Number(/^\(max-width: ([\d.]+)px\)$/.exec(PHONE_QUERY)?.[1])
   assert.ok(limit < PHONE_BELOW, PHONE_QUERY)
   // No window is a fraction of a pixel wide enough to fall between the two.

@@ -1166,3 +1166,28 @@ test('on a phone: the session at the top, one pane at a time, and a bar afloat a
 
   assert.deepEqual(errors, [], `runtime errors: ${errors.map((e) => e?.stack ?? e).join('\n')}`)
 })
+
+test('a tablet held upright has the one-pane layout; on its side, the panes side by side', async (t) => {
+  const bundle = readFileSync(join(here, 'bundle', 'app.mjs'), 'utf8')
+  const at = async (width) => {
+    const dom = buildDom({ routes: new Map(ROUTES), width })
+    t.after(() => dom.window.close())
+    dom.window.eval(bundle)
+    await new Promise((resolve) => setTimeout(resolve, 300))
+    const root = dom.window.document.getElementById('app')
+    return {
+      phone: root.querySelector('.shell').classList.contains('phone'),
+      bar: root.querySelector('.phone-bar') !== null,
+      sessions: root.querySelector('.topbar .sessions') !== null,
+      sidebar: root.querySelector('.body > .sidebar') !== null,
+    }
+  }
+  // An iPad upright, and the last width on that side of the cutoff.
+  for (const width of [820, 899]) {
+    assert.deepEqual(await at(width), { phone: true, bar: true, sessions: false, sidebar: false }, String(width))
+  }
+  // The cutoff itself, and an iPad on its side.
+  for (const width of [900, 1180]) {
+    assert.deepEqual(await at(width), { phone: false, bar: false, sessions: true, sidebar: true }, String(width))
+  }
+})

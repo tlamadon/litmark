@@ -573,10 +573,12 @@ meet can be dragged to give the paper more of it, or less; a double-click
 there puts it back. The split is kept from one visit to the next, as the
 chat's width is.
 
-### On a phone
+### On a phone, and an iPad held upright
 
-In a window narrower than 700 pixels there is room for one of them at a time.
-One pane fills the screen, and a bar afloat along the bottom goes between the
+In a window narrower than 900 pixels there is room for one of them at a time
+— a phone, and a tablet held upright, where a page of a paper then has the
+whole width. Turned on its side, a tablet has the panes side by side again,
+with what was open still in them. One pane fills the screen, and a bar afloat along the bottom goes between the
 three, in the order they sit on a desk: **Text · Paper · Chat**. A mark slides
 to the one that is on. What is open is named in the pane itself: the text's
 title in its bar, the paper's on a line over its controls.

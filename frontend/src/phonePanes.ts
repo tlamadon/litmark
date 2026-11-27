@@ -3,8 +3,9 @@
  * is on show, where an action leads, and what the Chat tab says. See
  * `Phone.tsx` for the bars, and `App.tsx` for where the panes are put.
  *
- * A window too narrow for the panes side by side shows one at a time — the
- * text, the paper, the chat — and a bar along the bottom goes between them.
+ * A window too narrow for the panes side by side — a phone, a tablet held
+ * upright — shows one at a time — the text, the paper, the chat — and a bar
+ * along the bottom goes between them.
  * The three stay as they were left: a pane not on show is hidden, not taken
  * away, so coming back to it is coming back to the same place.
  */
@@ -13,8 +14,13 @@
  * Narrower than this many CSS pixels, a window is laid out as a phone. The one
  * place the cutoff is said: the stylesheet hangs off the `phone` class the
  * shell is given from it, and has no width of its own to keep in step.
+ *
+ * A tablet held upright is on this side of it — an iPad is 744 to 834 wide
+ * that way — and has the layout too: one pane with the whole width, which is
+ * what a page of a paper wants there. On its side, 1024 wide and more, it has
+ * the room for the panes side by side.
  */
-export const PHONE_BELOW = 700
+export const PHONE_BELOW = 900
 
 /** Just short of the cutoff, so a window of exactly that width is not a phone. */
 export const PHONE_QUERY = `(max-width: ${PHONE_BELOW - 0.02}px)`

@@ -47,7 +47,7 @@ import {
   PhoneBar,
   PhoneTop,
   SessionHolds,
-  usePhone,
+  useWidths,
   useTyping,
 } from './Phone'
 import {
@@ -262,12 +262,11 @@ export function App() {
   const [chatWidth, setChatWidth] = useState(storedChatWidth)
   const [sourceShare, setSourceShare] = useState(storedSourceShare)
   const [showSource, setShowSourcePanel] = useState(true)
-  const [narrow, setNarrow] = useState(() => window.matchMedia(NARROW_QUERY).matches)
   const [sourceTakesOver, setSourceTakesOver] = useState(false)
 
   // A phone shows one pane at a time. Which one is this window's own business:
   // the same session is open on a wide window too, where there are no tabs.
-  const phone = usePhone()
+  const { phone, narrow } = useWidths(NARROW_QUERY)
   // The tab the reader chose; null until one is, when whichever pane has
   // something in it is shown (see `shownPane`).
   const [phoneTab, setPhoneTab] = useState<PhoneTab | null>(null)
@@ -670,11 +669,7 @@ export function App() {
       setStream(source)
     })()
 
-    const media = window.matchMedia(NARROW_QUERY)
-    const onChange = (event: MediaQueryListEvent) => setNarrow(event.matches)
-    media.addEventListener('change', onChange)
     return () => {
-      media.removeEventListener('change', onChange)
       if (refreshTimer.current !== null) window.clearTimeout(refreshTimer.current)
       source?.close()
     }
@@ -1504,6 +1499,11 @@ export function App() {
   }, [looking])
   useEffect(() => {
     paneSince.current = performance.now()
+  }, [pane])
+  // A window widened past a phone, but not to where the text and the paper
+  // go side by side, shows one of the two: the one that was on show here.
+  useEffect(() => {
+    if (pane === 'text' || pane === 'paper') setSourceTakesOver(pane === 'paper')
   }, [pane])
   /** The library, on the notes or on the papers: what a pane is filled from. */
   const openLibrary = (kind: LibraryKind | null): void => {

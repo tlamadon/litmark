@@ -28,6 +28,7 @@
 import {
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -224,6 +225,35 @@ export function PdfViewer(props: PdfViewerProps) {
   reportPage.current = props.onPage
   const reportedPage = useRef(0)
 
+  // Where the reader is, as a place in the paper rather than a distance
+  // scrolled: the page at the top of the view, and how far down it. The pages
+  // change size — a zoom, a panel dragged, a tablet turned on its side and
+  // every page fitted again — and the same distance is then another page.
+  // With the top of the view in the margin over a page, it is how far over:
+  // the margins do not change size with the pages.
+  const place = useRef<{ page: number; part: number; above: number } | null>(null)
+  const notePlace = useCallback(() => {
+    const root = scroller.current
+    if (!root) return
+    const view = root.getBoundingClientRect()
+    let first: { page: number; box: DOMRect } | null = null
+    for (const [page, node] of pageNodes.current) {
+      const box = node.getBoundingClientRect()
+      // The first page that reaches below the top edge of the view.
+      if (box.bottom > view.top + 0.5 && box.height > 0 && (!first || page < first.page)) {
+        first = { page, box }
+      }
+    }
+    if (first) {
+      const down = view.top - first.box.top
+      place.current = {
+        page: first.page,
+        part: down > 0 ? down / first.box.height : 0,
+        above: down > 0 ? 0 : -down,
+      }
+    }
+  }, [])
+
   /**
    * Decide which pages are drawn, from where they are now.
    *
@@ -254,7 +284,8 @@ export function PdfViewer(props: PdfViewerProps) {
       return next
     })
     reportCurrentPage()
-  }, [reportCurrentPage])
+    notePlace()
+  }, [reportCurrentPage, notePlace])
 
   /** Once per frame at most, and after layout: positions are read, not guessed. */
   const refreshFrame = useRef(0)
@@ -390,6 +421,22 @@ export function PdfViewer(props: PdfViewerProps) {
     setFitWidth(false)
     setZoomIndex(Math.min(Math.max(0, index), ZOOM_STEPS.length - 1))
   }, [])
+
+  // The pages have just been given another size: back to the place the reader
+  // was at, before anything is drawn. What is noted of the place is noted from
+  // the scrolling, so it is still the place as it was at the size before.
+  const sized = useRef(scale)
+  useLayoutEffect(() => {
+    if (sized.current === scale) return
+    sized.current = scale
+    const root = scroller.current
+    const at = place.current
+    const node = at ? pageNodes.current.get(at.page) : undefined
+    if (!root || !at || !node) return
+    const box = node.getBoundingClientRect()
+    if (box.height === 0) return
+    root.scrollTop += box.top - root.getBoundingClientRect().top + at.part * box.height - at.above
+  }, [scale])
 
   // ------------------------------------------------- which pages to render
 

@@ -3447,8 +3447,9 @@ button.turn-selection:hover {
 
 /* ------------------------------------------------------------------ phone
 
-   A window too narrow for the panes side by side shows one at a time, with a
-   bar along the bottom to go between them. Nothing here is a media query on
+   A window too narrow for the panes side by side — a phone, a tablet held
+   upright — shows one at a time, with a bar along the bottom to go between
+   them. Nothing here is a media query on
    the width: the shell is given the class `phone` from the one cutoff there
    is (`PHONE_BELOW` in phonePanes.ts), so the two cannot fall out of step.
 
@@ -4135,13 +4136,50 @@ button.turn-selection:hover {
 /* Which paper this is, on a slim line of its own over the controls: a panel
    this narrow drops the name from the bar, and on a phone nothing else on the
    screen says it. */
-.shell.phone .pdf-bar .pdf-title {
-  display: block;
-  order: -1;
-  flex: 1 1 100%;
-  margin: 0;
-  padding: 0 0.15rem;
-  font-size: 0.86rem;
+@container (max-width: 560px) {
+  .shell.phone .pdf-bar .pdf-title {
+    display: block;
+    order: -1;
+    flex: 1 1 100%;
+    margin: 0;
+    padding: 0 0.15rem;
+    font-size: 0.86rem;
+  }
+}
+
+/* A tablet held upright has the same layout, and more width than some of it
+   wants. The page of a paper takes all of it; what is read as lines, or
+   pressed, keeps to a measure, in the middle. None of this is reached on a
+   phone, where nothing is as wide as these. */
+.phone-bar {
+  justify-content: center;
+}
+
+.phone-tabs {
+  max-width: 24rem;
+}
+
+.shell.phone .topbar .conv-menu {
+  right: auto;
+  width: min(calc(100% - 0.8rem), 30rem);
+}
+
+.sheet {
+  align-self: center;
+  width: min(100%, 38rem);
+}
+
+.ask-box.docked {
+  max-width: 34rem;
+  margin: 0 auto;
+}
+
+/* The conversation and its message box: a column of reading width, with the
+   lines that rule them off still running the width of the pane. */
+.shell.phone .chat-log,
+.shell.phone .composer {
+  padding-left: max(0.6rem, calc((100% - 46rem) / 2));
+  padding-right: max(0.6rem, calc((100% - 46rem) / 2));
 }
 
 .shell.phone .pdf-controls button,
