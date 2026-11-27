@@ -577,7 +577,9 @@ chat's width is.
 
 In a window narrower than 900 pixels there is room for one of them at a time
 — a phone, and a tablet held upright, where a page of a paper then has the
-whole width. Turned on its side, a tablet has the panes side by side again,
+whole width. A large tablet is wider than that upright (a 12.9-inch iPad is
+1024), and has the same layout there: held upright and worked by touch, up to
+1100 pixels. Turned on its side, a tablet has the panes side by side again,
 with what was open still in them. One pane fills the screen, and a bar afloat along the bottom goes between the
 three, in the order they sit on a desk: **Text · Paper · Chat**. A mark slides
 to the one that is on. What is open is named in the pane itself: the text's

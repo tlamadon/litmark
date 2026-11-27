@@ -30,17 +30,39 @@ import {
   shownPane,
   tabForPaper,
   takesTyping,
+  UPRIGHT_TABLET_BELOW,
 } from './bundle/phonePanes.mjs'
+import { mediaMatches } from './media.mjs'
 
 test('the cutoff is said once, and a window of exactly that width is not a phone', () => {
   assert.equal(PHONE_BELOW, 900)
-  // A tablet held upright is on the phone's side of it; on its side, it is not.
-  for (const upright of [744, 768, 810, 820, 834]) assert.ok(upright < PHONE_BELOW, String(upright))
-  for (const onItsSide of [1024, 1080, 1133, 1180, 1194]) assert.ok(onItsSide >= PHONE_BELOW, String(onItsSide))
-  const limit = Number(/^\(max-width: ([\d.]+)px\)$/.exec(PHONE_QUERY)?.[1])
-  assert.ok(limit < PHONE_BELOW, PHONE_QUERY)
+  const phone = (width, height = 0, touch = false) => mediaMatches(PHONE_QUERY, { width, height, touch })
+  assert.equal(phone(PHONE_BELOW - 1), true)
+  assert.equal(phone(PHONE_BELOW), false)
   // No window is a fraction of a pixel wide enough to fall between the two.
-  assert.ok(limit > PHONE_BELOW - 0.1, PHONE_QUERY)
+  assert.equal(phone(PHONE_BELOW - 0.05), true)
+})
+
+test('a tablet held upright has the layout, whatever its size; on its side it has not', () => {
+  const phone = (width, height, touch = true) => mediaMatches(PHONE_QUERY, { width, height, touch })
+  // iPads upright: the mini, the 9.7, the 10.2, the Air, the 11 — and the
+  // large ones, which are as wide upright as a small one is on its side.
+  for (const [width, height] of [[744, 1133], [768, 1024], [810, 1080], [820, 1180], [834, 1194], [1024, 1366], [1032, 1376]]) {
+    assert.equal(phone(width, height), true, `${width} by ${height}`)
+  }
+  // The same ones on their sides: the panes side by side.
+  for (const [width, height] of [[1133, 744], [1024, 768], [1080, 810], [1180, 820], [1194, 834], [1366, 1024], [1376, 1032]]) {
+    assert.equal(phone(width, height), false, `${width} by ${height}`)
+  }
+  // The wider cutoff is for what is worked by touch: a window on a desk that
+  // is taller than wide — half a screen — is left as it was.
+  assert.equal(UPRIGHT_TABLET_BELOW, 1100)
+  assert.equal(phone(1024, 1366, false), false)
+  assert.equal(phone(960, 1080, false), false)
+  assert.equal(phone(UPRIGHT_TABLET_BELOW, 1400), false)
+  assert.equal(phone(UPRIGHT_TABLET_BELOW - 1, 1400), true)
+  // Under the first cutoff, any window is a phone, touch or not, upright or not.
+  assert.equal(phone(820, 600, false), true)
 })
 
 test('the panes are in the order they sit on a wide window', () => {

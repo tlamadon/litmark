@@ -11,19 +11,32 @@
  */
 
 /**
- * Narrower than this many CSS pixels, a window is laid out as a phone. The one
- * place the cutoff is said: the stylesheet hangs off the `phone` class the
- * shell is given from it, and has no width of its own to keep in step.
+ * Narrower than this many CSS pixels, a window is laid out as a phone. With
+ * the one below, the one place the cutoff is said: the stylesheet hangs off
+ * the `phone` class the shell is given from it, and has no width of its own
+ * to keep in step.
  *
- * A tablet held upright is on this side of it — an iPad is 744 to 834 wide
- * that way — and has the layout too: one pane with the whole width, which is
- * what a page of a paper wants there. On its side, 1024 wide and more, it has
- * the room for the panes side by side.
+ * A tablet held upright is on this side of it — most iPads are 744 to 834
+ * wide that way — and has the layout too: one pane with the whole width,
+ * which is what a page of a paper wants there. On its side, 1024 wide and
+ * more, it has the room for the panes side by side.
  */
 export const PHONE_BELOW = 900
 
-/** Just short of the cutoff, so a window of exactly that width is not a phone. */
-export const PHONE_QUERY = `(max-width: ${PHONE_BELOW - 0.02}px)`
+/**
+ * The largest tablets are wider than that held upright — a 12.9-inch iPad is
+ * 1024, as wide as a small one on its side — and want the one pane there all
+ * the same. Width alone cannot tell the two apart, so this one is asked with
+ * more: worked by touch, taller than wide, and narrower than this. A window
+ * on a desk of the same shape is left as it is.
+ */
+export const UPRIGHT_TABLET_BELOW = 1100
+
+/** Just short of each cutoff, so a window of exactly that width is not a phone. */
+export const PHONE_QUERY = [
+  `(max-width: ${PHONE_BELOW - 0.02}px)`,
+  `(orientation: portrait) and (any-pointer: coarse) and (max-width: ${UPRIGHT_TABLET_BELOW - 0.02}px)`,
+].join(', ')
 
 /** The panes, in the order they sit on a wide window, left to right. */
 export type PhoneTab = 'text' | 'paper' | 'chat'

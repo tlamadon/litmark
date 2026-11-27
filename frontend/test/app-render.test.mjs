@@ -14,6 +14,8 @@ import { fileURLToPath } from 'node:url'
 
 import { JSDOM } from 'jsdom'
 
+import { mediaMatches } from './media.mjs'
+
 const here = dirname(fileURLToPath(import.meta.url))
 const STATE = {
   project: { name: 'Demo', root: '/tmp/demo', schema_version: 1 },
@@ -130,7 +132,7 @@ const ROUTES = new Map([
   ['/api/changes', { changes: [{ change_id: 'chg-1', target_kind: 'note', target_id: 'welcome', origin: 'agent', summary: 'Patched note', base_revision: null, new_revision: 'rev-2', undoable: true, undone_at: null, created_at: '2026-01-01T00:00:05Z' }] }],
 ])
 
-function buildDom({ serverToken = 'test-token', routes = ROUTES, width = null } = {}) {
+function buildDom({ serverToken = 'test-token', routes = ROUTES, width = null, height = 0, touch = false } = {}) {
   const html = readFileSync(join(here, '..', '..', 'src', 'litmark', 'static', 'index.html'), 'utf8')
     .replace('<meta name="litmark-token" content="">', '<meta name="litmark-token" content="test-token">')
     // The bundle is injected manually below, so strip the script tags.
@@ -246,15 +248,12 @@ function buildDom({ serverToken = 'test-token', routes = ROUTES, width = null } 
   }
   window.EventSource = FakeEventSource
   if (width !== null) {
-    // A window of a given width: what the layout asks of it is answered from that.
-    window.matchMedia = (query) => {
-      const limit = /^\(max-width: ([\d.]+)px\)$/.exec(query)
-      return {
-        matches: limit ? width <= Number(limit[1]) : false,
-        addEventListener() {},
-        removeEventListener() {},
-      }
-    }
+    // A window of a given size: what the layout asks of it is answered from that.
+    window.matchMedia = (query) => ({
+      matches: mediaMatches(query, { width, height, touch }),
+      addEventListener() {},
+      removeEventListener() {},
+    })
   } else if (!window.matchMedia) {
     window.matchMedia = () => ({ matches: false, addEventListener() {}, removeEventListener() {} })
   }
@@ -1169,8 +1168,8 @@ test('on a phone: the session at the top, one pane at a time, and a bar afloat a
 
 test('a tablet held upright has the one-pane layout; on its side, the panes side by side', async (t) => {
   const bundle = readFileSync(join(here, 'bundle', 'app.mjs'), 'utf8')
-  const at = async (width) => {
-    const dom = buildDom({ routes: new Map(ROUTES), width })
+  const at = async (width, height = 0, touch = false) => {
+    const dom = buildDom({ routes: new Map(ROUTES), width, height, touch })
     t.after(() => dom.window.close())
     dom.window.eval(bundle)
     await new Promise((resolve) => setTimeout(resolve, 300))
@@ -1182,12 +1181,19 @@ test('a tablet held upright has the one-pane layout; on its side, the panes side
       sidebar: root.querySelector('.body > .sidebar') !== null,
     }
   }
+  const onePane = { phone: true, bar: true, sessions: false, sidebar: false }
+  const sideBySide = { phone: false, bar: false, sessions: true, sidebar: true }
   // An iPad upright, and the last width on that side of the cutoff.
-  for (const width of [820, 899]) {
-    assert.deepEqual(await at(width), { phone: true, bar: true, sessions: false, sidebar: false }, String(width))
-  }
+  assert.deepEqual(await at(820, 1180, true), onePane)
+  assert.deepEqual(await at(899), onePane)
   // The cutoff itself, and an iPad on its side.
-  for (const width of [900, 1180]) {
-    assert.deepEqual(await at(width), { phone: false, bar: false, sessions: true, sidebar: true }, String(width))
-  }
+  assert.deepEqual(await at(900), sideBySide)
+  assert.deepEqual(await at(1180, 820, true), sideBySide)
+  // A large iPad is as wide upright as a small one on its side: upright it
+  // has the one pane, and the small one on its side has not.
+  assert.deepEqual(await at(1024, 1366, true), onePane)
+  assert.deepEqual(await at(1024, 768, true), sideBySide)
+  assert.deepEqual(await at(1366, 1024, true), sideBySide)
+  // A window of that shape on a desk, worked by a mouse, is left as it was.
+  assert.deepEqual(await at(1024, 1366, false), sideBySide)
 })

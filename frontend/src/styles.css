@@ -3451,7 +3451,7 @@ button.turn-selection:hover {
    upright — shows one at a time, with a bar along the bottom to go between
    them. Nothing here is a media query on
    the width: the shell is given the class `phone` from the one cutoff there
-   is (`PHONE_BELOW` in phonePanes.ts), so the two cannot fall out of step.
+   is (`PHONE_QUERY` in phonePanes.ts), so the two cannot fall out of step.
 
    The page is laid out to the edges of the screen (`viewport-fit=cover`), so
    that a pane can run to the foot of it under the bar afloat there, and the
