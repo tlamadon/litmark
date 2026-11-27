@@ -529,10 +529,6 @@ select {
   .body > .source {
     min-width: 0;
   }
-  .chat-drawer,
-  .rail-right {
-    display: none;
-  }
 }
 
 .fatal {
