@@ -576,10 +576,25 @@ chat's width is.
 ### On a phone
 
 In a window narrower than 700 pixels there is room for one of them at a time.
-One pane fills the screen, and a bar along the bottom goes between the three,
-in the order they sit on a desk: **Text · Paper · Chat**. The bar says which
-is on and what is behind each; a tab with nothing behind it — no paper open,
-no note or summary — is dimmed and says so.
+One pane fills the screen, and a bar afloat along the bottom goes between the
+three, in the order they sit on a desk: **Text · Paper · Chat**. A mark slides
+to the one that is on. What is open is named in the pane itself: the text's
+title in its bar, the paper's on a line over its controls.
+
+The top bar is the session's, and nothing else: its name, with a menu of the
+others and **New session** behind it, and **ⓘ**. A session is the text, the
+paper and the conversation that go together, so each one in the menu says what
+it holds, and going to another changes all three panes. A session comes back
+on the tab you left it on — or on Chat, if it has answered since.
+
+**Library**, the round button beside the tabs, is where the first two panes
+are filled from. It lays the library over the session; choose a note and you
+are on Text, a paper and you are on its summary with the PDF behind Paper (or
+on the PDF, where nothing is written about it yet). A tab puts the library
+away again. A pane with nothing in it says so and offers the way: **Open a
+note** or **New note** on Text, **Open a paper** on Paper. Pressing the tab
+you are already on opens the library at its kind — the notes from Text, the
+papers from Paper. A new session, with nothing open, starts at the library.
 
 What you do takes you where it leads. Tap a citation in the text and you are
 on Paper, at the passage; tap a highlight in the paper and you are on Text, at
@@ -590,19 +605,18 @@ answer is read.
 
 Each pane keeps its place while another is on: where the text was scrolled
 to, the page of the paper and its zoom, the message half typed. A reply that
-comes in while you are reading puts a dot on **Chat**, and the tab says
-*working…* while the agent is at it.
+comes in while you are reading puts a dot on the Chat icon, and a ring pulses
+there while the agent is at work.
 
-The top bar holds **Library**, the session — its name, with a menu of the
-others and **New session**, in place of the row of tabs — and **ⓘ**, which
-slides the panel about what is open up over the pane. Tap an entry in it and
-it does what it does and is put away; a tap outside it, or its ✕, puts it away
-too. Sync, **Sign out** and the version are at its foot. The library is the
-home screen, with the page to itself.
+**ⓘ** slides the panel about what is open up over the pane. Tap an entry in
+it and it does what it does and is put away; a tap outside it, or its ✕, puts
+it away too. Sync, **Sign out** and the version are at its foot.
 
 While you type, the bar along the bottom is out of the keyboard's way; it is
-back when you are done. There is no swiping between panes: a sideways swipe
-already means something in each of them.
+back when you are done. Nothing is left under it: each pane can be scrolled
+until its end is clear, and the chat's message box sits above it. There is no
+swiping between panes: a sideways swipe already means something in each of
+them.
 
 ## Reading and editing
 

@@ -35,19 +35,73 @@ export interface Behind {
 }
 
 /**
- * What is on show, given the tab asked for.
+ * What is on show.
  *
- * A tab with nothing behind it is never shown as a blank pane: the other of
- * the two reading panes stands in, and with neither there is the library —
- * which is where one starts, and where there is something to open. The chat
- * always has something to show.
+ * A tab the reader chose is shown, whatever is behind it: a pane with nothing
+ * open says so, and offers the way to open something. Until one is chosen — a
+ * session just come to — it is whichever reading pane has something in it,
+ * the text first; and with neither, the library, which is where one starts.
  */
-export function shownPane(tab: PhoneTab, behind: Behind, library: boolean): PhonePane {
+export function shownPane(tab: PhoneTab | null, behind: Behind, library: boolean): PhonePane {
   if (library) return 'library'
-  if (tab === 'chat') return 'chat'
-  if (behind[tab]) return tab
-  const other = tab === 'text' ? 'paper' : 'text'
-  return behind[other] ? other : 'library'
+  if (tab !== null) return tab
+  return behind.text ? 'text' : behind.paper ? 'paper' : 'library'
+}
+
+/** The two kinds of thing the library holds, each on a tab of its own there. */
+export type LibraryKind = 'papers' | 'notes'
+
+/** What a pane is filled from: notes for the text, papers for the paper. */
+export function kindFor(tab: PhoneTab): LibraryKind | null {
+  return tab === 'text' ? 'notes' : tab === 'paper' ? 'papers' : null
+}
+
+/** How long a tab must have been the one on before a press on it means more. */
+export const RETAP_AFTER_MS = 700
+
+/**
+ * What a press on the tab that is already on opens in the library: the kind
+ * that tab is filled from. Not straight after the tab came on — the second
+ * press of a double tap is the first one again, not a request for something
+ * else — and never for the chat, which is not opened from the library.
+ */
+export function retapOpens(tab: PhoneTab, onForMs: number): LibraryKind | null {
+  return onForMs < RETAP_AFTER_MS ? null : kindFor(tab)
+}
+
+/** What a session holds besides its conversation, as it is said in the menu. */
+export interface Held {
+  text: string | null
+  paper: string | null
+}
+
+/**
+ * What a session holds: the text open in it and the paper, by name. A session
+ * is the set of them, and the menu that goes between sessions says so for
+ * each. What is no longer in the project is not named.
+ */
+export function heldIn(
+  view: {
+    target:
+      | { kind: 'note'; noteId: string }
+      | { kind: 'summary'; documentId: string }
+      | { kind: 'skill' }
+      | { kind: 'empty' }
+    documentId: string | null
+  },
+  names: { note: (id: string) => string | null; paper: (id: string) => string | null },
+): Held {
+  const paper = view.documentId ? names.paper(view.documentId) : null
+  const { target } = view
+  let text: string | null = null
+  if (target.kind === 'note') text = names.note(target.noteId)
+  else if (target.kind === 'skill') text = 'Summarizing skill'
+  else if (target.kind === 'summary') {
+    const of = names.paper(target.documentId)
+    // The summary of the paper beside it needs no second naming.
+    if (of !== null) text = target.documentId === view.documentId ? 'Summary' : `Summary of ${of}`
+  }
+  return { text, paper }
 }
 
 /**

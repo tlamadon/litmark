@@ -8,6 +8,7 @@
  * working and which have answered since they were last looked at.
  */
 
+import type { ComponentChildren } from 'preact'
 import { useEffect, useRef, useState } from 'preact/hooks'
 
 import { api, type ConversationSummary } from '../api'
@@ -59,6 +60,13 @@ export interface ConversationMenuProps {
    * and speaks of sessions: each is its conversation and its view.
    */
   sessions?: boolean
+  /**
+   * What each session holds besides its conversation — the text and the paper
+   * open in it — drawn under its name: going to one changes those too.
+   */
+  holds?: (conversation: ConversationSummary) => ComponentChildren
+  /** The project these belong to, said at the head of the menu. */
+  project?: { name: string; root: string }
 }
 
 export function ConversationMenu(props: ConversationMenuProps) {
@@ -131,6 +139,7 @@ export function ConversationMenu(props: ConversationMenuProps) {
         <StatusDot conversation={conversation} unread={props.unread} />
         {nameOf(conversation)}
       </span>
+      {conversation.kind === 'chat' && props.holds?.(conversation)}
       <span class="menu-note">{conversationMeta(conversation)}</span>
     </button>
   )
@@ -171,9 +180,16 @@ export function ConversationMenu(props: ConversationMenuProps) {
 
       {open && (
         <div class="conv-menu" role="menu">
+          {props.project && (
+            <div class="menu-project" title={props.project.root}>
+              {props.project.name}
+            </div>
+          )}
           {current && (
             <div class="conv-current">
-              <div class="menu-kicker">{current.kind === 'chat' ? 'Talking in' : 'Looking at'}</div>
+              <div class="menu-kicker">
+                {current.kind !== 'chat' ? 'Looking at' : props.sessions ? 'This session' : 'Talking in'}
+              </div>
               {mode === 'rename' ? (
                 <form
                   class="conv-rename"
@@ -196,6 +212,7 @@ export function ConversationMenu(props: ConversationMenuProps) {
               ) : (
                 <div class="conv-title">{nameOf(current)}</div>
               )}
+              {current.kind === 'chat' && props.holds?.(current)}
               <div class="menu-note">{conversationMeta(current)}</div>
 
               {mode === 'delete' ? (
@@ -266,7 +283,7 @@ export function ConversationMenu(props: ConversationMenuProps) {
             <span class="menu-label">{props.sessions ? '＋ New session' : '＋ New conversation'}</span>
             <span class="menu-note">
               {props.sessions
-                ? 'Its own conversation and its own view; this one stays here to come back to.'
+                ? 'Its own text, paper and conversation; this one stays here to come back to.'
                 : 'The agent starts fresh; this one stays here to come back to.'}
             </span>
           </button>

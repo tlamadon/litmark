@@ -1,10 +1,11 @@
 /**
  * The shell on a phone: what is drawn around the one pane on show.
  *
- * A bar along the top with the library, the session and the way to the panel
- * about what is open; a bar along the bottom, in reach of a thumb, with the
- * three panes — Text, Paper, Chat — and which of them is on; and the panel
- * itself as a sheet that slides up over the pane and is put away again.
+ * A bar along the top that is the session's: its name, the menu of the
+ * others, and the way to the panel about what is open. A bar afloat along the
+ * bottom, in reach of a thumb, with the three panes — Text, Paper, Chat — and
+ * which of them is on, and beside it the library they are filled from. And
+ * the panel itself, as a sheet that slides up over the pane and is put away.
  *
  * What is on show, and where an action leads, is worked out in `phonePanes.ts`;
  * the panes themselves are the application's own, placed by `App.tsx`.
@@ -13,7 +14,7 @@
 import type { ComponentChildren } from 'preact'
 import { useEffect, useRef, useState } from 'preact/hooks'
 
-import type { ChatSign, Keyboard, PhonePane, PhoneTab } from './phonePanes'
+import type { Behind, ChatSign, Held, Keyboard, PhonePane, PhoneTab } from './phonePanes'
 import { keyboardAfter, PHONE_QUERY, PHONE_TABS, takesTyping } from './phonePanes'
 import { touchFirst } from './touch'
 
@@ -107,11 +108,11 @@ export function useTyping(enabled: boolean): boolean {
 }
 
 export interface PhoneTopProps {
-  project: { name: string; root: string }
-  /** The library is what is on show. */
-  inLibrary: boolean
-  onLibrary: () => void
-  /** The session on screen, with the menu of the others: the row of tabs, folded. */
+  /**
+   * The session on screen, with the menu of the others: the row of tabs,
+   * folded. It has the bar to itself — a session is the text, the paper and
+   * the conversation that go together, and going to another changes all three.
+   */
   session: ComponentChildren
   /** The connection to the server is down, and being tried again. */
   reconnecting: boolean
@@ -127,25 +128,10 @@ export interface PhoneTopProps {
   version: ComponentChildren
 }
 
-/** The bar along the top: the project, the library, the session, the panel. */
+/** The bar along the top: the session, and the way to the panel about what is open. */
 export function PhoneTop(props: PhoneTopProps) {
   return (
     <header class="topbar phone-top">
-      <h1 title={props.project.root}>{props.project.name}</h1>
-      <button
-        type="button"
-        class={props.inLibrary ? 'ghost active' : 'ghost'}
-        data-action="library"
-        aria-pressed={props.inLibrary}
-        title={
-          props.inLibrary
-            ? 'Every paper and note — again to go back to what was open'
-            : 'Every paper and note'
-        }
-        onClick={props.onLibrary}
-      >
-        Library
-      </button>
       {props.session}
       {props.reconnecting && (
         <span class="badge warn" title="Reconnecting…" aria-label="Reconnecting…">
@@ -159,11 +145,11 @@ export function PhoneTop(props: PhoneTopProps) {
         data-action="about"
         aria-expanded={props.aboutOpen}
         aria-haspopup="dialog"
-        aria-label={props.inLibrary ? 'Tags, and this window' : 'About what is open'}
-        title={props.inLibrary ? 'Tags, and this window' : 'About what is open'}
+        aria-label="About what is open"
+        title="About what is open"
         onClick={props.onAbout}
       >
-        <svg viewBox="0 0 16 16" width="19" height="19" aria-hidden="true">
+        <svg viewBox="0 0 16 16" width="20" height="20" aria-hidden="true">
           <circle cx="8" cy="8" r="6.4" fill="none" stroke="currentColor" stroke-width="1.2" />
           <path
             d="M8 7.2v4"
@@ -180,64 +166,174 @@ export function PhoneTop(props: PhoneTopProps) {
   )
 }
 
-export interface PhoneTabsProps {
+/** What the tabs and the library are drawn with: a 16px box, a line, the ink of the text. */
+const ICONS = {
+  // Lines of writing.
+  text: 'M3 3.75h10M3 6.6h10M3 9.45h10M3 12.3h6',
+  // A page, its corner turned down.
+  paper: 'M4.25 1.9h4.9l2.6 2.7v9.5h-7.5zM9 1.9v2.9h2.75',
+  // What is said.
+  chat: 'M2.6 3.1h10.8v7.6H8.2L5.2 13.4v-2.7H2.6z',
+  // Everything there is, as the library lays it out.
+  library: 'M2.6 2.6h4.3v4.3H2.6zM9.1 2.6h4.3v4.3H9.1zM2.6 9.1h4.3v4.3H2.6zM9.1 9.1h4.3v4.3H9.1z',
+} as const
+
+export function PhoneIcon(props: { name: keyof typeof ICONS; size?: number }) {
+  const size = props.size ?? 20
+  return (
+    <svg viewBox="0 0 16 16" width={size} height={size} aria-hidden="true">
+      <path
+        fill="none"
+        stroke="currentColor"
+        stroke-width="1.5"
+        stroke-linecap="round"
+        stroke-linejoin="round"
+        d={ICONS[props.name]}
+      />
+    </svg>
+  )
+}
+
+export interface PhoneBarProps {
   /** What fills the screen now. With the library up, no tab is the one on. */
   pane: PhonePane
-  /** What is behind each tab, in a few words; null when there is nothing. */
-  behind: Record<PhoneTab, string | null>
+  /** Whether there is anything behind Text and behind Paper. */
+  behind: Behind
   /** What the Chat tab says of the conversation: at work, or answered. */
   chat: ChatSign
+  /** A tab pressed — the one already on, too. */
   onSelect: (tab: PhoneTab) => void
+  /** The library, laid over the session or taken away again. */
+  onLibrary: () => void
 }
 
 const TAB_NAMES: Record<PhoneTab, string> = { text: 'Text', paper: 'Paper', chat: 'Chat' }
-/** Said on a tab with nothing behind it, in place of what would be there. */
-const NOTHING_BEHIND: Record<PhoneTab, string> = {
-  text: 'nothing open',
-  paper: 'none open',
-  chat: '',
-}
 const CHAT_SIGNS: Record<Exclude<ChatSign, null>, string> = {
-  working: 'working…',
-  answered: 'new reply',
+  working: 'the agent is working',
+  answered: 'a new reply',
   failed: 'the run failed',
 }
 
 /**
- * The bar along the bottom: the three panes, which is on, and what is behind
- * each. A tab with nothing behind it is dimmed and says so; pressing it does
- * nothing, since there would be nothing to show.
+ * The bar along the bottom, afloat over the pane: the three panes in a capsule
+ * with a mark that slides to the one on, and, set apart from them, the library
+ * — which is not a fourth pane but what the first two are filled from.
+ *
+ * A tab with nothing behind it is quieter, and works: its pane says nothing
+ * is open and offers the way to open something.
  */
-export function PhoneTabs(props: PhoneTabsProps) {
+export function PhoneBar(props: PhoneBarProps) {
+  const on = PHONE_TABS.indexOf(props.pane as PhoneTab)
+  const inLibrary = props.pane === 'library'
   return (
-    <nav class="phone-tabs" aria-label="Panes">
-      {PHONE_TABS.map((tab) => {
-        const on = props.pane === tab
-        const empty = tab !== 'chat' && props.behind[tab] === null
-        const sign = tab === 'chat' ? props.chat : null
-        const what = sign ? CHAT_SIGNS[sign] : (props.behind[tab] ?? NOTHING_BEHIND[tab])
-        return (
-          <button
-            key={tab}
-            type="button"
-            class={on ? 'phone-tab on' : 'phone-tab'}
-            data-tab={tab}
-            data-sign={sign ?? undefined}
-            aria-current={on ? 'page' : undefined}
-            aria-disabled={empty}
-            onClick={() => {
-              if (!empty) props.onSelect(tab)
-            }}
-          >
-            <span class="phone-tab-name">
-              {TAB_NAMES[tab]}
-              {sign && <span class={`dot ${sign}`} />}
-            </span>
-            <span class="phone-tab-what">{what}</span>
+    <div class="phone-bar">
+      <nav class="phone-tabs" aria-label="Panes" data-on={on >= 0 ? PHONE_TABS[on] : 'none'}>
+        {/* The mark of the tab that is on: one shape that moves, not three that light up. */}
+        <span class="phone-tabs-mark" aria-hidden="true" style={{ '--at': Math.max(on, 0) }} />
+        {PHONE_TABS.map((tab) => {
+          const current = props.pane === tab
+          const empty = tab !== 'chat' && !props.behind[tab]
+          const sign = tab === 'chat' ? props.chat : null
+          return (
+            <button
+              key={tab}
+              type="button"
+              class={['phone-tab', current ? 'on' : '', empty ? 'empty' : ''].filter(Boolean).join(' ')}
+              data-tab={tab}
+              data-sign={sign ?? undefined}
+              aria-current={current ? 'page' : undefined}
+              aria-label={
+                sign
+                  ? `${TAB_NAMES[tab]} — ${CHAT_SIGNS[sign]}`
+                  : empty
+                    ? `${TAB_NAMES[tab]} — nothing open`
+                    : undefined
+              }
+              onClick={() => props.onSelect(tab)}
+            >
+              <span class="phone-tab-icon">
+                <PhoneIcon name={tab} />
+                {sign && <span class={`phone-tab-sign ${sign}`} />}
+              </span>
+              <span class="phone-tab-name">{TAB_NAMES[tab]}</span>
+            </button>
+          )
+        })}
+      </nav>
+      <button
+        type="button"
+        class={inLibrary ? 'phone-library on' : 'phone-library'}
+        data-action="library"
+        aria-pressed={inLibrary}
+        aria-label="Library"
+        title={
+          inLibrary
+            ? 'Every paper and note — again to go back to what was open'
+            : 'Every paper and note: open one, or start a note'
+        }
+        onClick={props.onLibrary}
+      >
+        <PhoneIcon name="library" />
+        <span class="phone-tab-name">Library</span>
+      </button>
+    </div>
+  )
+}
+
+/**
+ * A pane with nothing in it: what is missing, and the way to open something.
+ * It is a place to start from, not a dead end.
+ */
+export function EmptyPane(props: {
+  kind: 'text' | 'paper'
+  /** To the library, on the kind this pane is filled from. */
+  onOpen: () => void
+  /** Start a note, where the pane is the text's. */
+  onNew?: () => void
+}) {
+  const text = props.kind === 'text'
+  return (
+    <div class="empty-pane" data-empty={props.kind}>
+      <span class="empty-pane-icon">
+        <PhoneIcon name={props.kind} size={30} />
+      </span>
+      <p>{text ? 'No note or summary open' : 'No paper open'}</p>
+      <div class="empty-pane-actions">
+        <button type="button" class="primary" data-action="open-from-library" onClick={props.onOpen}>
+          {text ? 'Open a note' : 'Open a paper'}
+        </button>
+        {props.onNew && (
+          <button type="button" data-action="new-note" onClick={props.onNew}>
+            New note
           </button>
-        )
-      })}
-    </nav>
+        )}
+      </div>
+    </div>
+  )
+}
+
+/**
+ * What a session holds, under its name in the menu: the text and the paper
+ * open in it. Picking a session is picking the set, and this is what says so.
+ */
+export function SessionHolds(props: { held: Held }) {
+  const { text, paper } = props.held
+  if (text === null && paper === null) return <span class="menu-holds none">Nothing open</span>
+  return (
+    <span class="menu-holds">
+      {text !== null && (
+        <span class="held">
+          <PhoneIcon name="text" size={13} />
+          <span>{text}</span>
+        </span>
+      )}
+      {paper !== null && (
+        <span class="held">
+          <PhoneIcon name="paper" size={13} />
+          <span>{paper}</span>
+        </span>
+      )}
+    </span>
   )
 }
 

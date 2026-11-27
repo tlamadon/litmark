@@ -35,6 +35,11 @@ export interface LibraryProps {
   onTagDocuments: (documentIds: string[], add: string[]) => void
   onSearchJump: (hit: SearchHit) => void
   onWriteBibliography: () => Promise<void>
+  /**
+   * Which of the two it opens on, when it was asked for one of them: the
+   * notes, from a pane that wants a note. Left out, the papers.
+   */
+  show?: 'papers' | 'notes'
 }
 
 type Order = 'added' | 'author' | 'year' | 'title'
@@ -85,7 +90,7 @@ function matches(words: string[], ...known: (string | number | null | undefined)
 export function Library(props: LibraryProps) {
   const [query, setQuery] = useState('')
   // Papers or notes; a search looks through both, and shows both.
-  const [showing, setShowing] = useState<'papers' | 'notes'>('papers')
+  const [showing, setShowing] = useState<'papers' | 'notes'>(props.show ?? 'papers')
   const [order, setOrder] = useState<Order>(storedOrder)
   const [hits, setHits] = useState<SearchHit[]>([])
   const [noteHits, setNoteHits] = useState<{ note_id: string; title: string; snippet: string }[]>(

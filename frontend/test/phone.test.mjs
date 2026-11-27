@@ -1,10 +1,12 @@
 /**
  * The phone's layout, apart from how it is drawn.
  *
- * What is pinned: where the cutoff is, that a tab with nothing behind it is
- * never shown as a blank pane, where a paper opened from the library lands,
- * what the Chat tab says and when its dot comes and goes, and what counts as
- * typing — which is when the bar along the bottom gets out of the way.
+ * What is pinned: where the cutoff is, which pane is on show — the tab that
+ * was chosen, or until one is, what the session holds — what the library is
+ * opened on from a pane, what a session is said to hold, where a paper opened
+ * from the library lands, what the Chat tab says and when its dot comes and
+ * goes, and what counts as typing — which is when the bar along the bottom
+ * gets out of the way.
  */
 
 import assert from 'node:assert/strict'
@@ -17,10 +19,14 @@ import {
   afterLooking,
   afterReply,
   chatSign,
+  heldIn,
   keyboardAfter,
+  kindFor,
   PHONE_BELOW,
   PHONE_QUERY,
   PHONE_TABS,
+  RETAP_AFTER_MS,
+  retapOpens,
   shownPane,
   tabForPaper,
   takesTyping,
@@ -38,30 +44,82 @@ test('the panes are in the order they sit on a wide window', () => {
   assert.deepEqual(PHONE_TABS, ['text', 'paper', 'chat'])
 })
 
-test('the tab asked for is the pane on show when there is something behind it', () => {
+test('the tab the reader chose is the pane on show, whatever is behind it', () => {
   const both = { text: true, paper: true }
-  assert.equal(shownPane('text', both, false), 'text')
-  assert.equal(shownPane('paper', both, false), 'paper')
-  assert.equal(shownPane('chat', both, false), 'chat')
+  const neither = { text: false, paper: false }
+  for (const tab of PHONE_TABS) {
+    assert.equal(shownPane(tab, both, false), tab)
+    // With nothing behind it too: the pane says so, and offers the way to open something.
+    assert.equal(shownPane(tab, neither, false), tab)
+  }
 })
 
 test('the library, asked for, is laid over whichever tab was on', () => {
-  for (const tab of PHONE_TABS) {
+  for (const tab of [...PHONE_TABS, null]) {
     assert.equal(shownPane(tab, { text: true, paper: true }, true), 'library')
   }
 })
 
-test('a tab with nothing behind it is never a blank pane', () => {
-  // The other reading pane stands in…
-  assert.equal(shownPane('paper', { text: true, paper: false }, false), 'text')
-  assert.equal(shownPane('text', { text: false, paper: true }, false), 'paper')
-  // …and with neither, the library: where there is something to open.
-  assert.equal(shownPane('text', { text: false, paper: false }, false), 'library')
-  assert.equal(shownPane('paper', { text: false, paper: false }, false), 'library')
+test('until a tab is chosen, what the session holds is what is shown', () => {
+  // The text first, as it is the first of the panes…
+  assert.equal(shownPane(null, { text: true, paper: true }, false), 'text')
+  assert.equal(shownPane(null, { text: true, paper: false }, false), 'text')
+  // …the paper where there is no text…
+  assert.equal(shownPane(null, { text: false, paper: true }, false), 'paper')
+  // …and with neither, the library: where one starts.
+  assert.equal(shownPane(null, { text: false, paper: false }, false), 'library')
 })
 
-test('the chat always has something to show', () => {
-  assert.equal(shownPane('chat', { text: false, paper: false }, false), 'chat')
+test('a pane is filled from its own kind in the library', () => {
+  assert.equal(kindFor('text'), 'notes')
+  assert.equal(kindFor('paper'), 'papers')
+  assert.equal(kindFor('chat'), null)
+})
+
+test('a press on the tab already on opens the library at its kind, but not as a double tap', () => {
+  // On for a while: the press is a request for something else to fill the pane.
+  assert.equal(retapOpens('text', RETAP_AFTER_MS), 'notes')
+  assert.equal(retapOpens('paper', 5000), 'papers')
+  // Straight after it came on: the second press of a double tap, which is the first again.
+  assert.equal(retapOpens('text', 0), null)
+  assert.equal(retapOpens('paper', RETAP_AFTER_MS - 1), null)
+  // A double tap is done within half a second; the wait is longer than that.
+  assert.ok(RETAP_AFTER_MS >= 600, String(RETAP_AFTER_MS))
+  // The chat is not opened from the library.
+  assert.equal(retapOpens('chat', 5000), null)
+})
+
+test('a session is said by what it holds: its text and its paper', () => {
+  const names = {
+    note: (id) => ({ plan: 'The plan' })[id] ?? null,
+    paper: (id) => ({ 'doc-001': 'Olley & Pakes (1996)', 'doc-002': 'Levinsohn & Petrin (2003)' })[id] ?? null,
+  }
+  const held = (target, documentId = null) => heldIn({ target, documentId }, names)
+  assert.deepEqual(held({ kind: 'note', noteId: 'plan' }, 'doc-001'), {
+    text: 'The plan',
+    paper: 'Olley & Pakes (1996)',
+  })
+  assert.deepEqual(held({ kind: 'note', noteId: 'plan' }), { text: 'The plan', paper: null })
+  // The summary of the paper beside it needs no second naming…
+  assert.deepEqual(held({ kind: 'summary', documentId: 'doc-001' }, 'doc-001'), {
+    text: 'Summary',
+    paper: 'Olley & Pakes (1996)',
+  })
+  // …one of another paper, or with no paper beside it, says whose it is.
+  assert.deepEqual(held({ kind: 'summary', documentId: 'doc-002' }, 'doc-001'), {
+    text: 'Summary of Levinsohn & Petrin (2003)',
+    paper: 'Olley & Pakes (1996)',
+  })
+  assert.deepEqual(held({ kind: 'summary', documentId: 'doc-002' }), {
+    text: 'Summary of Levinsohn & Petrin (2003)',
+    paper: null,
+  })
+  assert.deepEqual(held({ kind: 'skill' }), { text: 'Summarizing skill', paper: null })
+  assert.deepEqual(held({ kind: 'empty' }, 'doc-002'), { text: null, paper: 'Levinsohn & Petrin (2003)' })
+  // Nothing open, and what is no longer in the project: not named.
+  assert.deepEqual(held({ kind: 'empty' }), { text: null, paper: null })
+  assert.deepEqual(held({ kind: 'note', noteId: 'gone' }, 'doc-404'), { text: null, paper: null })
+  assert.deepEqual(held({ kind: 'summary', documentId: 'doc-404' }), { text: null, paper: null })
 })
 
 test('a paper lands on its summary when it has one, and on the PDF when it has none', () => {

@@ -1185,7 +1185,7 @@ describeOrSkip('the application on a phone, in Firefox', () => {
     await waitInFrame(`!!one('.main .cm-content')`, 'the note to open')
   }
 
-  test('one pane fills the window, and the bar along the bottom says which', async () => {
+  test('one pane fills the window, under a bar afloat at the bottom that says which', async () => {
     await openTheNote()
     const seen = await where()
     assert.ok(seen.phone, 'a window 390 wide is not laid out as a phone')
@@ -1196,28 +1196,48 @@ describeOrSkip('the application on a phone, in Firefox', () => {
        return {
          window: [W.innerWidth, W.innerHeight],
          page: [D.documentElement.scrollWidth, D.documentElement.scrollHeight],
-         text: box('.body > .main'), bar: box('.phone-tabs'), top: box('.topbar'),
+         text: box('.body > .main'), tabs: box('.phone-tabs'), library: box('.phone-library'), top: box('.topbar'),
+         mark: box('.phone-tabs-mark'), on: box('.phone-tab[aria-current="page"]'),
          topbarFits: one('.topbar').scrollWidth <= one('.topbar').clientWidth,
-         rails: all('.rail, .sidebar, .sessions').length,
+         inTopBar: all('.topbar h1, .topbar [data-action="library"], .topbar .sessions').length,
+         rails: all('.rail, .sidebar').length,
+         targets: all('.phone-tab, .phone-library').map((node) => { const b = node.getBoundingClientRect(); return Math.min(b.width, b.height) }),
        }`,
     )
     assert.deepEqual(layout.page, layout.window, 'the page itself scrolls')
     assert.deepEqual(layout.text.slice(0, 2), [0, WIDTH], 'the text does not fill the width')
-    assert.equal(layout.text[3], layout.bar[2], 'the pane runs under the bar along the bottom')
-    assert.equal(layout.bar[3], HEIGHT, 'the bar is not along the bottom')
+    assert.equal(layout.text[3], HEIGHT, 'the pane does not run to the foot of the window')
+    // The bar floats: inset from the edges, the library a circle set apart from the tabs.
+    assert.ok(layout.tabs[0] >= 8 && layout.library[1] <= WIDTH - 8, `the bar is not inset: ${JSON.stringify(layout)}`)
+    assert.ok(layout.tabs[3] <= HEIGHT - 8 && layout.tabs[2] > HEIGHT - 90, `the bar is not afloat at the bottom: ${layout.tabs}`)
+    assert.ok(layout.library[0] - layout.tabs[1] >= 6, 'the library is not set apart from the tabs')
+    assert.ok(layout.targets.every((size) => size >= 44), `a target is under 44px: ${layout.targets}`)
+    // The mark is under the tab that is on.
+    assert.ok(Math.abs(layout.mark[0] - layout.on[0]) <= 1 && Math.abs(layout.mark[1] - layout.on[1]) <= 1, `the mark is not on the tab: ${layout.mark} | ${layout.on}`)
+    // The top bar is the session's, and fits.
     assert.ok(layout.topbarFits, 'the top bar does not fit')
-    assert.equal(layout.rails, 0, 'the strips and the row of sessions of a wide window are here')
+    assert.equal(layout.inTopBar, 0, 'the project, the library or the row of sessions is in the top bar')
+    assert.equal(layout.rails, 0, 'the strips and the panel of a wide window are here')
 
-    // The chat is a tab away, the whole width, with its message box on screen.
+    // Nothing of the note is left under the bar: scrolled to its end, the
+    // last line is above it.
+    const end = await inFrame(
+      `const scroller = one('.main .cm-scroller'); scroller.scrollTop = scroller.scrollHeight
+       const lines = all('.main .cm-line').filter((line) => line.textContent.trim())
+       return [Math.round(lines[lines.length - 1].getBoundingClientRect().bottom), Math.round(one('.phone-tabs').getBoundingClientRect().top)]`,
+    )
+    assert.ok(end[0] <= end[1], `the end of the note is under the bar: ${end}`)
+
+    // The chat is a tab away, the whole width, with its message box above the bar.
     await press('.phone-tab[data-tab="chat"]')
     assert.deepEqual((await where()).on, ['chat-drawer'])
     const chat = await inFrame(
       `const send = one('.composer-actions button.primary').getBoundingClientRect()
        const box = one('.composer textarea').getBoundingClientRect()
-       return { send: [Math.round(send.left), Math.round(send.right), Math.round(send.bottom)], box: [Math.round(box.left), Math.round(box.right)], bar: Math.round(one('.phone-tabs').getBoundingClientRect().top) }`,
+       return { send: [Math.round(send.left), Math.round(send.right), Math.round(send.bottom)], box: [Math.round(box.left), Math.round(box.right), Math.round(box.bottom)], bar: Math.round(one('.phone-tabs').getBoundingClientRect().top) }`,
     )
-    assert.ok(chat.box[0] >= 0 && chat.box[1] <= WIDTH, `the message box is cut off: ${chat.box}`)
-    assert.ok(chat.send[0] >= 0 && chat.send[1] <= WIDTH && chat.send[2] <= chat.bar, `Send is cut off: ${chat.send}`)
+    assert.ok(chat.box[0] >= 0 && chat.box[1] <= WIDTH && chat.box[2] <= chat.bar, `the message box is cut off, or under the bar: ${JSON.stringify(chat)}`)
+    assert.ok(chat.send[0] >= 0 && chat.send[1] <= WIDTH && chat.send[2] <= chat.bar, `Send is cut off, or under the bar: ${JSON.stringify(chat)}`)
     await press('.phone-tab[data-tab="text"]')
   })
 
@@ -1253,6 +1273,12 @@ describeOrSkip('the application on a phone, in Firefox', () => {
     )
     assert.ok(Math.abs(paper.page - (paper.room - 24)) <= 2, `the page is not fitted: ${JSON.stringify(paper)}`)
     assert.ok(paper.inView, 'the passage is not in view')
+    // The pane says which paper it is: the tab no longer does.
+    const title = await inFrame(
+      `const name = one('.source .pdf-title'); const box = name.getBoundingClientRect()
+       return { text: name.textContent, width: Math.round(box.width), right: Math.round(box.right) }`,
+    )
+    assert.ok(title.text.length > 0 && title.width > 100 && title.right <= WIDTH, `the paper is not named: ${JSON.stringify(title)}`)
 
     // To the text and back: both are where they were left.
     await press('.phone-tab[data-tab="text"]')

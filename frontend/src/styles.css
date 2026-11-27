@@ -3453,9 +3453,10 @@ button.turn-selection:hover {
    is (`PHONE_BELOW` in phonePanes.ts), so the two cannot fall out of step.
 
    The page is laid out to the edges of the screen (`viewport-fit=cover`), so
-   that the bar along the bottom can reach the edge and keep clear of the home
-   indicator itself. Everywhere else the shell stays inside the safe area, as
-   it was when the browser kept it there: these are all zero on a desktop. */
+   that a pane can run to the foot of it under the bar afloat there, and the
+   bar keep clear of the home indicator itself. Everywhere else the shell
+   stays inside the safe area, as it was when the browser kept it there: these
+   are all zero on a desktop. */
 
 .shell {
   padding: env(safe-area-inset-top, 0px) env(safe-area-inset-right, 0px)
@@ -3463,7 +3464,7 @@ button.turn-selection:hover {
 }
 
 .shell.phone {
-  /* The bar along the bottom reaches the edge, and pads itself. */
+  /* The panes run to the foot of the screen, under the bar afloat there. */
   padding-bottom: 0;
 }
 
@@ -3478,25 +3479,13 @@ button.turn-selection:hover {
   font-size: 16px;
 }
 
-/* The top bar: the project, the library, the session, the panel. */
+/* The top bar is the session's: its name, with the menu of the others behind
+   it, and the way to the panel about what is open. Nothing in it changes only
+   some of the panes. */
 .shell.phone .topbar {
   position: relative; /* the session menu hangs off it, full width */
   gap: 0.3rem;
-  padding: 0.3rem 0.45rem;
-}
-
-.shell.phone .topbar h1 {
-  flex: 0 1 auto;
-  min-width: 3ch;
-  max-width: 26%;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.shell.phone .topbar > .ghost {
-  flex: none;
-  min-height: 2.5rem;
+  padding: 0.25rem 0.4rem;
 }
 
 .shell.phone .topbar .conv-wrap {
@@ -3504,16 +3493,67 @@ button.turn-selection:hover {
 }
 
 .shell.phone .topbar .conv-button {
-  min-height: 2.5rem;
+  min-height: 2.75rem;
+  font-size: 1.02rem;
 }
 
 .shell.phone .topbar .conv-menu {
   z-index: 60;
-  max-height: min(72vh, 34rem);
+  max-height: min(74vh, 36rem);
+}
+
+.shell.phone .topbar .menu-item {
+  padding-top: 0.55rem;
+  padding-bottom: 0.55rem;
 }
 
 .shell.phone .topbar .badge {
   flex: none;
+}
+
+/* The project the sessions belong to, at the head of their menu. */
+.menu-project {
+  padding: 0.3rem 0.5rem 0.2rem;
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--muted-strong);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* What a session holds, under its name: the text and the paper open in it. */
+.menu-holds {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.05rem 0.8rem;
+  margin: 0.12rem 0 0.08rem;
+  font-size: 0.82rem;
+  font-weight: 400;
+  color: var(--muted-strong);
+}
+
+.menu-holds.none {
+  color: var(--muted);
+}
+
+.menu-holds .held {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.28rem;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.menu-holds .held svg {
+  flex: none;
+  color: var(--muted);
+}
+
+.menu-holds .held span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* The version's number is at the foot of the sheet. Here, only what speaks
@@ -3534,16 +3574,18 @@ button.turn-selection:hover {
 
 .about-button {
   position: relative;
+  flex: none;
   display: grid;
   place-items: center;
-  width: 2.5rem;
+  width: 2.75rem;
+  height: 2.75rem;
   padding: 0;
 }
 
 .about-button .dot {
   position: absolute;
-  top: 0.35rem;
-  right: 0.3rem;
+  top: 0.4rem;
+  right: 0.35rem;
 }
 
 /* The panes, one over another in the same place: the one on show is seen, the
@@ -3579,87 +3621,254 @@ button.turn-selection:hover {
   background: var(--bg);
 }
 
-/* The bar along the bottom: the three panes, and which is on. */
-.phone-tabs {
-  flex: none;
-  display: flex;
-  border-top: 1px solid var(--rule);
-  background: var(--panel);
-  padding-bottom: env(safe-area-inset-bottom, 0px);
+/* The bar along the bottom, afloat over the pane: the three panes in a
+   capsule, and beside it, set apart, the library they are filled from. Inset
+   from the edges of the screen and from the home indicator; what is behind
+   shows through it, blurred, where the browser can do that. */
+.shell.phone {
+  --bar-height: 3.5rem;
+  --bar-bottom: max(0.6rem, env(safe-area-inset-bottom, 0px));
+  /* What a pane keeps clear at its foot, so that nothing ends up under the bar. */
+  --bar-room: calc(var(--bar-height) + var(--bar-bottom) + 0.6rem);
 }
 
 /* Out of the way of the keyboard, while something is being typed. */
-.shell.phone.typing .phone-tabs {
+.shell.phone.typing {
+  --bar-room: 0px;
+}
+
+.shell.phone.typing .phone-bar {
   display: none;
 }
 
-.phone-tab {
+.phone-bar {
+  position: fixed;
+  z-index: 30;
+  left: calc(0.6rem + env(safe-area-inset-left, 0px));
+  right: calc(0.6rem + env(safe-area-inset-right, 0px));
+  bottom: var(--bar-bottom);
+  display: flex;
+  gap: 0.5rem;
+  /* The gap between the two is the pane's, not the bar's. */
+  pointer-events: none;
+}
+
+.phone-tabs,
+.phone-library {
+  pointer-events: auto;
+  height: var(--bar-height);
+  border: 1px solid color-mix(in srgb, var(--ink) 11%, transparent);
+  background: var(--panel);
+  box-shadow:
+    0 8px 28px rgba(20, 16, 10, 0.16),
+    0 1px 3px rgba(20, 16, 10, 0.1);
+}
+
+@supports ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  .phone-tabs,
+  .phone-library {
+    /* Mostly the panel's own colour: what is behind tints it, and the names
+       on it stay easy to read whatever that is. */
+    background: color-mix(in srgb, var(--panel) 90%, transparent);
+    -webkit-backdrop-filter: blur(18px) saturate(1.6);
+    backdrop-filter: blur(18px) saturate(1.6);
+  }
+}
+
+.phone-tabs {
+  position: relative;
   flex: 1 1 0;
   min-width: 0;
-  min-height: 3.3rem;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  padding: 0.25rem;
+  border-radius: 999px;
+}
+
+/* The mark of the tab that is on: one shape, which slides to it. */
+.phone-tabs-mark {
+  position: absolute;
+  top: 0.25rem;
+  bottom: 0.25rem;
+  left: 0.25rem;
+  width: calc((100% - 0.5rem) / 3);
+  border-radius: 999px;
+  background: var(--accent-soft);
+  transform: translateX(calc(var(--at, 0) * 100%));
+  transition:
+    transform 0.28s cubic-bezier(0.3, 0.75, 0.2, 1),
+    opacity 0.15s ease;
+}
+
+/* The library is up: none of the three is the one on. */
+.phone-tabs[data-on='none'] .phone-tabs-mark {
+  opacity: 0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .phone-tabs-mark {
+    transition: none;
+  }
+}
+
+.phone-tab,
+.phone-library {
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  padding: 0.3rem 0.4rem 0.35rem;
-  border: 0;
-  border-top: 2px solid transparent;
-  margin-top: -1px;
-  border-radius: 0;
-  background: none;
+  gap: 0.05rem;
+  padding: 0;
   color: var(--muted-strong);
-  line-height: 1.25;
+  line-height: 1.2;
   touch-action: manipulation;
   -webkit-tap-highlight-color: transparent;
 }
 
-.phone-tab.on {
-  color: var(--ink);
-  border-top-color: var(--accent);
-  background: var(--accent-soft);
+.phone-tab {
+  position: relative; /* over the mark */
+  min-width: 0;
+  border: 0;
+  border-radius: 999px;
+  background: none;
+  transition: color 0.15s ease;
 }
 
-.phone-tab[aria-disabled='true'] {
-  opacity: 0.45;
-  cursor: default;
-}
-
-.phone-tab-name {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.35rem;
-  font-size: 0.94rem;
-  font-weight: 600;
-}
-
-/* What is behind the tab, or that nothing is. */
-.phone-tab-what {
-  max-width: 100%;
-  font-size: 0.7rem;
-  color: var(--muted);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.phone-tab.on .phone-tab-what {
-  color: var(--muted-strong);
-}
-
-.phone-tab-what:empty::before {
-  content: '\00a0';
-}
-
-.phone-tab[data-sign='working'] .phone-tab-what {
+.phone-tab.on,
+.phone-library.on {
   color: var(--accent);
 }
 
-.phone-tab[data-sign='answered'] .phone-tab-what {
-  color: var(--ok);
+/* Nothing behind it yet: quieter, and it still works. */
+.phone-tab.empty:not(.on) {
+  color: var(--muted);
 }
 
-.phone-tab[data-sign='failed'] .phone-tab-what {
-  color: var(--danger);
+.phone-tab.empty:not(.on) svg {
+  opacity: 0.7;
+}
+
+.phone-tab-name {
+  font-size: 0.68rem;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+}
+
+.phone-tab-icon {
+  position: relative;
+  display: grid;
+}
+
+/* On the Chat tab's icon: a reply nobody has looked at, or the agent at work. */
+.phone-tab-sign {
+  position: absolute;
+  top: -0.1rem;
+  right: -0.4rem;
+  width: 0.5rem;
+  height: 0.5rem;
+  border-radius: 50%;
+  background: var(--accent);
+}
+
+.phone-tab-sign.failed {
+  background: var(--danger);
+}
+
+.phone-tab-sign.working {
+  background: none;
+  border: 1.5px solid var(--accent);
+  animation: pulse 1.1s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .phone-tab-sign.working {
+    animation: none;
+  }
+}
+
+.phone-library {
+  flex: none;
+  width: var(--bar-height);
+  border-radius: 50%;
+}
+
+.phone-library.on {
+  background: var(--accent-soft);
+}
+
+.phone-library .phone-tab-name {
+  font-size: 0.6rem;
+}
+
+/* Nothing sits hidden under the bar: each pane keeps its foot clear of it.
+   The text already ends on a long margin; it is at least this long. */
+.shell.phone .editor-surface .cm-scroller {
+  padding-left: 0.85rem;
+  padding-right: 0.85rem;
+  padding-bottom: max(40vh, var(--bar-room));
+}
+
+/* The paper's last page can be scrolled clear. An element of its own, not
+   padding: a column that scrolls does not always count its own padding. And
+   one with a width: a box of no area is not counted either. */
+.shell.phone .pdf-scroll::after {
+  content: '';
+  flex: none;
+  width: 1px;
+  height: var(--bar-room);
+}
+
+/* The chat ends above the bar, so that its message box does. */
+.shell.phone .body > .chat-drawer.pane {
+  padding-bottom: var(--bar-room);
+}
+
+.shell.phone .body > .library {
+  padding-bottom: calc(var(--bar-room) + 1rem);
+}
+
+/* A pane with nothing in it: what is missing, and the way to open something. */
+.empty-pane {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.9rem;
+  padding: 2rem 1.5rem calc(var(--bar-room, 0px) + 2rem);
+  text-align: center;
+  color: var(--muted-strong);
+}
+
+.empty-pane p {
+  margin: 0;
+  font-size: 1.05rem;
+}
+
+.empty-pane-icon {
+  color: var(--muted);
+}
+
+.empty-pane-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 0.6rem;
+}
+
+.empty-pane-actions button {
+  min-height: 2.75rem;
+  padding: 0 1.15rem;
+  border: 1px solid var(--rule);
+  border-radius: 999px;
+  background: var(--panel);
+  font-weight: 550;
+}
+
+.empty-pane-actions button.primary {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: var(--panel);
 }
 
 /* The panel about what is open, as a sheet slid up over the pane. */
@@ -3678,6 +3887,8 @@ button.turn-selection:hover {
   display: flex;
   flex-direction: column;
   max-height: 88%;
+  /* Over the bar along the bottom, to the foot of the screen. */
+  padding-bottom: env(safe-area-inset-bottom, 0px);
   overflow: auto;
   overscroll-behavior: contain;
   background: var(--panel);
@@ -3799,7 +4010,7 @@ button.turn-selection:hover {
 
 /* What can be done with a passage sits above the bar along the bottom. */
 .shell.phone .passage-offer.bar {
-  bottom: calc(4.2rem + env(safe-area-inset-bottom, 0px));
+  bottom: calc(var(--bar-room) + 0.2rem);
 }
 
 /* The request is typed at the top of the window: the keyboard has the bottom. */
@@ -3825,7 +4036,12 @@ button.turn-selection:hover {
 
 .shell.phone .library-tools .mode-tabs button {
   flex: 1 1 0;
-  min-height: 2.4rem;
+  min-height: 2.75rem;
+}
+
+.shell.phone .library-tools .import {
+  display: inline-flex;
+  align-items: center;
 }
 
 /* The text's bar: what is open and how it is held on one line; while it is
@@ -3873,11 +4089,6 @@ button.turn-selection:hover {
   min-height: 2rem;
 }
 
-.shell.phone .editor-surface .cm-scroller {
-  padding-left: 0.85rem;
-  padding-right: 0.85rem;
-}
-
 /* The paper's bar: the same controls, sized to be pressed — as wide as the
    window lets them be and still sit in one row. Should a phone be too narrow
    even so, they go onto a second row rather than off the edge. */
@@ -3885,6 +4096,18 @@ button.turn-selection:hover {
   flex-wrap: wrap;
   gap: 0.2rem;
   padding: 0.3rem 0.4rem;
+}
+
+/* Which paper this is, on a slim line of its own over the controls: a panel
+   this narrow drops the name from the bar, and on a phone nothing else on the
+   screen says it. */
+.shell.phone .pdf-bar .pdf-title {
+  display: block;
+  order: -1;
+  flex: 1 1 100%;
+  margin: 0;
+  padding: 0 0.15rem;
+  font-size: 0.86rem;
 }
 
 .shell.phone .pdf-controls button,

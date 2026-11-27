@@ -41,14 +41,25 @@ import { EventStream, type ServerEvent } from './events'
 import { Library } from './Library'
 import { headingsOf } from './outline'
 import { nameOf, papersOf } from './papers'
-import { AboutSheet, PhoneTabs, PhoneTop, usePhone, useTyping } from './Phone'
+import {
+  AboutSheet,
+  EmptyPane,
+  PhoneBar,
+  PhoneTop,
+  SessionHolds,
+  usePhone,
+  useTyping,
+} from './Phone'
 import {
   AFTER_ASK,
   afterLooking,
   afterReply,
   chatSign,
+  heldIn,
+  retapOpens,
   shownPane,
   tabForPaper,
+  type LibraryKind,
   type PhoneTab,
 } from './phonePanes'
 import {
@@ -257,11 +268,18 @@ export function App() {
   // A phone shows one pane at a time. Which one is this window's own business:
   // the same session is open on a wide window too, where there are no tabs.
   const phone = usePhone()
-  const [phoneTab, setPhoneTab] = useState<PhoneTab>('text')
+  // The tab the reader chose; null until one is, when whichever pane has
+  // something in it is shown (see `shownPane`).
+  const [phoneTab, setPhoneTab] = useState<PhoneTab | null>(null)
   const phoneTabRef = useRef(phoneTab)
   phoneTabRef.current = phoneTab
   // The tab each session was left on, to come back to it there.
-  const phoneTabs = useRef(new Map<string, PhoneTab>())
+  const phoneTabs = useRef(new Map<string, PhoneTab | null>())
+  // Which of the two the library was asked for — notes, by a pane that wants
+  // a note — when it was asked for one.
+  const [libraryKind, setLibraryKind] = useState<LibraryKind | null>(null)
+  // When the pane on show came to be the one on show.
+  const paneSince = useRef(0)
   // The panel about what is open, as a sheet over the pane.
   const [aboutOpen, setAboutOpen] = useState(false)
   // The bar along the bottom gets out of the way of the keyboard.
@@ -534,11 +552,11 @@ export function App() {
         // What the session being left had on screen is told before it is left.
         flushView()
         // On a phone a session comes back on the tab it was left on — or on
-        // the chat, when it has answered since. From the chat of one session
-        // to another not yet seen in this window is to its chat.
+        // the chat, when it has answered since. One not yet seen in this
+        // window opens on what it holds: a session is more than its chat.
         if (leaving) phoneTabs.current.set(leaving, phoneTabRef.current)
         if (unreadRef.current.has(id) || waitingRef.current.has(id)) setPhoneTab('chat')
-        else setPhoneTab(phoneTabs.current.get(id) ?? (phoneTabRef.current === 'chat' ? 'chat' : 'text'))
+        else setPhoneTab(phoneTabs.current.get(id) ?? null)
         setConversationId(id)
         if (stateRef.current) restoreView(id, stateRef.current, conversationsRef.current)
       }
@@ -1011,7 +1029,11 @@ export function App() {
         )
         return
       }
-      if (docKeyRef.current === `note:${noteId}`) setTarget({ kind: 'empty' })
+      if (docKeyRef.current === `note:${noteId}`) {
+        setTarget({ kind: 'empty' })
+        // On a phone: to whatever is left — the paper, or the library.
+        setPhoneTab(null)
+      }
       await refreshState()
       setChanges((await api.changes()).changes)
     },
@@ -1480,6 +1502,15 @@ export function App() {
   useEffect(() => {
     setWaiting((current) => afterLooking(current, looking))
   }, [looking])
+  useEffect(() => {
+    paneSince.current = performance.now()
+  }, [pane])
+  /** The library, on the notes or on the papers: what a pane is filled from. */
+  const openLibrary = (kind: LibraryKind | null): void => {
+    setAboutOpen(false)
+    setLibraryKind(kind)
+    setLibrary(true)
+  }
   // A passage selected in a pane that is no longer the one on show is not
   // something to go on offering to ask about.
   useEffect(() => {
@@ -1525,6 +1556,18 @@ export function App() {
     if (seen.target.kind === 'skill') return 'Summarizing skill'
     const paperId = seen.target.kind === 'summary' ? seen.target.documentId : seen.documentId
     return nameOf(state.documents.find((d) => d.document_id === paperId)) ?? 'New session'
+  }
+
+  /** What a session holds besides its conversation: the text and the paper open in it. */
+  const heldBy = (conversation: ConversationSummary) => {
+    const id = conversation.conversation_id
+    const seen =
+      id === conversationId ? view : (viewsRef.current.get(id) ?? readView(conversation.view))
+    return heldIn(seen, {
+      note: (noteId) => notesById.get(noteId)?.title ?? null,
+      paper: (documentId) =>
+        nameOf(state.documents.find((d) => d.document_id === documentId)) ?? null,
+    })
   }
 
   const titleOf = (shown: MainTarget): string =>
@@ -1657,7 +1700,14 @@ export function App() {
         setTarget({ kind: 'skill' })
         toText()
       })}
-      onDeleteNote={deleteNote}
+      onDeleteNote={
+        phone
+          ? async (noteId) => {
+              setAboutOpen(false)
+              await deleteNote(noteId)
+            }
+          : deleteNote
+      }
       onSetDetails={async (documentId, details) => {
         await api.setDetails(documentId, details)
         await refreshState()
@@ -1687,14 +1737,9 @@ export function App() {
     >
       {phone ? (
         <PhoneTop
-          project={state.project}
-          inLibrary={inLibrary}
-          onLibrary={() => {
-            setAboutOpen(false)
-            setLibrary(!inLibrary)
-          }}
           session={
-            // The row of sessions, folded: the one on screen, and a menu of the rest.
+            // The row of sessions, folded: the one on screen, and a menu of the
+            // rest, each with what it holds.
             <ConversationMenu
               conversations={conversations}
               currentId={conversationId}
@@ -1705,6 +1750,8 @@ export function App() {
               onDelete={deleteConversation}
               labelFor={sessionLabel}
               sessions
+              holds={(conversation) => <SessionHolds held={heldBy(conversation)} />}
+              project={state.project}
             />
           }
           reconnecting={!connected}
@@ -1801,6 +1848,7 @@ export function App() {
 
         {inLibrary && (
           <Library
+            show={phone ? (libraryKind ?? undefined) : undefined}
             documents={state.documents}
             notes={state.notes}
             tags={state.tags}
@@ -1825,7 +1873,7 @@ export function App() {
           />
         )}
 
-        {showMain && (
+        {(showMain || phone) && (
           <main
             class={paneClass('main', 'text')}
             // Beside the paper, the two divide the room as the reader set it.
@@ -1838,7 +1886,14 @@ export function App() {
                 </button>
               </div>
             )}
-            {buffer && buffer.key === docKey ? (
+            {target.kind === 'empty' ? (
+              // Only a phone has the pane with nothing in it: a place to open something.
+              <EmptyPane
+                kind="text"
+                onOpen={() => openLibrary('notes')}
+                onNew={() => void createNote()}
+              />
+            ) : buffer && buffer.key === docKey ? (
               <MarkdownEditor
                 docKey={docKey}
                 title={currentTitle}
@@ -1948,9 +2003,17 @@ export function App() {
                 setOpenDocument(null)
                 // No passage is on show any more, here or in the note.
                 setHighlight(null)
-                toText()
+                setSourceTakesOver(false)
+                // On a phone: to the text if there is one, else to the library.
+                setPhoneTab(target.kind === 'empty' ? null : 'text')
               }}
             />
+          </aside>
+        )}
+
+        {phone && !openDocument && (
+          <aside class={paneClass('source', 'paper')}>
+            <EmptyPane kind="paper" onOpen={() => openLibrary('papers')} />
           </aside>
         )}
 
@@ -2027,21 +2090,26 @@ export function App() {
       </div>
 
       {phone && pane && (
-        <PhoneTabs
+        <PhoneBar
           pane={pane}
-          behind={{
-            // A summary is of the paper named on the tab beside it.
-            text:
-              target.kind === 'empty' ? null : target.kind === 'summary' ? 'Summary' : currentTitle,
-            paper: openDocument ? (nameOf(openDocument) ?? openDocument.display_title) : null,
-            chat: null,
-          }}
+          behind={{ text: target.kind !== 'empty', paper: openDocument !== null }}
           chat={chatSign(onScreen, conversationId !== null && waiting.has(conversationId))}
           onSelect={(tab) => {
-            // A tab is somewhere to be: the library, and the sheet, give way to it.
-            setLibrary(false)
             setAboutOpen(false)
+            if (tab === pane) {
+              // The tab already on: to the library, for something else to fill it.
+              const kind = retapOpens(tab, performance.now() - paneSince.current)
+              if (kind) openLibrary(kind)
+              return
+            }
+            // A tab is somewhere to be: the library gives way to it.
+            setLibrary(false)
             setPhoneTab(tab)
+          }}
+          onLibrary={() => {
+            setAboutOpen(false)
+            setLibraryKind(null)
+            setLibrary(!inLibrary)
           }}
         />
       )}
