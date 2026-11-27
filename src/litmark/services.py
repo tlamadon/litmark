@@ -30,6 +30,7 @@ from .errors import InvalidInput, WorkspaceError
 from .events import (
     DOCUMENT_UPDATED,
     FILE_CHANGED,
+    INK_UPDATED,
     PERMISSION_REQUESTED,
     PERMISSION_RESOLVED,
     SETTINGS_UPDATED,
@@ -37,6 +38,7 @@ from .events import (
     EventBus,
 )
 from .gitsync import GitError, GitSync
+from .ink import InkStore
 from .jobs import JobQueue
 from .papersync import PaperSync
 from .references import ReferenceStore, citations_by_reference
@@ -72,6 +74,7 @@ class Services:
             max_upload_bytes=int(float(ingestion.get("max_upload_mb", 64)) * 1024 * 1024),
         )
         self.references = ReferenceStore(workspace)
+        self.ink = InkStore(workspace, self.documents)
 
         # Papers go to storage, text goes to git. Neither is required, and a
         # project whose storage is misdescribed still opens: its notes are here.
@@ -168,6 +171,15 @@ class Services:
         """Tell every open window that these papers' details changed."""
         if document_ids:
             self.bus.publish(DOCUMENT_UPDATED, {"document_ids": document_ids})
+
+    def announce_ink(self, document_id: str, revision: str) -> None:
+        """Tell every open window that the ink on a paper is now at this revision.
+
+        An event of its own, not `document_updated`: ink is saved every few
+        strokes, and nothing else about the paper has changed. The window that
+        saved it knows the revision and does nothing; another reads the ink again.
+        """
+        self.bus.publish(INK_UPDATED, {"document_id": document_id, "revision": revision})
 
     def _announce_change(self, change: dict[str, Any]) -> None:
         """An edit from outside this application's own runs: show it everywhere."""

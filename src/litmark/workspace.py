@@ -454,11 +454,16 @@ class Workspace:
         *,
         expected_revision: str | None,
         snapshot_reason: str = "edit",
+        snapshot: bool = True,
     ) -> tuple[str, str | None]:
         """Version-checked write of any project file.
 
         Returns ``(new_revision, previous_revision)``. Used for note saves and
         for summaries, which follow the same conflict rules.
+
+        ``snapshot=False`` leaves ``.research/history/`` alone, for a file that
+        is saved every few seconds while it is worked on — ink on a paper —
+        and whose record is the project's git history.
         """
         resolved = self.resolve_inside(path)
         with self._lock_for(str(resolved)):
@@ -475,7 +480,7 @@ class Workspace:
                     current_text=current,
                     proposed_text=text,
                 )
-            if current is not None and current != text:
+            if snapshot and current is not None and current != text:
                 self.snapshot(resolved, reason=snapshot_reason)
             atomic_write_text(resolved, text)
             return revision_of(text), current_revision

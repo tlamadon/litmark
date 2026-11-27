@@ -91,6 +91,13 @@ class SummarySave(BaseModel):
     expected_revision: str | None = None
 
 
+class InkSave(BaseModel):
+    """Every stroke on a paper, as the window holds them after its last change."""
+
+    strokes: list[dict[str, Any]]
+    expected_revision: str | None = None
+
+
 class MessageSend(BaseModel):
     prompt: str
     context: dict[str, Any] | None = None
@@ -408,6 +415,45 @@ def build_router() -> APIRouter:
                 "etag": f'"{document.sha256}"',
             },
         )
+
+    @router.get("/documents/{document_id}/pdf/annotated")
+    async def get_annotated_pdf(request: Request, document_id: str) -> Response:
+        """A copy of the paper with its ink on it, to keep. The stored PDF is not changed."""
+        services = services_of(request)
+        document = services.documents.get(document_id)
+        path = await run_in_threadpool(services.papers.ensure_pdf, document_id)
+        data = await run_in_threadpool(services.ink.annotated_pdf, document_id, path)
+        name = f"{_download_name(document).removesuffix('.pdf')} (annotated).pdf"
+        return Response(
+            content=data,
+            media_type="application/pdf",
+            headers={
+                "content-disposition": _disposition("attachment", name),
+                # Made from the ink as it is now: the next stroke makes another.
+                "cache-control": "no-store",
+            },
+        )
+
+    @router.get("/documents/{document_id}/ink")
+    async def get_ink(request: Request, document_id: str) -> dict[str, Any]:
+        """What has been drawn on the paper's pages."""
+        return services_of(request).ink.read(document_id).to_json()
+
+    @router.put("/documents/{document_id}/ink")
+    async def save_ink(request: Request, document_id: str, body: InkSave) -> dict[str, Any]:
+        """Replace the paper's strokes, if they are as this window last read them.
+
+        A window that drew while another did is told so (409) and reads again:
+        it puts its own strokes back on what the other saved, and saves that.
+        """
+        services = services_of(request)
+        revision = services.ink.write(
+            document_id, body.strokes, expected_revision=body.expected_revision
+        )
+        # Another window on the same paper — the desk beside the tablet — reads
+        # the ink again.
+        services.announce_ink(document_id, revision)
+        return {"document_id": document_id, "revision": revision}
 
     @router.get("/documents/{document_id}/pages")
     async def get_pages(

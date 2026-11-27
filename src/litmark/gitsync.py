@@ -552,6 +552,8 @@ def _thing(path: str) -> tuple[str, str] | None:
             return "summary", parts[1]
         if parts[2] in {"metadata.json", "original.pdf"}:
             return "paper", parts[1]
+        if parts[2] == "ink.json":
+            return "ink", parts[1]
         return None
     if parts[0] == "skills" and path.endswith(".md"):
         return "skill", parts[-1][: -len(".md")]
@@ -595,6 +597,10 @@ def describe_changes(changed: list[tuple[str, str]]) -> str:
     for (state, kind), names in sorted(groups.items(), key=lambda item: (item[0][0] != "added", item[0])):
         if kind in {"references", "bibliography", "settings"}:
             phrases.append(f"{verbs[state].lower()} {plural[kind]}")
+        elif kind == "ink":
+            # What was drawn is on a paper, and is spoken of as that.
+            on = names[0] if len(names) == 1 else f"{len(names)} papers"
+            phrases.append(f"{verbs[state].lower()} annotations on {on}")
         elif len(names) == 1:
             phrases.append(f"{verbs[state].lower()} {kind} {names[0]}")
         else:

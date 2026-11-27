@@ -32,6 +32,7 @@ RUN_STARTED = "run_started"
 CONVERSATION_UPDATED = "conversation_updated"
 MESSAGE_ADDED = "message_added"
 DOCUMENT_UPDATED = "document_updated"
+INK_UPDATED = "ink_updated"
 JOB_UPDATED = "job_updated"
 SYNC_UPDATED = "sync_updated"
 
