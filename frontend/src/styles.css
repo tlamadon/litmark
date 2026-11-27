@@ -3173,6 +3173,79 @@ button.tag:hover {
   color: var(--danger);
 }
 
+.composer-error {
+  margin: 0;
+  font-size: 0.76rem;
+  color: var(--danger);
+}
+
+/* The microphone beside Send and Ask: quiet until pressed; red and pulsing
+   while it listens, since a live microphone is something to know about at a
+   glance. Selectors as specific as the bars' own button rules. */
+.composer-actions .mic-button,
+.ask-actions .mic-button {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border-radius: 50%;
+  border: 1px solid var(--rule);
+  background: transparent;
+  color: var(--muted-strong);
+  cursor: pointer;
+}
+
+.composer-actions .mic-button:hover:not(:disabled),
+.ask-actions .mic-button:hover:not(:disabled) {
+  color: var(--ink);
+  border-color: var(--muted);
+}
+
+.mic-button svg {
+  display: block;
+}
+
+.composer-actions .mic-button.listening,
+.ask-actions .mic-button.listening {
+  color: #fff;
+  background: #d9363e;
+  border-color: #d9363e;
+  animation: mic-pulse 1.3s ease-in-out infinite;
+}
+
+@keyframes mic-pulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgba(217, 54, 62, 0.55);
+  }
+  50% {
+    box-shadow: 0 0 0 5px rgba(217, 54, 62, 0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .mic-button.listening {
+    animation: none;
+  }
+}
+
+/* Sized to be pressed with a finger. */
+@media (pointer: coarse) {
+  .composer-actions .mic-button,
+  .ask-actions .mic-button {
+    width: 36px;
+    height: 36px;
+  }
+
+  .mic-button svg {
+    width: 16px;
+    height: 16px;
+  }
+}
+
 /* Asking about a passage, from where it is read: the ✦ at the end of a
    selection, and the box it opens. Both are placed in the window, over
    whichever pane the passage is in. */
@@ -3212,6 +3285,45 @@ button.tag:hover {
 }
 
 .passage-offer button:hover {
+  background: var(--accent);
+  color: var(--panel);
+}
+
+/* By touch: a bar along the bottom, clear of the device's own menu by the
+   selection, with names and buttons a thumb can press. */
+.passage-offer.bar {
+  left: 50%;
+  bottom: calc(16px + env(safe-area-inset-bottom, 0px));
+  transform: translateX(-50%);
+  height: 48px;
+  border-radius: 24px;
+  box-shadow: 0 4px 16px rgba(35, 32, 28, 0.22);
+}
+
+.passage-offer.bar button {
+  min-width: 48px;
+  padding: 0 1.1rem;
+  font-size: 1rem;
+}
+
+.passage-offer.bar button.ask {
+  padding: 0 1.2rem;
+  font-size: 1rem;
+}
+
+.passage-offer.bar button.close {
+  color: var(--muted-strong);
+  font-size: 1.3rem;
+  font-weight: 400;
+}
+
+/* A finger leaves :hover behind after a press; it means nothing here. */
+.passage-offer.bar button:hover {
+  background: none;
+  color: var(--accent);
+}
+
+.passage-offer.bar button:active {
   background: var(--accent);
   color: var(--panel);
 }
@@ -3259,6 +3371,15 @@ button.tag:hover {
 .ask-box textarea:focus {
   outline: none;
   border-color: var(--accent);
+}
+
+/* Smaller, and iOS zooms the page in on the box when it is focused. After
+   the boxes' own sizes, so it is the one that holds. */
+@media (pointer: coarse) {
+  .ask-box textarea,
+  .composer textarea {
+    font-size: 16px;
+  }
 }
 
 .ask-actions {

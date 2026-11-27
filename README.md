@@ -194,6 +194,26 @@ did is still there after a reload.
 Summaries of imported papers run as background work in a conversation of their
 own, listed at the bottom of the menu, and never in the middle of yours.
 
+### Saying it instead
+
+Beside **Send**, and beside **Ask** in the box that opens by a selected
+passage, is a microphone. Press it and speak: the words go in at the caret as
+they are heard, provisional ones first and the settled ones in their place.
+Press it again, or **Esc**, to stop. Sending stops it too, and what was said so
+far is what is sent. It only types: what you dictate is yours to correct
+before it goes anywhere.
+
+This is the browser's own speech recognition, not something litmark runs,
+which decides three things. A browser without it (Firefox, at the time of
+writing) shows no microphone. It decides where your voice goes: Chrome and Edge
+send the audio to their vendor's servers to be transcribed, and Safari uses
+Apple's. And browsers lend the microphone only to a page served over HTTPS or
+from `localhost`, so litmark reached at a bare `http://` address on another
+machine, a Tailscale IP for instance, gets a refusal that says so. A TLS proxy
+in front (`tailscale serve` will do) fixes that. Nothing is captured before the
+button is pressed or after it is released, and the button is red for as long
+as it is listening.
+
 ## A memory for other sessions (MCP)
 
 A project is also somewhere other Claude sessions can remember things. A
@@ -656,6 +676,12 @@ click elsewhere while nothing is typed in it.
 A passage of the paper can be cited from the same place. Beside the ✦,
 **Cite** puts a reference to it in the note or summary that is open, and
 **Quote** the passage itself as a quotation with its reference under it.
+
+On a touch screen (an iPad) a selection is made with a long press and the
+handles, and the device puts its own menu by it, which a page cannot turn off.
+So there the same actions come as a bar along the bottom instead, with buttons
+a thumb can press: **✦ Ask**, **Cite**, **Quote**, and **×** to put it away.
+It appears once the selection stops changing, and stays while you scroll.
 
 ## Drawing on a paper
 

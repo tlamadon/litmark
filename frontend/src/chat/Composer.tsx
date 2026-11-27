@@ -10,6 +10,7 @@
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks'
 
 import type { AgentStatus, DocumentRecord, DownloadMode, MessageContext } from '../api'
+import { MicButton, stopDictation } from '../speech'
 import { AgentMenu, type AgentChoice } from './AgentMenu'
 import { shorten, type Names } from './describe'
 
@@ -40,6 +41,8 @@ const MANY_PAPERS = 4
 export function Composer(props: ComposerProps) {
   const { context } = props
   const [picking, setPicking] = useState(false)
+  /** Why dictation stopped, said above the buttons until the next press. */
+  const [micError, setMicError] = useState<string | null>(null)
   const input = useRef<HTMLTextAreaElement | null>(null)
   const attached = context.document_ids ?? []
 
@@ -70,6 +73,11 @@ export function Composer(props: ComposerProps) {
   }
 
   const canSend = props.agent.ready && props.draft.trim() !== ''
+  // What was being dictated is part of the message; nothing more is to come.
+  const send = (): void => {
+    stopDictation()
+    props.onSend()
+  }
 
   return (
     <div class="composer">
@@ -177,10 +185,16 @@ export function Composer(props: ComposerProps) {
           // is composing: there, Enter picks a candidate.
           if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) {
             event.preventDefault()
-            if (canSend) props.onSend()
+            if (canSend) send()
           }
         }}
       />
+
+      {micError && (
+        <p class="composer-error" role="alert">
+          {micError}
+        </p>
+      )}
 
       <div class="composer-actions">
         <span class="hint">
@@ -211,7 +225,13 @@ export function Composer(props: ComposerProps) {
             Stop
           </button>
         )}
-        <button type="button" class="primary" disabled={!canSend} onClick={props.onSend}>
+        <MicButton
+          input={input}
+          onText={props.onDraft}
+          onError={setMicError}
+          disabled={!props.agent.ready}
+        />
+        <button type="button" class="primary" disabled={!canSend} onClick={send}>
           Send
         </button>
       </div>

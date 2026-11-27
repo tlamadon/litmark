@@ -319,6 +319,9 @@ test('the built application bundle runs and renders without throwing', async (t)
   // A server that says nothing of its version is not given one.
   assert.equal(root.querySelector('.topbar .version'), null)
 
+  // No recogniser in this browser: no microphone, rather than one that fails.
+  assert.equal(root.querySelector('.mic-button'), null)
+
   const header = root.querySelector('.conv-button')?.textContent ?? ''
   assert.ok(header.includes('What does the paper assume?'), `conversation not named: ${header}`)
 
@@ -345,6 +348,100 @@ test('the built application bundle runs and renders without throwing', async (t)
     (root.querySelector('[data-setting="agent"]')?.textContent ?? '').includes('opus · low'),
     'the new choice is not shown',
   )
+})
+
+test('the composer takes dictation where the browser has a recogniser', async (t) => {
+  const dom = buildDom()
+  const { window } = dom
+  t.after(() => window.close())
+  const errors = []
+  window.addEventListener('error', (event) => errors.push(event.error ?? event.message))
+  window.addEventListener('unhandledrejection', (event) => errors.push(event.reason))
+  // A recogniser standing in for the browser's: the test says what it heard.
+  const recognitions = []
+  window.webkitSpeechRecognition = class {
+    constructor() {
+      this.started = false
+      this.stopped = false
+      recognitions.push(this)
+    }
+    start() {
+      this.started = true
+    }
+    stop() {
+      this.stopped = true
+    }
+    hear(...phrases) {
+      this.onresult?.({ results: phrases.map((transcript) => [{ transcript }]) })
+    }
+  }
+  // What is sent, as sent.
+  const sent = []
+  const fetch = window.fetch
+  window.fetch = async (input, init = {}) => {
+    if (init.method === 'POST' && String(input).endsWith('/messages')) sent.push(JSON.parse(init.body))
+    return fetch(input, init)
+  }
+  const settle = (ms = 30) => new Promise((resolve) => setTimeout(resolve, ms))
+
+  window.eval(readFileSync(join(here, 'bundle', 'app.mjs'), 'utf8'))
+  await settle(300)
+
+  const root = window.document.getElementById('app')
+  const input = root.querySelector('.composer textarea')
+  const mic = root.querySelector('.composer .mic-button')
+  assert.ok(mic, 'no microphone in the composer')
+  assert.equal(mic.getAttribute('aria-pressed'), 'false')
+
+  // What is typed stays; what is heard goes in at the caret, a space between.
+  input.value = 'Look at'
+  input.dispatchEvent(new window.Event('input', { bubbles: true }))
+  await settle()
+  input.setSelectionRange(7, 7)
+  mic.click()
+  await settle()
+  assert.equal(recognitions.length, 1)
+  assert.ok(recognitions[0].started, 'the recogniser was not started')
+  assert.equal(mic.getAttribute('aria-pressed'), 'true')
+  assert.ok(mic.classList.contains('listening'))
+  // Provisional words, then the settled ones in their place.
+  recognitions[0].hear('the second')
+  await settle()
+  assert.equal(input.value, 'Look at the second')
+  recognitions[0].hear('the second ', ' table please')
+  await settle()
+  assert.equal(input.value, 'Look at the second table please')
+
+  // Esc stops the microphone, and only that.
+  window.document.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+  await settle()
+  assert.ok(recognitions[0].stopped, 'Esc did not stop the recogniser')
+  assert.equal(mic.getAttribute('aria-pressed'), 'false')
+  // A result arriving after it was stopped is not typed in.
+  recognitions[0].hear('ignored')
+  await settle()
+  assert.equal(input.value, 'Look at the second table please')
+
+  // Sending while it listens stops it, and sends what was shown.
+  mic.click()
+  await settle()
+  recognitions[1].hear('now')
+  await settle()
+  assert.equal(input.value, 'Look at the second table please now')
+  root.querySelector('.composer-actions button.primary').click()
+  await settle(100)
+  assert.ok(recognitions[1].stopped, 'sending did not stop the recogniser')
+  assert.equal(sent.length, 1, 'nothing was sent')
+  assert.equal(sent[0].prompt, 'Look at the second table please now')
+
+  // A refusal is said in words, where the hint is.
+  const again = root.querySelector('.composer .mic-button')
+  again.click()
+  await settle()
+  recognitions[2].onerror({ error: 'audio-capture' })
+  await settle()
+  assert.equal(root.querySelector('.composer-error')?.textContent, 'No microphone was found.')
+  assert.deepEqual(errors, [], `runtime errors: ${errors.map((e) => e?.stack ?? e).join('\n')}`)
 })
 
 test('a page left open across a server restart picks up the new credential', async (t) => {

@@ -20,6 +20,8 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks'
 
 import type { SelectionIn } from './api'
+import { MicButton, stopDictation } from './speech'
+import { SELECTION_SETTLES_MS, touchFirst } from './touch'
 
 /** The pane a selection is in: the note or summary, or the paper. */
 export type AskPane = 'text' | 'paper'
@@ -50,6 +52,11 @@ interface Place {
   x: number
   top: number
   bottom: number
+  /**
+   * The passage, as it was when it was offered. By touch, pressing what is
+   * offered may let go of the selection before the press arrives.
+   */
+  passage?: Passage | null
 }
 
 const IS_MAC = /mac/i.test(navigator.platform)
@@ -89,12 +96,18 @@ const clamp = (value: number, low: number, high: number): number =>
 export function AskAbout(props: AskAboutProps) {
   // The ✦, by a selection that can be asked about.
   const [offer, setOffer] = useState<Place | null>(null)
+  // By touch, what can be done with a passage is a bar along the bottom with
+  // names and buttons a thumb can press, clear of the menu the device shows
+  // by the selection itself.
+  const bar = offer !== null && touchFirst()
   // The box, once it is: the passage as it was when the box opened — what is
   // selected is let go of as soon as the typing starts.
   const [asking, setAsking] = useState<{ passage: Passage; at: Place } | null>(null)
   const [prompt, setPrompt] = useState('')
   const [sending, setSending] = useState(false)
   const [refused, setRefused] = useState(false)
+  /** Why dictation stopped, said where the hint is. */
+  const [micError, setMicError] = useState<string | null>(null)
 
   const latest = useRef(props)
   latest.current = props
@@ -107,7 +120,7 @@ export function AskAbout(props: AskAboutProps) {
   const open = (): void => {
     if (!latest.current.available || state.current.sending) return
     const at = state.current.offer ?? locate()
-    const passage = at ? latest.current.passageIn(at.pane) : null
+    const passage = at ? (at.passage ?? latest.current.passageIn(at.pane)) : null
     if (!at || !passage) return
     setAsking({ passage, at })
     setOffer(null)
@@ -121,6 +134,7 @@ export function AskAbout(props: AskAboutProps) {
     setAsking(null)
     setPrompt('')
     setRefused(false)
+    setMicError(null)
   }
 
   useEffect(() => {
@@ -135,14 +149,14 @@ export function AskAbout(props: AskAboutProps) {
 
     let settle: number | null = null
     /** Offer the selection as it stands, once what made it has been taken in. */
-    const refresh = (): void => {
+    const refresh = (delay = 40): void => {
       if (settle !== null) window.clearTimeout(settle)
       settle = window.setTimeout(() => {
         settle = null
         if (state.current.asking) return
         const at = locate()
-        setOffer(at && offers(at.pane) ? at : null)
-      }, 40)
+        setOffer(at && offers(at.pane) ? { ...at, passage: latest.current.passageIn(at.pane) } : null)
+      }, delay)
     }
 
     const onMouseUp = (event: MouseEvent): void => {
@@ -166,10 +180,17 @@ export function AskAbout(props: AskAboutProps) {
     }
     const onScroll = (event: Event): void => {
       // The passage has moved from under the ✦. The box stays: it says what
-      // it is about.
-      if (!mine(event.target)) setOffer(null)
+      // it is about. The bar along the bottom is not by the passage, and stays.
+      if (!mine(event.target) && !touchFirst()) setOffer(null)
     }
     const onSelectionChange = (): void => {
+      if (touchFirst()) {
+        // A long press and the handles: offered once the selection settles.
+        // Let go of, it is kept: pressing the bar may be what let go of it,
+        // and a tap elsewhere puts the bar away (see onMouseDown).
+        if (!(window.getSelection()?.isCollapsed ?? true)) refresh(SELECTION_SETTLES_MS)
+        return
+      }
       // Typed over, or let go of: there is no passage for the ✦ to be about.
       if (state.current.offer && (window.getSelection()?.isCollapsed ?? true)) setOffer(null)
     }
@@ -205,11 +226,12 @@ export function AskAbout(props: AskAboutProps) {
   // Kept inside the window, whatever is on offer and however wide that makes it.
   useLayoutEffect(() => {
     const node = offered.current
-    if (!node || !offer) return
+    // The bar along the bottom is placed by its style.
+    if (!node || !offer || bar) return
     const width = node.offsetWidth
     node.style.left = `${clamp(offer.x + 4, 4, window.innerWidth - width - 4)}px`
     node.style.top = `${clamp(offer.top - OFFER_HEIGHT - 2, 4, window.innerHeight - OFFER_HEIGHT - 4)}px`
-  }, [offer, props.available, props.onCite])
+  }, [offer, props.available, props.onCite, bar])
 
   useEffect(() => {
     if (asking) input.current?.focus()
@@ -230,6 +252,8 @@ export function AskAbout(props: AskAboutProps) {
   const send = async (): Promise<void> => {
     const request = prompt.trim()
     if (!asking || !request || sending) return
+    // What was being dictated is the request; nothing more is to come.
+    stopDictation()
     setSending(true)
     setRefused(false)
     const taken = await props.onAsk(request, asking.passage).catch(() => false)
@@ -252,7 +276,7 @@ export function AskAbout(props: AskAboutProps) {
       {offer && !asking && (canAsk || canCite) && (
         <div
           ref={offered}
-          class="passage-offer"
+          class={bar ? 'passage-offer bar' : 'passage-offer'}
           role="group"
           aria-label="For the selected passage"
           // Keep the selection: a press here must not clear what it is for.
@@ -267,7 +291,7 @@ export function AskAbout(props: AskAboutProps) {
               aria-label="Ask the agent about this passage"
               onClick={open}
             >
-              ✦
+              {bar ? '✦ Ask' : '✦'}
             </button>
           )}
           {canCite && (
@@ -289,6 +313,16 @@ export function AskAbout(props: AskAboutProps) {
                 Quote
               </button>
             </>
+          )}
+          {bar && (
+            <button
+              type="button"
+              class="close"
+              aria-label="Put this away"
+              onClick={() => setOffer(null)}
+            >
+              ×
+            </button>
           )}
         </div>
       )}
@@ -332,16 +366,24 @@ export function AskAbout(props: AskAboutProps) {
             }}
           />
           <div class="ask-actions">
-            <span class={refused ? 'hint refused' : 'hint'}>
+            <span class={refused || micError ? 'hint refused' : 'hint'}>
               {refused
                 ? 'That could not be sent.'
-                : sending
+                : micError
+                  ? micError
+                  : sending
                   ? 'Sending…'
-                  : 'Enter to send · Esc to close'}
+                    : 'Enter to send · Esc to close'}
             </span>
             <button type="button" class="ghost" onClick={close}>
               Cancel
             </button>
+            <MicButton
+              input={input}
+              onText={setPrompt}
+              onError={setMicError}
+              disabled={sending}
+            />
             <button type="submit" class="primary" disabled={sending || !prompt.trim()}>
               Ask
             </button>

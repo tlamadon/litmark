@@ -38,6 +38,7 @@ import type { PDFDocumentProxy } from 'pdfjs-dist'
 import workerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url'
 
 import { api, type DocumentRecord } from '../api'
+import { SELECTION_SETTLES_MS, touchFirst } from '../touch'
 import type { Stroke } from './ink'
 import { InkLayer, type InkMode } from './InkLayer'
 import { useInk, type InkNews } from './useInk'
@@ -563,6 +564,37 @@ export function PdfViewer(props: PdfViewerProps) {
     },
     [props.document.document_id, props.onSelection],
   )
+
+  // By touch the handles are let go of without a release the page hears: the
+  // selection settling is the signal. Sooner than the ✦ looks for it, so the
+  // passage is known by then (see AskAbout).
+  const captureLatest = useRef(captureSelection)
+  captureLatest.current = captureSelection
+  useEffect(() => {
+    let settle: number | null = null
+    const onSelectionChange = (): void => {
+      if (!touchFirst()) return
+      if (settle !== null) window.clearTimeout(settle)
+      settle = window.setTimeout(() => {
+        settle = null
+        const selection = window.getSelection()
+        if (!selection || selection.isCollapsed) return
+        const node = selection.anchorNode
+        const element = node instanceof Element ? node : node?.parentElement
+        const page = element?.closest<HTMLElement>('.pdf-page')
+        if (!page || !scroller.current?.contains(page)) return
+        captureLatest.current(
+          Number(page.dataset.page),
+          page.querySelector<HTMLDivElement>('.pdf-text-layer'),
+        )
+      }, SELECTION_SETTLES_MS / 2)
+    }
+    document.addEventListener('selectionchange', onSelectionChange)
+    return () => {
+      if (settle !== null) window.clearTimeout(settle)
+      document.removeEventListener('selectionchange', onSelectionChange)
+    }
+  }, [])
 
   return (
     <section class={inking ? 'pdf inking' : 'pdf'} aria-label="Source panel">
