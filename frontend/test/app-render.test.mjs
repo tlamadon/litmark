@@ -841,6 +841,7 @@ test('on a phone: the session at the top, one pane at a time, and a bar afloat a
   routes.set('/api/state', { ...STATE, conversations: [CONVERSATION, other], auth: { password: true } })
   routes.set('/api/conversations', { conversations: [CONVERSATION, other] })
   routes.set('/api/conversations/conv-2', { ...other, messages: [], runs: [], turns: [], latest_seq: 10 })
+  routes.set('/api/conversations/conv-1/messages', { run_id: 'run-9', conversation_id: 'conv-1', status: 'queued' })
   routes.set('/api/version', { version: '0.3.8', checks_for_updates: false, latest: null, update_available: false, release_url: null })
   const dom = buildDom({ routes, width: 390 })
   const { window } = dom
@@ -966,17 +967,49 @@ test('on a phone: the session at the top, one pane at a time, and a bar afloat a
   await settle(30)
   assert.ok(inLibrary())
 
-  // The chat, with nothing open. Its header is down to how it is shown: the
-  // session is named in the top bar, and there is no edge to fold it to.
+  // The chat, with nothing open. It has no header: the session is named in
+  // the top bar, there is no edge to fold it to, and the verbatim view is not
+  // offered here. The room is the conversation's.
   click(tab('chat'))
   await settle(30)
   assert.equal(inLibrary(), false)
   assert.deepEqual(panes(), { main: false, source: false, 'chat-drawer': true })
   assert.equal(tab('chat').getAttribute('aria-current'), 'page')
   assert.ok(root.querySelector('.chat-drawer .turn'), 'the conversation is not drawn')
-  assert.equal(root.querySelector('.chat-head .conv-button'), null)
+  assert.equal(root.querySelector('.chat-head'), null, 'the chat has a header')
+  assert.equal(root.querySelector('.view-tabs'), null, 'the transcript is offered')
   assert.equal(root.querySelector('[data-action="hide-chat"]'), null)
-  assert.ok(root.querySelector('.chat-head .view-tabs'), 'no way to the transcript')
+
+  // The message box is folded to a line while the conversation is read; a
+  // press on it opens it, with what goes with a message and the buttons.
+  const composer = root.querySelector('.chat-drawer .composer')
+  const message = composer.querySelector('textarea')
+  assert.ok(composer.classList.contains('folded'), 'the message box is not folded')
+  assert.equal(message.getAttribute('placeholder'), 'Ask the agent…')
+  message.focus()
+  await settle(30)
+  assert.ok(!composer.classList.contains('folded'), 'a press on the message box did not open it')
+  assert.ok(message.getAttribute('placeholder').startsWith('Ask about the papers'))
+  // What is typed stays in it when it folds again, at a press anywhere else.
+  message.value = 'half a thought'
+  message.dispatchEvent(new window.Event('input', { bubbles: true }))
+  await settle(30)
+  composer.querySelector('.composer-actions').dispatchEvent(new window.Event('pointerdown', { bubbles: true }))
+  await settle(30)
+  assert.ok(!composer.classList.contains('folded'), 'a press inside the message box folded it')
+  root.querySelector('.chat-log').dispatchEvent(new window.Event('pointerdown', { bubbles: true }))
+  await settle(30)
+  assert.ok(composer.classList.contains('folded'), 'a press on the conversation did not fold it')
+  assert.equal(message.value, 'half a thought')
+  assert.notEqual(window.document.activeElement, message, 'it kept the keyboard')
+  // Sent, it folds: what comes next is read.
+  message.focus()
+  await settle(30)
+  click(composer.querySelector('.composer-actions button.primary'))
+  await settle(50)
+  assert.ok(window.requests.includes('POST /api/conversations/conv-1/messages'), window.requests.join('\n'))
+  assert.ok(composer.classList.contains('folded'), 'the message box stayed open after sending')
+  assert.equal(message.value, '')
   window.sources.at(-1).emit({ seq: 20, type: 'done', conversation_id: 'conv-1', run_id: 'run-2' })
   await settle(30)
   assert.equal(tab('chat').dataset.sign, undefined, 'a reply read as it arrived was given a dot')

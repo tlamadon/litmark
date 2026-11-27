@@ -54,8 +54,9 @@ export interface ChatProps {
   onCollapse: () => void
   /**
    * The shell names the conversation and goes between them itself, and has no
-   * edge to fold the chat to — a phone, where the top bar holds the menu. The
-   * header is then down to how the conversation is shown.
+   * edge to fold the chat to — a phone, where the top bar holds the menu.
+   * There is then no header here at all: the room is the conversation's. The
+   * message box folds to one line while the conversation is only being read.
    */
   bare?: boolean
   /** Whether the agent may fetch papers from the web, and the way to change it. */
@@ -113,6 +114,18 @@ export function Chat(props: ChatProps) {
     if (node && pinned.current) node.scrollTop = node.scrollHeight
   }, [view.turns, view.loading, mode])
 
+  // Where the message box folds and unfolds, the log changes height under the
+  // reader: one who was at the end of it stays at the end.
+  useEffect(() => {
+    const node = scroller.current
+    if (!props.bare || !node || typeof ResizeObserver === 'undefined') return
+    const observer = new ResizeObserver(() => {
+      if (pinned.current) node.scrollTop = node.scrollHeight
+    })
+    observer.observe(node)
+    return () => observer.disconnect()
+  }, [props.bare])
+
   const active = view.turns.filter((turn) => !isFinished(turn.status))
   const running = active.find((turn) => turn.status === 'running') ?? active[0] ?? null
 
@@ -157,34 +170,34 @@ export function Chat(props: ChatProps) {
     }
   }
 
+  // The verbatim view has no way in where there is no header: there, it is
+  // the conversation that is shown, whatever was chosen in a wider window.
+  const shown = props.bare ? 'chat' : mode
   const background = view.kind !== 'chat'
   const empty = !view.loading && view.error === null && view.turns.length === 0
 
   return (
     <section class="chat" aria-label="Chat">
-      <header class={props.bare ? 'chat-head bare' : 'chat-head'}>
-        {!props.bare && (
-          <ConversationMenu
-            conversations={props.conversations}
-            currentId={props.currentId}
-            unread={props.unread}
-            onSelect={props.onSelect}
-            onNew={props.onNew}
-            onRename={props.onRename}
-            onDelete={props.onDelete}
-          />
-        )}
-        {!props.bare && (
-          <button
-            type="button"
-            class="ghost icon"
-            title="Start a new conversation"
-            aria-label="New conversation"
-            onClick={props.onNew}
-          >
-            ＋
-          </button>
-        )}
+      {!props.bare && (
+      <header class="chat-head">
+        <ConversationMenu
+          conversations={props.conversations}
+          currentId={props.currentId}
+          unread={props.unread}
+          onSelect={props.onSelect}
+          onNew={props.onNew}
+          onRename={props.onRename}
+          onDelete={props.onDelete}
+        />
+        <button
+          type="button"
+          class="ghost icon"
+          title="Start a new conversation"
+          aria-label="New conversation"
+          onClick={props.onNew}
+        >
+          ＋
+        </button>
         <div class="view-tabs" role="tablist" aria-label="How the conversation is shown">
           <button
             type="button"
@@ -206,19 +219,18 @@ export function Chat(props: ChatProps) {
             Transcript
           </button>
         </div>
-        {!props.bare && (
-          <button
-            type="button"
-            class="ghost icon"
-            data-action="hide-chat"
-            title="Hide the chat"
-            aria-label="Hide the chat"
-            onClick={props.onCollapse}
-          >
-            »
-          </button>
-        )}
+        <button
+          type="button"
+          class="ghost icon"
+          data-action="hide-chat"
+          title="Hide the chat"
+          aria-label="Hide the chat"
+          onClick={props.onCollapse}
+        >
+          »
+        </button>
       </header>
+      )}
 
       {!props.agent.ready && (
         <div class="notice" role="status">
@@ -269,7 +281,7 @@ export function Chat(props: ChatProps) {
           <p class="chat-placeholder">No background work has run yet.</p>
         )}
 
-        {mode === 'chat' ? (
+        {shown === 'chat' ? (
           view.turns.map((turn) => (
             <TurnView
               key={turn.runId}
@@ -301,6 +313,7 @@ export function Chat(props: ChatProps) {
       </div>
 
       <Composer
+        folding={props.bare}
         agent={props.agent}
         documents={props.documents}
         names={names}

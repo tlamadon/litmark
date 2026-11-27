@@ -33,6 +33,12 @@ export interface ComposerProps {
   /** The model and effort this session is answered with, and the way to change them. */
   choice: AgentChoice
   onChoice: (choice: AgentChoice) => void
+  /**
+   * Folded to one line while the conversation is only being read, and opened
+   * by a press on it: on a phone, where what goes with a message and the
+   * buttons under it would otherwise take a third of the screen from the reply.
+   */
+  folding?: boolean
 }
 
 /** Past this many attached papers, the chips give way to a count. */
@@ -44,15 +50,39 @@ export function Composer(props: ComposerProps) {
   /** Why dictation stopped, said above the buttons until the next press. */
   const [micError, setMicError] = useState<string | null>(null)
   const input = useRef<HTMLTextAreaElement | null>(null)
+  const box = useRef<HTMLDivElement | null>(null)
   const attached = context.document_ids ?? []
+  // Where it folds: open once the message box is pressed, and until a press
+  // somewhere else, or the message is sent.
+  const [open, setOpen] = useState(false)
+  const folded = Boolean(props.folding) && !open
 
   // Grow with what is typed, up to a share of the panel; then scroll.
   useEffect(() => {
     const node = input.current
     if (!node) return
+    // Folded, it is one line, whatever is in it.
+    if (folded) {
+      node.style.height = ''
+      return
+    }
     node.style.height = 'auto'
     node.style.height = `${Math.min(node.scrollHeight + 2, window.innerHeight * 0.4)}px`
-  }, [props.draft])
+  }, [props.draft, folded])
+
+  // A press anywhere else is back to reading: the box folds, and lets go of
+  // the keyboard. What was typed stays in it.
+  useEffect(() => {
+    if (!props.folding || !open) return
+    const onDown = (event: Event): void => {
+      if (box.current && event.target instanceof Node && box.current.contains(event.target)) return
+      setOpen(false)
+      setPicking(false)
+      input.current?.blur()
+    }
+    document.addEventListener('pointerdown', onDown, true)
+    return () => document.removeEventListener('pointerdown', onDown, true)
+  }, [props.folding, open])
 
   const toggle = (id: string): void => {
     props.onContextChange({
@@ -77,10 +107,19 @@ export function Composer(props: ComposerProps) {
   const send = (): void => {
     stopDictation()
     props.onSend()
+    // Sent: what comes next is read.
+    if (props.folding) {
+      setOpen(false)
+      setPicking(false)
+      input.current?.blur()
+    }
   }
 
   return (
-    <div class="composer">
+    <div
+      ref={box}
+      class={folded ? 'composer folded' : 'composer'}
+    >
       <div class="attached" aria-label="Sent with the message">
         {context.note_id && (
           <span class="chip" title="The agent is told which note is open">
@@ -174,11 +213,16 @@ export function Composer(props: ComposerProps) {
         value={props.draft}
         rows={2}
         placeholder={
-          props.agent.ready
-            ? 'Ask about the papers, or ask for a note to be written…'
-            : 'Configure an agent to use chat'
+          !props.agent.ready
+            ? 'Configure an agent to use chat'
+            : folded
+              ? 'Ask the agent…'
+              : 'Ask about the papers, or ask for a note to be written…'
         }
         disabled={!props.agent.ready}
+        // The press that opens it is a press on the message box itself, so the
+        // keyboard comes up for it as for any box: nothing is focused from code.
+        onFocus={props.folding ? () => setOpen(true) : undefined}
         onInput={(event) => props.onDraft((event.target as HTMLTextAreaElement).value)}
         onKeyDown={(event) => {
           // Enter sends; Shift-Enter is a new line. Not while an input method

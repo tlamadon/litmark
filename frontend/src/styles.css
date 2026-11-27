@@ -3987,11 +3987,45 @@ button.turn-selection:hover {
   box-shadow: none;
 }
 
-/* The chat: the session is named in the top bar, and there is no edge to fold
-   it to, so its header is down to how the conversation is shown. */
-.chat-head.bare {
-  justify-content: flex-end;
-  padding: 0.3rem 0.5rem;
+/* The chat has no header on a phone: the session is named in the top bar,
+   and there is no edge to fold it to. Its message box is folded to one line
+   while the conversation is read — what goes with a message, and the buttons
+   under it, are a press on the box away — so the reply has the screen. */
+.composer.folded {
+  flex-direction: row;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.4rem 0.6rem;
+}
+
+.composer.folded .attached,
+.composer.folded .paper-picker,
+.composer.folded .composer-error,
+.composer.folded .composer-actions > :not(.stop),
+.composer.folded .composer-actions:not(:has(.stop)) {
+  display: none;
+}
+
+/* One line, as a field to press: what was half typed still shows in it. */
+.composer.folded textarea {
+  flex: 1 1 0;
+  min-width: 0;
+  min-height: 0;
+  height: 2.75rem;
+  padding: 0.6rem 1rem;
+  border-radius: 999px;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+/* A run can be stopped without opening the box first. */
+.composer.folded .composer-actions {
+  flex: none;
+}
+
+.composer.folded .composer-actions .stop {
+  min-height: 2.75rem;
+  border-radius: 999px;
 }
 
 /* No room for the hint beside the buttons, and no Shift-Enter to speak of. */

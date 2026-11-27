@@ -612,6 +612,13 @@ there while the agent is at work.
 it and it does what it does and is put away; a tap outside it, or its ✕, puts
 it away too. Sync, **Sign out** and the version are at its foot.
 
+The chat is the conversation and little else. It has no header of its own —
+the session is named in the top bar, and the **Transcript** view is left to a
+wider window — and its message box is folded to one line while you read. Tap
+the box and it opens, with what goes with the message, the model and **Send**;
+tap the conversation, or send, and it folds again. What you had typed stays
+in it.
+
 While you type, the bar along the bottom is out of the keyboard's way; it is
 back when you are done. Nothing is left under it: each pane can be scrolled
 until its end is clear, and the chat's message box sits above it. There is no
