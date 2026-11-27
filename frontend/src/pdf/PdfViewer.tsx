@@ -18,6 +18,11 @@
  * the view moves — not remembered from events about pages coming and going.
  * A page near the view is drawn; that is the whole rule, so there is no
  * sequence of scrolls, jumps and zooms that can leave a page in view blank.
+ *
+ * A page can be drawn on. The strokes are in the same coordinates as the
+ * highlights, held here rather than by the pages — a page let go of far from
+ * the view comes back with its ink — and saved by `useInk`. The pen is out
+ * only when asked for; away, none of this changes how the paper is read.
  */
 
 import {
@@ -33,6 +38,9 @@ import type { PDFDocumentProxy } from 'pdfjs-dist'
 import workerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url'
 
 import { api, type DocumentRecord } from '../api'
+import type { Stroke } from './ink'
+import { InkLayer, type InkMode } from './InkLayer'
+import { useInk, type InkNews } from './useInk'
 
 pdfjs.GlobalWorkerOptions.workerSrc = workerUrl
 
@@ -53,6 +61,12 @@ const MAX_CANVAS_PIXELS = 4096 * 4096
 const FIT_SETTLE_MS = 90
 // Above this many pages, assume a uniform size rather than measuring each one.
 const MEASURE_LIMIT = 300
+
+// What the pen and the highlighter can be dipped in. The first is what a tool
+// starts with.
+const PEN_COLORS = ['#1f4fd8', '#d62828', '#1e8e3e', '#1c1b1a']
+const HIGHLIGHTER_COLORS = ['#ffd60a', '#7be07b', '#ff8ab5', '#6ec3ff']
+const NO_STROKES: Stroke[] = []
 
 /** Where a mark comes from, which decides how it is drawn. */
 export type MarkTone = 'active' | 'current-note' | 'other-note' | 'uncited'
@@ -96,6 +110,8 @@ export interface PdfViewerProps {
   back?: { to: string; go: () => void } | null
   /** A page number typed in is a jump too: said before it is made. */
   onJump?: () => void
+  /** Word that the ink on a paper was saved elsewhere, when there is any. */
+  inkNews?: InkNews | null
 }
 
 /** One entry of a PDF's bookmarks: a section, and the page it starts on. */
@@ -156,6 +172,16 @@ export function PdfViewer(props: PdfViewerProps) {
   const [currentPage, setCurrentPage] = useState(1)
   const [pageInput, setPageInput] = useState('1')
   const [rendered, setRendered] = useState<Set<number>>(() => new Set())
+
+  // Whether the pen is out, what is in hand, and what each tool was last
+  // dipped in. With the pen away the viewer is as it is without any of this.
+  const [inking, setInking] = useState(false)
+  const [tool, setTool] = useState<InkMode>('pen')
+  const [penColor, setPenColor] = useState(PEN_COLORS[0]!)
+  const [highlighterColor, setHighlighterColor] = useState(HIGHLIGHTER_COLORS[0]!)
+  // The eraser has no colour: the swatches go on showing the last tool that has.
+  const [drawingTool, setDrawingTool] = useState<'pen' | 'highlighter'>('pen')
+  const ink = useInk(props.document.document_id, props.inkNews ?? null)
 
   const scroller = useRef<HTMLDivElement | null>(null)
   const pageNodes = useRef<Map<number, HTMLDivElement>>(new Map())
@@ -427,6 +453,89 @@ export function PdfViewer(props: PdfViewerProps) {
     return tally
   }, [props.marks])
 
+  // ------------------------------------------------------------------- ink
+
+  // Each page's strokes, the same list for as long as they are the same
+  // strokes: a page whose ink has not changed is not drawn again for a stroke
+  // on another.
+  const pageStrokes = useRef<Map<number, Stroke[]>>(new Map())
+  const strokesByPage = useMemo(() => {
+    const grouped = new Map<number, Stroke[]>()
+    for (const stroke of ink.strokes) {
+      const list = grouped.get(stroke.page)
+      if (list) list.push(stroke)
+      else grouped.set(stroke.page, [stroke])
+    }
+    for (const [page, list] of grouped) {
+      const before = pageStrokes.current.get(page)
+      if (before?.length === list.length && before.every((stroke, i) => stroke === list[i])) {
+        grouped.set(page, before)
+      }
+    }
+    pageStrokes.current = grouped
+    return grouped
+  }, [ink.strokes])
+
+  const inkReady = ink.status === 'ready'
+  const mode: InkMode | null = inking && inkReady ? tool : null
+  const palette = drawingTool === 'pen' ? PEN_COLORS : HIGHLIGHTER_COLORS
+  const inkColor = drawingTool === 'pen' ? penColor : highlighterColor
+
+  const pick = (next: InkMode): void => {
+    setTool(next)
+    if (next !== 'eraser') setDrawingTool(next)
+  }
+  const dip = (color: string): void => {
+    if (drawingTool === 'pen') setPenColor(color)
+    else setHighlighterColor(color)
+    // A colour is chosen to draw with: the eraser is put down.
+    setTool(drawingTool)
+  }
+
+  const reportSelection = useRef(props.onSelection)
+  reportSelection.current = props.onSelection
+  useEffect(() => {
+    if (!inking) return
+    // Taking up the pen lets go of any passage selected: it could not be
+    // seen to be let go of later, under the layer that now takes the pointer.
+    window.getSelection()?.removeAllRanges()
+    reportSelection.current(null)
+
+    const onKeyDown = (event: KeyboardEvent): void => {
+      // Typing somewhere — the note, the chat — is not about the ink.
+      const target = event.target
+      if (
+        target instanceof Element &&
+        target.closest('input, textarea, select, [contenteditable="true"]')
+      ) {
+        return
+      }
+      if (event.key === 'Escape') {
+        setInking(false)
+        return
+      }
+      if (!(event.metaKey || event.ctrlKey) || event.altKey) return
+      const key = event.key.toLowerCase()
+      if (key === 'z' && !event.shiftKey) ink.undo()
+      else if ((key === 'z' && event.shiftKey) || key === 'y') ink.redo()
+      else return
+      event.preventDefault()
+    }
+    document.addEventListener('keydown', onKeyDown)
+    return () => document.removeEventListener('keydown', onKeyDown)
+  }, [inking, ink.undo, ink.redo])
+
+  // Another paper is opened with the pen away, whatever it was on the last.
+  useEffect(() => setInking(false), [props.document.document_id])
+
+  /** The copy is made from what is saved: save first what is not. */
+  const downloadWithInk = (event: MouseEvent): void => {
+    if (!ink.waiting()) return
+    event.preventDefault()
+    const href = api.annotatedPdfUrl(props.document.document_id)
+    void ink.flush().then(() => window.location.assign(href))
+  }
+
   const captureSelection = useCallback(
     (pageNumber: number, layer: HTMLDivElement | null): void => {
       const selection = window.getSelection()
@@ -456,7 +565,7 @@ export function PdfViewer(props: PdfViewerProps) {
   )
 
   return (
-    <section class="pdf" aria-label="Source panel">
+    <section class={inking ? 'pdf inking' : 'pdf'} aria-label="Source panel">
       {/* One line: what the paper is, where in it, how large, and the way out. */}
       <header class="pdf-bar pdf-controls">
         {props.back !== undefined && (
@@ -554,6 +663,24 @@ export function PdfViewer(props: PdfViewerProps) {
         >
           Fit
         </button>
+        <button
+          type="button"
+          class={inking ? 'ink-toggle active' : 'ink-toggle'}
+          data-action="ink"
+          aria-pressed={inking}
+          disabled={!inkReady}
+          onClick={() => setInking((on) => !on)}
+          title={
+            ink.status === 'unavailable'
+              ? (ink.problem ?? 'The ink on this paper could not be read.')
+              : inking
+                ? 'Put the pen away (Esc)'
+                : 'Draw on the paper: pen, highlighter, eraser'
+          }
+          aria-label="Draw on the paper"
+        >
+          <InkIcon name="pen" />
+        </button>
         {/* A link, not a button: the browser's own saving of a file, to print it from. */}
         <a
           class="download"
@@ -587,6 +714,98 @@ export function PdfViewer(props: PdfViewerProps) {
         )}
       </header>
 
+      {/* A line of its own, and only while the pen is out: the bar above has
+          no room for it in a narrow panel, and must not lose its way out. */}
+      {inking && (
+        <div class="pdf-bar pdf-controls ink-bar" role="toolbar" aria-label="Ink">
+          {(['pen', 'highlighter', 'eraser'] as const).map((name) => (
+            <button
+              key={name}
+              type="button"
+              class={tool === name ? 'tool active' : 'tool'}
+              data-tool={name}
+              aria-pressed={tool === name}
+              disabled={!inkReady}
+              onClick={() => pick(name)}
+              title={TOOL_TITLES[name]}
+              aria-label={TOOL_TITLES[name]}
+              style={
+                name === 'eraser'
+                  ? undefined
+                  : { '--ink': name === 'pen' ? penColor : highlighterColor }
+              }
+            >
+              <InkIcon name={name} />
+            </button>
+          ))}
+          <span class="swatches" role="group" aria-label="Colour">
+            {palette.map((color) => (
+              <button
+                key={color}
+                type="button"
+                class={tool !== 'eraser' && inkColor === color ? 'swatch active' : 'swatch'}
+                data-color={color}
+                aria-pressed={tool !== 'eraser' && inkColor === color}
+                onClick={() => dip(color)}
+                title={`Draw in this colour with the ${drawingTool}`}
+                aria-label={`Colour ${color}`}
+                style={{ '--ink': color }}
+              />
+            ))}
+          </span>
+          <button
+            type="button"
+            data-action="ink-undo"
+            disabled={!ink.canUndo}
+            onClick={ink.undo}
+            title="Undo the last stroke or rubbing-out"
+            aria-label="Undo"
+          >
+            ↶
+          </button>
+          <button
+            type="button"
+            data-action="ink-redo"
+            disabled={!ink.canRedo}
+            onClick={ink.redo}
+            title="Redo"
+            aria-label="Redo"
+          >
+            ↷
+          </button>
+          {ink.unsaved && (
+            <span class="ink-unsaved" role="status" title="The strokes are kept here and will be sent again.">
+              Not saved
+            </span>
+          )}
+          <span class="spacer" />
+          {/* Nothing drawn, nothing to take away that the bar above does not give. */}
+          {ink.strokes.length > 0 && (
+            <a
+              class="download"
+              data-action="download-ink"
+              href={api.annotatedPdfUrl(props.document.document_id)}
+              download
+              onClick={downloadWithInk}
+              title="Download a copy of the PDF with the ink on it"
+              aria-label="Download a copy of the PDF with the ink on it"
+            >
+              <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true">
+                <path
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="1.6"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  d="M8 2.5v7.5M4.8 7.2 8 10.4l3.2-3.2M3 13.2h10"
+                />
+              </svg>
+              <span>with ink</span>
+            </a>
+          )}
+        </div>
+      )}
+
       {error !== null && <p class="pdf-error">{error}</p>}
       {!pdf && !error && <p class="pdf-loading">Opening the PDF…</p>}
 
@@ -603,6 +822,11 @@ export function PdfViewer(props: PdfViewerProps) {
                 scale={scale}
                 active={rendered.has(pageNumber)}
                 marks={marksByPage.get(pageNumber) ?? []}
+                strokes={strokesByPage.get(pageNumber) ?? NO_STROKES}
+                inkMode={mode}
+                inkColor={inkColor}
+                onDraw={ink.draw}
+                onErase={ink.erase}
                 onActivateMark={props.onActivateMark}
                 onSelection={captureSelection}
                 register={(node) => {
@@ -626,6 +850,11 @@ interface PdfPageProps {
   scale: number
   active: boolean
   marks: PdfMark[]
+  strokes: Stroke[]
+  inkMode: InkMode | null
+  inkColor: string
+  onDraw: (stroke: Stroke) => void
+  onErase: (ids: string[]) => void
   onActivateMark?: (referenceId: string) => void
   onSelection: (pageNumber: number, layer: HTMLDivElement | null) => void
   register: (node: HTMLDivElement | null) => void
@@ -770,6 +999,20 @@ function PdfPage(props: PdfPageProps) {
           }),
         )}
       </div>
+      {/* Held by the viewer, not by the page: a page let go of far from the
+          view comes back with its ink. Not drawn there, where nothing is. */}
+      {props.active && (props.strokes.length > 0 || props.inkMode !== null) && (
+        <InkLayer
+          pageNumber={props.pageNumber}
+          width={width}
+          height={height}
+          strokes={props.strokes}
+          mode={props.inkMode}
+          color={props.inkColor}
+          onDraw={props.onDraw}
+          onErase={props.onErase}
+        />
+      )}
       {failure !== null ? (
         <div class="pdf-placeholder failed" role="alert">
           <span>Page {props.pageNumber} could not be drawn.</span>
@@ -782,6 +1025,35 @@ function PdfPage(props: PdfPageProps) {
         !drawn && <span class="pdf-placeholder muted">{props.pageNumber}</span>
       )}
     </div>
+  )
+}
+
+const TOOL_TITLES: Record<InkMode, string> = {
+  pen: 'Pen',
+  highlighter: 'Highlighter',
+  eraser: 'Eraser: rub out whole strokes',
+}
+
+const INK_ICONS: Record<InkMode, string> = {
+  pen: 'M2.6 13.4l.8-3.1 7.3-7.3a1.2 1.2 0 0 1 1.7 0l.6.6a1.2 1.2 0 0 1 0 1.7l-7.3 7.3-3.1.8zM9.6 4.1l2.3 2.3',
+  highlighter:
+    'M5.2 9.2l4.9-6 3 2.5-4.9 6-2.2.3-.8-2.8zM5.9 11.9l-1.5 1.6H2.6l2.1-2.5M9 13.6h4.6',
+  eraser:
+    'M6.3 13.2L2.7 9.6a1.1 1.1 0 0 1 0-1.6l5.3-5.3a1.1 1.1 0 0 1 1.6 0l3.7 3.7a1.1 1.1 0 0 1 0 1.6l-5.2 5.2H6.3zM5.4 5.3l5.3 5.3M8.1 13.2h5.4',
+}
+
+function InkIcon(props: { name: InkMode }) {
+  return (
+    <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
+      <path
+        fill="none"
+        stroke="currentColor"
+        stroke-width="1.3"
+        stroke-linecap="round"
+        stroke-linejoin="round"
+        d={INK_ICONS[props.name]}
+      />
+    </svg>
   )
 }
 

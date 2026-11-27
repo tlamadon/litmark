@@ -24,6 +24,9 @@ that can search the project and edit its files.
 - **Notes you can check.** Notes are Markdown, with tables and math. A
   [citation](#citations) opens the paper at the highlighted passage, and a
   highlight in the paper leads back to the sentence that cites it.
+- **A pen for the margins.** [Draw on a paper's pages](#drawing-on-a-paper)
+  with a pen and a highlighter — a stylus on a tablet, a mouse at a desk — and
+  download a copy with the ink on it.
 - **An agent that reads the papers.** Ask a question and it searches, reads the
   pages it needs, quotes them, and edits your notes — every step shown, every
   edit listed with an undo.
@@ -346,8 +349,8 @@ and they are written to `references.bib` as `keywords`.
 A project is two kinds of material, and each travels the way that suits it.
 
 **Text goes through git, and Litmark does the committing.** Notes, summaries,
-the reference registry and each paper's `metadata.json` are small files that
-merge well. Make the project a repository and Litmark commits what changed once
+the reference registry, each paper's `metadata.json` and the ink drawn on it
+are small files that merge well. Make the project a repository and Litmark commits what changed once
 your edits have settled, brings in what the remote has, and publishes — on its
 own, and when you press **Sync now**:
 
@@ -498,6 +501,7 @@ A script can still send the password as HTTP Basic (`curl -u any:$PASSWORD`).
 | `documents/<id>/metadata.json` | Identity, hash, filename, title, page count, tags, status. |
 | `documents/<id>/pages.json` | Per-page text, character geometry, offset mapping. |
 | `documents/<id>/summary.md` | Editable, cited summary. |
+| `documents/<id>/ink.json` | What was drawn on the paper's pages. Absent until something has been. |
 | `notes/*.md` | User and agent notes. |
 | `skills/summary.md` | How papers are summarized, as learned from you. Absent until something has been. |
 | `references.json` | Versioned source registry. |
@@ -653,6 +657,43 @@ A passage of the paper can be cited from the same place. Beside the ✦,
 **Cite** puts a reference to it in the note or summary that is open, and
 **Quote** the passage itself as a quotation with its reference under it.
 
+## Drawing on a paper
+
+The pencil in the paper's bar takes out the pen. A line of tools opens under
+the bar — **pen**, **highlighter**, **eraser**, four colours, undo and redo —
+and what you draw on a page stays on it: at any zoom, after a reload, and on
+every machine the project syncs to.
+
+- **A pen or a mouse draws; a finger scrolls.** On a tablet you write with the
+  stylus and move the paper with your hand, and a palm resting on the glass
+  leaves nothing.
+- **The highlighter darkens the page and leaves the letters black**, and lies
+  under what the pen writes.
+- **The eraser takes whole strokes.** Rub across one and it is gone. **Undo**
+  (Cmd/Ctrl-Z) takes back the last stroke or rubbing-out, **redo**
+  (Shift-Cmd/Ctrl-Z) does it again.
+- **Put the pen away** — the pencil again, or **Esc** — to select text and
+  click highlights as before. The ink stays where it is, as a picture you
+  select through.
+- **Download with ink**, at the end of the tool line, saves a copy of the PDF
+  with the strokes on it. They are annotations, so Preview, Acrobat and the
+  like show them and can still move or delete them. The PDF in the project is
+  never written to: references are pinned to its hash.
+
+Ink is saved a moment after each stroke, in `documents/<id>/ink.json`, as
+fractions of the page — the coordinates a citation's highlight is kept in. It
+goes through git with the notes (*Update annotations on doc-003*). With the
+paper open in two windows, the tablet and the desk, each shows what the other
+draws, and neither loses a stroke to the other. The agent does not see ink,
+and it is not offered over MCP.
+
+Telling a stylus from a finger is the browser's business. Safari on an iPad
+says which touch is the Pencil, and only that one is kept from scrolling the
+page. If the Pencil scrolls the paper instead of drawing on it, open Litmark
+once with `?inkguard=touch-action` on the address: the page then takes no
+scrolling from the browser while the pen is out, and a finger moves the paper
+without momentum. `?inkguard=auto` goes back.
+
 ## The summarizing skill
 
 How a paper is summarized is not fixed: it is a **skill** the project keeps and
@@ -752,7 +793,7 @@ uv run pytest                     # server and acceptance criteria
 uv run pytest --runslow           # plus: build the wheel, install it clean, serve it
 npm --prefix frontend test        # renderer unit tests, and the bundle run in a DOM
 
-# Real-browser checks (A2 live preview, A6 highlight geometry under zoom).
+# Real-browser checks (A2 live preview, A6 highlight geometry under zoom, ink).
 # Point it at a project whose open note contains a source: citation.
 litmark serve ./my-research &
 LITMARK_BASE_URL=http://127.0.0.1:8765/ npm --prefix frontend run test:browser

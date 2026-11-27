@@ -42,6 +42,7 @@ import {
   type PdfOutlineItem,
   type PdfSelection,
 } from './pdf/PdfViewer'
+import type { InkNews } from './pdf/useInk'
 import {
   addressOf,
   isUntouched,
@@ -190,6 +191,8 @@ export function App() {
   const [stream, setStream] = useState<EventStream | null>(null)
   // Bumped when an agent edit lands, so a clean buffer follows the file.
   const [fileTick, setFileTick] = useState(0)
+  // The ink on a paper was saved from another window, or came in from git.
+  const [inkNews, setInkNews] = useState<InkNews | null>(null)
 
   const [target, setTarget] = useState<MainTarget>({ kind: 'empty' })
   const [buffer, setBuffer] = useState<Buffer | null>(null)
@@ -547,6 +550,14 @@ export function App() {
           // A paper sent or relabelled from elsewhere is in the record of edits.
           void api.changes().then((payload) => setChanges(payload.changes))
         }
+        if (event.type === 'ink_updated' && typeof event.document_id === 'string') {
+          const { document_id: documentId, revision } = event
+          setInkNews((before) => ({
+            documentId,
+            revision: typeof revision === 'string' ? revision : null,
+            tick: (before?.tick ?? 0) + 1,
+          }))
+        }
         if (event.type === 'file_changed') {
           void refreshState()
           void api.changes().then((payload) => setChanges(payload.changes))
@@ -556,6 +567,13 @@ export function App() {
           setSync(event.status as SyncState)
           // The remote had news: notes and papers may have changed under us.
           if (Array.isArray(event.pulled) && event.pulled.length > 0) {
+            if (event.pulled.some((path) => /^documents\/[^/]+\/ink\.json$/.test(String(path)))) {
+              setInkNews((before) => ({
+                documentId: null,
+                revision: null,
+                tick: (before?.tick ?? 0) + 1,
+              }))
+            }
             void refreshState()
             void api.changes().then((payload) => setChanges(payload.changes))
             setFileTick((tick) => tick + 1)
@@ -1748,6 +1766,7 @@ export function App() {
                   : null
               }
               onJump={leavePage}
+              inkNews={inkNews}
               onClose={() => {
                 setOpenDocument(null)
                 // No passage is on show any more, here or in the note.

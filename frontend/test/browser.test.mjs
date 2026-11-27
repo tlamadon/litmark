@@ -2,8 +2,8 @@
  * Real-browser checks against a running server.
  *
  * These cover the criteria nothing else can answer: Markdown live preview
- * (A2), and opening a citation to a highlighted PDF passage at more than one
- * zoom level (A6/A8).
+ * (A2), opening a citation to a highlighted PDF passage at more than one
+ * zoom level (A6/A8), and drawing on a page with the pen.
  *
  * Firefox, not Chromium: headless Chromium cannot reach loopback HTTP in every
  * sandbox — it returns an empty document where curl succeeds — so it silently
@@ -829,5 +829,273 @@ describeOrSkip('the application in Firefox', () => {
     // And it went to the note it was typed in, not the one now open.
     const open = await script(client, `return document.querySelector('.cm-content')?.textContent ?? ''`)
     assert.ok(!open.includes(marker), 'the text typed in one note appears in the other')
+  })
+
+  // ------------------------------------------------------------------ ink
+
+  /** A paper on screen, opened from the library if none is. */
+  const showPaper = async () => {
+    if (await script(client, `return !!document.querySelector('.pdf .pdf-page canvas')`)) return
+    await showLibrary()
+    await click(client, '.library [data-show="papers"]')
+    await waitFor(client, `!!document.querySelector('.library .card.paper')`, { label: 'the papers' })
+    await click(client, '.library .card.paper .card-open')
+    await waitFor(client, `!!document.querySelector('.pdf .pdf-page canvas')`, {
+      timeoutMs: 30000,
+      label: 'a page of the paper to be drawn',
+    })
+  }
+
+  const takeUpThePen = async () => {
+    if (!(await script(client, `return !!document.querySelector('.pdf.inking')`))) {
+      await waitFor(client, `!document.querySelector('[data-action="ink"]').disabled`, {
+        label: 'the ink on the paper to be read',
+      })
+      await click(client, '[data-action="ink"]')
+    }
+    await waitFor(client, `!!document.querySelector('.pdf-ink.drawing')`, { label: 'the pen to be out' })
+    await click(client, '.ink-bar [data-tool="pen"]')
+    await waitFor(client, `!!document.querySelector('.pdf-ink.drawing.pen')`, { label: 'the pen to be in hand' })
+  }
+
+  /** The strokes on screen: which page, and where on it as fractions of the page. */
+  const strokesShown = `(() => [...document.querySelectorAll('.pdf-ink path[data-stroke]')].map((path) => {
+    const page = path.closest('.pdf-page').getBoundingClientRect()
+    const box = path.getBoundingClientRect()
+    return {
+      id: path.dataset.stroke,
+      page: Number(path.closest('.pdf-page').dataset.page),
+      left: (box.left - page.left) / page.width,
+      top: (box.top - page.top) / page.height,
+      right: (box.right - page.left) / page.width,
+      bottom: (box.bottom - page.top) / page.height,
+    }
+  }))()`
+
+  /** Press, move and lift on a page, as a mouse, a pen or a finger would. */
+  const stroke = (page, points, pointerType = 'mouse') =>
+    script(
+      client,
+      `const [page, points, pointerType] = arguments
+       const node = document.querySelector('.pdf-page[data-page="' + page + '"]')
+       const layer = node.querySelector('.pdf-ink')
+       const box = node.getBoundingClientRect()
+       const fire = (name, [x, y], buttons) => layer.dispatchEvent(new PointerEvent(name, {
+         bubbles: true, cancelable: true, view: window, pointerId: 5, pointerType, isPrimary: true,
+         button: name === 'pointermove' ? -1 : 0, buttons,
+         clientX: box.left + x * box.width, clientY: box.top + y * box.height,
+       }))
+       fire('pointerdown', points[0], 1)
+       for (const point of points.slice(1)) fire('pointermove', point, 1)
+       fire('pointerup', points[points.length - 1], 0)`,
+      [page, points, pointerType],
+    )
+
+  /** What the server holds for the paper on screen: the ids of its strokes. */
+  const strokesSaved = `(() => {
+    const href = document.querySelector('[data-action="download-pdf"]').getAttribute('href')
+    const request = new XMLHttpRequest()
+    request.open('GET', href.split('/pdf?')[0] + '/ink', false)
+    request.setRequestHeader('x-litmark-token', document.querySelector('meta[name="litmark-token"]').content)
+    request.send()
+    return request.status === 200 ? JSON.parse(request.responseText).strokes.map((s) => s.id) : null
+  })()`
+
+  test('ink: the pen draws where it is put, stays there at any zoom, and is there after a reload', async () => {
+    await showPaper()
+    await takeUpThePen()
+    const page = await script(
+      client,
+      `return Number(document.querySelector('.pdf-ink.drawing').closest('.pdf-page').dataset.page)`,
+    )
+    const before = (await script(client, `return ${strokesShown}`)).map((item) => item.id)
+
+    // A finger does not draw: it is left to scroll the paper.
+    await stroke(page, [[0.2, 0.6], [0.5, 0.62], [0.8, 0.6]], 'touch')
+    assert.deepEqual(
+      (await script(client, `return ${strokesShown}`)).map((item) => item.id),
+      before,
+      'a touch left ink on the page',
+    )
+
+    await stroke(page, [[0.25, 0.3], [0.45, 0.34], [0.65, 0.3]])
+    const drawn = await waitFor(
+      client,
+      `(() => ${strokesShown}.find((item) => !${JSON.stringify(before)}.includes(item.id)) ?? null)()`,
+      { timeoutMs: 5000, label: 'the stroke to appear on the page' },
+    )
+    assert.equal(drawn.page, page)
+    const near = (a, b) => Math.abs(a - b) < 0.012
+    assert.ok(
+      near(drawn.left, 0.25) && near(drawn.right, 0.65) && near(drawn.top, 0.3) && near(drawn.bottom, 0.34),
+      `the stroke is not where it was drawn: ${JSON.stringify(drawn)}`,
+    )
+
+    // Kept as fractions of the page, so zooming moves the page and the ink together.
+    const shown = `(() => ${strokesShown}.find((item) => item.id === ${JSON.stringify(drawn.id)}) ?? null)()`
+    const same = (a, b) =>
+      ['left', 'top', 'right', 'bottom'].every((side) => Math.abs(a[side] - b[side]) < 0.005)
+    for (const zoom of [1, 2]) {
+      const width = await script(client, `return document.querySelector('.pdf-page').getBoundingClientRect().width`)
+      await click(client, '.pdf-controls button[title="Zoom in"]')
+      await waitFor(
+        client,
+        `document.querySelector('.pdf-page').getBoundingClientRect().width > ${width + 1}`,
+        { timeoutMs: 15000, label: 'the page to grow after zooming in' },
+      )
+      const zoomed = await waitFor(client, shown, { label: 'the stroke after zooming' })
+      assert.ok(same(zoomed, drawn), `the stroke moved at zoom step ${zoom}: ${JSON.stringify(zoomed)}`)
+    }
+    await click(client, '.pdf-controls .fit')
+
+    await waitFor(client, `(${strokesSaved} ?? []).includes(${JSON.stringify(drawn.id)})`, {
+      timeoutMs: 8000,
+      label: 'the stroke to reach the server',
+    })
+    const path = await script(client, `return window.location.pathname`)
+    // Long enough for the session to have told the server what is on screen.
+    await new Promise((resolve) => setTimeout(resolve, 1200))
+    await navigate(client, new URL(path, BASE_URL).href)
+    const reloaded = await waitFor(client, shown, {
+      timeoutMs: 30000,
+      label: 'the stroke to be on the page after a reload',
+    })
+    assert.ok(same(reloaded, drawn), `the stroke moved over a reload: ${JSON.stringify(reloaded)}`)
+    // And with the pen away it is only a picture: the page under it is as it was.
+    assert.equal(
+      await script(client, `return getComputedStyle(document.querySelector('.pdf-ink')).pointerEvents`),
+      'none',
+    )
+
+    // Rubbed out again, so the project is left as it was found; undo and redo on the way.
+    await takeUpThePen()
+    await click(client, '.ink-bar [data-tool="eraser"]')
+    await waitFor(client, `!!document.querySelector('.pdf-ink.drawing.eraser')`, { label: 'the eraser to be in hand' })
+    await stroke(page, [[0.45, 0.25], [0.45, 0.4]])
+    await waitFor(client, `!${shown}`, { timeoutMs: 5000, label: 'the eraser to rub the stroke out' })
+    await click(client, '[data-action="ink-undo"]')
+    await waitFor(client, shown, { timeoutMs: 5000, label: 'undo to bring the stroke back' })
+    await click(client, '[data-action="ink-redo"]')
+    await waitFor(client, `!${shown}`, { timeoutMs: 5000, label: 'redo to rub it out again' })
+    await waitFor(client, `!(${strokesSaved} ?? ['?']).includes(${JSON.stringify(drawn.id)})`, {
+      timeoutMs: 8000,
+      label: 'the rubbing-out to reach the server',
+    })
+  })
+
+  test('ink: drawing selects no text and offers nothing for it; with the pen away, text is selected through the ink', async () => {
+    await showPaper()
+    // A real press, drag and release, through the browser's own handling of
+    // them: what starts a selection, and what the ✦ listens for.
+    const dragAcross = async (selector) => {
+      const line = await script(
+        client,
+        `const view = document.querySelector('.pdf-scroll').getBoundingClientRect()
+         // A line wholly in view, and really what is under the pointer at both
+         // ends of the drag: not one that reaches under the edge of the panel.
+         const onPage = (x, y) => !!document.elementFromPoint(x, y)?.closest('.pdf-page')
+         const span = [...document.querySelectorAll(arguments[0])].find((node) => {
+           const box = node.getBoundingClientRect()
+           const y = box.top + box.height / 2
+           return (
+             node.textContent.trim().length > 20 &&
+             box.width > 60 && box.width > box.height * 4 &&
+             box.top > view.top + 10 && box.bottom < view.bottom - 10 &&
+             box.left > view.left + 4 && box.right < view.right - 20 &&
+             onPage(box.left + 4, y) && onPage(box.right - 4, y)
+           )
+         })
+         if (!span) return null
+         const box = span.getBoundingClientRect()
+         return { from: Math.round(box.left + 4), to: Math.round(box.right - 4), y: Math.round(box.top + box.height / 2) }`,
+        [selector],
+      )
+      if (!line) return false
+      await client.command('WebDriver:PerformActions', {
+        actions: [
+          {
+            type: 'pointer',
+            id: 'mouse',
+            parameters: { pointerType: 'mouse' },
+            actions: [
+              { type: 'pointerMove', duration: 0, x: line.from, y: line.y },
+              { type: 'pointerDown', button: 0 },
+              { type: 'pointerMove', duration: 60, x: Math.round((line.from + line.to) / 2), y: line.y },
+              { type: 'pointerMove', duration: 60, x: line.to, y: line.y },
+              { type: 'pointerUp', button: 0 },
+            ],
+          },
+        ],
+      })
+      await client.command('WebDriver:ReleaseActions', {})
+      await new Promise((resolve) => setTimeout(resolve, 400))
+      return true
+    }
+    const seen = `(() => ({
+      selected: String(window.getSelection()).trim().length,
+      offered: !!document.querySelector('.passage-offer'),
+      strokes: document.querySelectorAll('.pdf-ink path[data-stroke]').length,
+    }))()`
+
+    // With the pen away, the drag is a selection, and something is offered for it.
+    if (await script(client, `return !!document.querySelector('.pdf.inking')`)) {
+      await click(client, '[data-action="ink"]')
+    }
+    await waitFor(client, `!!document.querySelector('.pdf-text-layer span')`, { label: 'the text of a page' })
+    if (!(await dragAcross('.pdf-text-layer span'))) return // a paper with no text in view
+    const reading = await script(client, `return ${seen}`)
+    assert.ok(reading.selected > 0, `a drag over the text selected nothing: ${JSON.stringify(reading)}`)
+
+    // Taking up the pen lets go of the passage, and of what was offered for it.
+    await takeUpThePen()
+    const taken = await script(client, `return ${seen}`)
+    assert.deepEqual([taken.selected, taken.offered], [0, false], JSON.stringify(taken))
+
+    // The same drag now draws. Nothing is selected, nothing is offered.
+    await dragAcross('.pdf-text-layer span')
+    const drawing = await script(client, `return ${seen}`)
+    assert.equal(drawing.strokes, reading.strokes + 1, `the drag drew no stroke: ${JSON.stringify(drawing)}`)
+    assert.deepEqual([drawing.selected, drawing.offered], [0, false], JSON.stringify(drawing))
+
+    // Taken back, and the pen put away: the viewer is as it was.
+    await click(client, '[data-action="ink-undo"]')
+    await waitFor(client, `${seen}.strokes === ${reading.strokes}`, { label: 'the stroke to be undone' })
+    await click(client, '[data-action="ink"]')
+    await waitFor(client, `!document.querySelector('.ink-bar')`, { label: 'the pen to be away' })
+    await new Promise((resolve) => setTimeout(resolve, 1200))
+  })
+
+  test('ink: in a narrow panel the tools have a line of their own, and nothing in the bar is pushed out', async (t) => {
+    await showPaper()
+    const panel = await script(client, `return document.querySelector('.pdf').getBoundingClientRect().width`)
+    if (panel < 350) {
+      // Dragged narrower than the paper is ever opened at: the bar does not
+      // fit there with or without the pen.
+      t.skip(`the paper's panel is ${Math.round(panel)}px wide`)
+      return
+    }
+    await takeUpThePen()
+    const bars = await script(
+      client,
+      `return [...document.querySelectorAll('.pdf-bar')].map((bar) => {
+         const edge = bar.getBoundingClientRect()
+         return {
+           width: Math.round(edge.width),
+           out: [...bar.children].filter((node) => {
+             const box = node.getBoundingClientRect()
+             return box.width > 0 && (box.right > edge.right + 0.5 || box.left < edge.left - 0.5)
+           }).map((node) => node.className || node.tagName),
+         }
+       })`,
+    )
+    assert.equal(bars.length, 2, 'the tools are not on a line of their own')
+    for (const bar of bars) assert.deepEqual(bar.out, [], `pushed out of a ${bar.width}px bar`)
+    for (const control of ['.pdf-controls .close', '[data-action="download-pdf"]', '[aria-label="Page number"]']) {
+      assert.ok(
+        await script(client, `const n = document.querySelector(arguments[0]); return !!n && n.getBoundingClientRect().width > 0`, [control]),
+        `${control} is not on show`,
+      )
+    }
+    await click(client, '[data-action="ink"]')
   })
 })

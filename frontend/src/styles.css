@@ -1565,6 +1565,14 @@ button.tag:hover {
   }
 }
 
+/* Narrower still, the paper's name is down to a letter, and its room is worth
+   more as a button: the name is on the tab above, and in the panel beside. */
+@container (max-width: 400px) {
+  .pdf-bar .pdf-title {
+    display: none;
+  }
+}
+
 /* One line for the whole of it: the page is what the panel is for. */
 .pdf-bar {
   display: flex;
@@ -1655,9 +1663,70 @@ button.tag:hover {
   text-align: center;
 }
 
-.pdf-controls .fit.active {
+.pdf-controls .fit.active,
+.pdf-controls .ink-toggle.active,
+.ink-bar .tool.active {
   background: var(--accent-soft);
   border-color: var(--accent);
+}
+
+/* Buttons that are a drawing, not a letter: set like the download beside them. */
+.pdf-controls .ink-toggle,
+.ink-bar .tool {
+  display: grid;
+  place-items: center;
+  height: 1.35rem;
+  padding: 0 0.2rem;
+}
+
+/* The tools, on a line of their own under the bar while the pen is out. A
+   narrow panel fits them all: nothing here is wider than a button. */
+.ink-bar {
+  background: var(--code-bg);
+}
+
+/* What the tool is dipped in, under its picture. */
+.ink-bar .tool[style] {
+  box-shadow: inset 0 -2px 0 var(--ink);
+}
+
+.ink-bar .swatches {
+  display: inline-flex;
+  flex: none;
+  gap: 0.2rem;
+  margin: 0 0.3rem;
+}
+
+.ink-bar .swatch {
+  width: 1.05rem;
+  min-width: 0;
+  height: 1.05rem;
+  padding: 0;
+  border-radius: 50%;
+  border-color: color-mix(in srgb, var(--ink) 70%, #000);
+  background: var(--ink);
+}
+
+.ink-bar .swatch.active {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.ink-bar .ink-unsaved {
+  flex: none;
+  margin-left: 0.3rem;
+  font-size: 0.76rem;
+  color: var(--warn);
+  white-space: nowrap;
+}
+
+.ink-bar .download {
+  display: inline-flex;
+  gap: 0.25rem;
+  padding: 0 0.3rem;
+  font-size: 0.78rem;
+  white-space: nowrap;
+  text-decoration: none;
 }
 
 .pdf-note {
@@ -1754,6 +1823,59 @@ button.tag:hover {
   position: absolute;
   inset: 0;
   pointer-events: none;
+}
+
+/* What is drawn on the page. Only a picture until a tool is in hand: the text
+   under it is selected, and the highlights clicked, straight through it. */
+.pdf-ink {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.pdf-ink svg {
+  position: absolute;
+  inset: 0;
+  display: block;
+  overflow: hidden;
+}
+
+.pdf-ink path {
+  fill: none;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+/* A highlighter darkens the paper and leaves the letters black. The page is
+   white in either colour scheme, so this holds in both. */
+.pdf-ink svg.highlighter {
+  mix-blend-mode: multiply;
+}
+
+.pdf-ink.drawing {
+  pointer-events: auto;
+  cursor: crosshair;
+}
+
+.pdf-ink.drawing.eraser {
+  cursor:
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='20' height='20'%3E%3Ccircle cx='10' cy='10' r='8.5' fill='rgba(255,255,255,0.6)' stroke='%23555' stroke-width='1'/%3E%3C/svg%3E")
+      10 10,
+    cell;
+}
+
+/* Where the browser cannot tell a pen from a finger: it pans for neither on
+   the page, and the layer moves the paper for the finger. See `stylusGuard`. */
+.pdf-ink.drawing.guard-touch-action {
+  touch-action: none;
+}
+
+/* With the pen out, nothing on the page is selected by it, and a tablet's
+   press-and-hold brings up nothing. */
+.pdf.inking .pdf-page {
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
 }
 
 .pdf-highlight {

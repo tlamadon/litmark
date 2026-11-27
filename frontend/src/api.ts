@@ -5,6 +5,8 @@
  * injected into this page, so an unrelated website cannot drive the API.
  */
 
+import type { Stroke } from './pdf/ink'
+
 const TOKEN_META = 'meta[name="litmark-token"]'
 
 let sessionToken = document.querySelector<HTMLMetaElement>(TOKEN_META)?.content ?? ''
@@ -506,6 +508,23 @@ export const api = {
     `/api/documents/${encodeURIComponent(id)}/pdf?token=${encodeURIComponent(getSessionToken())}${
       download ? '&download=true' : ''
     }`,
+  /** What has been drawn on a paper's pages, and the revision it is at. */
+  ink: (id: string) =>
+    request<{ document_id: string; revision: string | null; strokes: Stroke[] }>(
+      `/documents/${encodeURIComponent(id)}/ink`,
+    ),
+  /**
+   * Save every stroke on a paper, if the ink is still at the revision read.
+   * `keepalive` lets the request outlive a page that is being left.
+   */
+  saveInk: (id: string, strokes: Stroke[], expected_revision: string | null, keepalive = false) =>
+    request<{ document_id: string; revision: string }>(
+      `/documents/${encodeURIComponent(id)}/ink`,
+      { method: 'PUT', body: JSON.stringify({ strokes, expected_revision }), keepalive },
+    ),
+  /** A copy of the paper with its ink on it, as a file to save. */
+  annotatedPdfUrl: (id: string) =>
+    `/api/documents/${encodeURIComponent(id)}/pdf/annotated?token=${encodeURIComponent(getSessionToken())}`,
   pages: (id: string) =>
     request<{
       document_id: string
