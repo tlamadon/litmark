@@ -975,6 +975,16 @@ select {
   opacity: 1;
 }
 
+/* Without a pointer that hovers (an iPad), shown all along. iOS takes
+   something appearing on hover for a menu: the first tap only hovers, and the
+   tab or card under it needs a second to open. */
+@media (hover: none) {
+  .session-close,
+  .card-remove {
+    opacity: 1;
+  }
+}
+
 .card-remove:hover {
   color: var(--danger);
   background: color-mix(in srgb, var(--danger) 12%, transparent);
