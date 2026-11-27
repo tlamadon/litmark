@@ -687,12 +687,10 @@ paper open in two windows, the tablet and the desk, each shows what the other
 draws, and neither loses a stroke to the other. The agent does not see ink,
 and it is not offered over MCP.
 
-Telling a stylus from a finger is the browser's business. Safari on an iPad
-says which touch is the Pencil, and only that one is kept from scrolling the
-page. If the Pencil scrolls the paper instead of drawing on it, open Litmark
-once with `?inkguard=touch-action` on the address: the page then takes no
-scrolling from the browser while the pen is out, and a finger moves the paper
-without momentum. `?inkguard=auto` goes back.
+While the pen is out, the page takes no scrolling from the browser — it would
+scroll for the stylus too — and Litmark moves the paper for your finger
+itself, without the glide a flick has elsewhere. Put the pen away and
+scrolling is the browser's again.
 
 ## The summarizing skill
 

@@ -11,8 +11,8 @@
  * the pen is written straight to its path, and becomes one of the paper's
  * strokes when the pen lifts.
  *
- * Telling the pen from the finger is the browser's business, and browsers
- * differ; see `stylusGuard`.
+ * A finger's scrolling is done here rather than left to the browser, which
+ * would scroll for the pen as well; see `stylusGuard`.
  */
 
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks'
@@ -42,38 +42,38 @@ const SIMPLIFY_PX = 0.35
 /**
  * How the pen is kept from scrolling the paper while a finger still can.
  *
+ * `touch-action` — the page takes no panning from the browser at all while a
+ * tool is in hand (`touch-action: none`), and a finger moves the paper
+ * through this layer instead, without momentum. What is used, on every
+ * browser: it asks nothing of the browser but to say which pointer is a pen.
+ *
  * `touchstart` — Safari on an iPad says which touch is the Pencil
- * (`Touch.touchType`), so that touch alone is refused its default — scrolling,
- * selecting — and a finger pans as the browser has it, momentum and all.
+ * (`Touch.touchType`), so that touch alone could be refused its default and a
+ * finger left to pan as the browser has it, momentum and all. It was the
+ * first choice there, and did not hold on the iPad it was tried on (iPadOS,
+ * November 2026): the Pencil drew only with the other way switched on. Kept
+ * to be tried again, not used unasked.
  *
- * `touch-action` — where the browser does not say, or should the first way
- * not hold on some version of iPadOS: the page takes no panning from the
- * browser at all while a tool is in hand (`touch-action: none`), and a finger
- * moves the paper through this layer instead, without momentum.
- *
- * The browser decides which. To try the other on a device, open the
- * application once with `?inkguard=touch-action` (or `=touchstart`) on the
- * address; it is remembered there until `?inkguard=auto`.
+ * To try it on a device, open the application once with
+ * `?inkguard=touchstart` on the address; it is remembered there until
+ * `?inkguard=auto`.
  */
 export type StylusGuard = 'touchstart' | 'touch-action'
 
 const GUARD_KEY = 'litmark.inkguard'
 
 function chooseGuard(): StylusGuard {
-  let asked: string | null = null
   try {
     const given = new URLSearchParams(window.location.search).get('inkguard')
     if (given === 'auto') window.localStorage.removeItem(GUARD_KEY)
     else if (given === 'touchstart' || given === 'touch-action') {
       window.localStorage.setItem(GUARD_KEY, given)
     }
-    asked = window.localStorage.getItem(GUARD_KEY)
+    if (window.localStorage.getItem(GUARD_KEY) === 'touchstart') return 'touchstart'
   } catch {
-    /* No storage: the browser's own answer, below. */
+    /* No storage: the way that is used unasked. */
   }
-  if (asked === 'touchstart' || asked === 'touch-action') return asked
-  const tellsStylus = typeof Touch !== 'undefined' && 'touchType' in Touch.prototype
-  return tellsStylus ? 'touchstart' : 'touch-action'
+  return 'touch-action'
 }
 
 // Chosen as the application loads: the address is rewritten soon after, and

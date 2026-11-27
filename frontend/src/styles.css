@@ -1864,8 +1864,8 @@ button.tag:hover {
     cell;
 }
 
-/* Where the browser cannot tell a pen from a finger: it pans for neither on
-   the page, and the layer moves the paper for the finger. See `stylusGuard`. */
+/* The browser pans for neither pen nor finger on the page while a tool is in
+   hand, and the layer moves the paper for the finger. See `stylusGuard`. */
 .pdf-ink.drawing.guard-touch-action {
   touch-action: none;
 }
