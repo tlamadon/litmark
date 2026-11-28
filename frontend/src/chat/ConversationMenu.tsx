@@ -77,6 +77,11 @@ export interface ConversationMenuProps {
   onPutAway?: (id: string) => void
   /** Drawn at the head of the button: on a phone, the mark of sessions and how many are open. */
   lead?: ComponentChildren
+  /**
+   * Drawn at the foot of the menu: what is about the project and this window
+   * rather than about a session — sync, signing out, the version.
+   */
+  foot?: ComponentChildren
 }
 
 export function ConversationMenu(props: ConversationMenuProps) {
@@ -357,6 +362,7 @@ export function ConversationMenu(props: ConversationMenuProps) {
               <div class="conv-list">{background.map(item)}</div>
             </>
           )}
+          {props.foot && <footer class="sheet-foot menu-foot">{props.foot}</footer>}
         </div>
       )}
     </div>

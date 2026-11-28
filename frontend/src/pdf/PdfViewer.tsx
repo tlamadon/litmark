@@ -25,6 +25,7 @@
  * only when asked for; away, none of this changes how the paper is read.
  */
 
+import type { ComponentChildren } from 'preact'
 import {
   useCallback,
   useEffect,
@@ -114,6 +115,12 @@ export interface PdfViewerProps {
   onJump?: () => void
   /** Word that the ink on a paper was saved elsewhere, when there is any. */
   inkNews?: InkNews | null
+  /**
+   * A line of its own over the bar, given by a shell whose panes each fill the
+   * window: it says which paper this is, as every pane says what is in it, so
+   * the bar below is left to the controls and does not name the paper again.
+   */
+  head?: ComponentChildren
 }
 
 /** One entry of a PDF's bookmarks: a section, and the page it starts on. */
@@ -645,6 +652,7 @@ export function PdfViewer(props: PdfViewerProps) {
 
   return (
     <section class={inking ? 'pdf inking' : 'pdf'} aria-label="Source panel">
+      {props.head}
       {/* One line: what the paper is, where in it, how large, and the way out. */}
       <header class="pdf-bar pdf-controls">
         {props.back !== undefined && (
@@ -660,12 +668,14 @@ export function PdfViewer(props: PdfViewerProps) {
             ←
           </button>
         )}
-        <strong
-          class="pdf-title"
-          title={`${props.document.display_title} — ${props.document.original_filename}`}
-        >
-          {props.document.label ?? props.document.display_title}
-        </strong>
+        {props.head === undefined && (
+          <strong
+            class="pdf-title"
+            title={`${props.document.display_title} — ${props.document.original_filename}`}
+          >
+            {props.document.label ?? props.document.display_title}
+          </strong>
+        )}
         <button type="button" onClick={() => go(currentPage - 1)} disabled={currentPage <= 1}>
           ‹
         </button>

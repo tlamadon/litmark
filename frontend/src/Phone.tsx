@@ -1,11 +1,12 @@
 /**
  * The shell on a phone: what is drawn around the one pane on show.
  *
- * A bar along the top that is the session's: its name, the menu of the
- * others, and the way to the panel about what is open. A bar afloat along the
- * bottom, in reach of a thumb, with the three panes — Text, Paper, Chat — and
- * which of them is on, and beside it the library they are filled from. And
- * the panel itself, as a sheet that slides up over the pane and is put away.
+ * A bar along the top that is the session's: its name, and the list of the
+ * others let down from it. A bar afloat along the bottom, in reach of a thumb,
+ * with the three panes — Notes, Papers, Chat — which of them is on, and how
+ * many of each are open. And the panel about a note or a paper, as a sheet
+ * that slides up over the pane and is put away; the way to it is in the
+ * pane's own line (see `PaneHead.tsx`).
  *
  * What is on show, and where an action leads, is worked out in `phonePanes.ts`;
  * the panes themselves are the application's own, placed by `App.tsx`.
@@ -132,22 +133,17 @@ export interface PhoneTopProps {
   session: ComponentChildren
   /** The connection to the server is down, and being tried again. */
   reconnecting: boolean
-  /** The panel about what is open is up. */
-  aboutOpen: boolean
-  onAbout: () => void
-  /** Something in the panel wants looking at: sync needs a decision, or failed. */
-  aboutNeedsLooking: boolean
   /**
-   * The version running. Its number is at the foot of the sheet; what is drawn
-   * of it here is only what speaks up — a later release, a page to reload.
+   * The version running. Its number is at the foot of the session's menu; what
+   * is drawn of it here is only what speaks up — a later release, a page to reload.
    */
   version: ComponentChildren
 }
 
 /**
  * The bar along the top, made as the one along the bottom is: the session in
- * a capsule, which opens downwards into the list of sessions, and set apart
- * from it the way to the panel about what is open.
+ * a capsule, which opens downwards into the list of sessions. Nothing else is
+ * in it: what is about the note or the paper on show is in that pane's own line.
  */
 export function PhoneTop(props: PhoneTopProps) {
   return (
@@ -159,34 +155,11 @@ export function PhoneTop(props: PhoneTopProps) {
         </span>
       )}
       {props.version}
-      <button
-        type="button"
-        class={props.aboutOpen ? 'ghost icon about-button active' : 'ghost icon about-button'}
-        data-action="about"
-        aria-expanded={props.aboutOpen}
-        aria-haspopup="dialog"
-        aria-label="About what is open"
-        title="About what is open"
-        onClick={props.onAbout}
-      >
-        <svg viewBox="0 0 16 16" width="20" height="20" aria-hidden="true">
-          <circle cx="8" cy="8" r="6.4" fill="none" stroke="currentColor" stroke-width="1.2" />
-          <path
-            d="M8 7.2v4"
-            fill="none"
-            stroke="currentColor"
-            stroke-width="1.5"
-            stroke-linecap="round"
-          />
-          <circle cx="8" cy="4.9" r="0.95" fill="currentColor" />
-        </svg>
-        {props.aboutNeedsLooking && <span class="dot bad" />}
-      </button>
     </header>
   )
 }
 
-/** What the tabs and the library are drawn with: a 16px box, a line, the ink of the text. */
+/** What the tabs are drawn with: a 16px box, a line, the ink of the text. */
 const ICONS = {
   // Lines of writing.
   text: 'M3 3.75h10M3 6.6h10M3 9.45h10M3 12.3h6',
@@ -194,8 +167,6 @@ const ICONS = {
   paper: 'M4.25 1.9h4.9l2.6 2.7v9.5h-7.5zM9 1.9v2.9h2.75',
   // What is said.
   chat: 'M2.6 3.1h10.8v7.6H8.2L5.2 13.4v-2.7H2.6z',
-  // Everything there is, as the library lays it out.
-  library: 'M2.6 2.6h4.3v4.3H2.6zM9.1 2.6h4.3v4.3H9.1zM2.6 9.1h4.3v4.3H2.6zM9.1 9.1h4.3v4.3H9.1z',
   // Sessions: several sets of work, one over another.
   sessions: 'M8 2.3 13.5 5 8 7.7 2.5 5zM2.7 8 8 10.6 13.3 8M2.7 10.9 8 13.5l5.3-2.6',
 } as const
@@ -205,10 +176,12 @@ const ICONS = {
  * on it how many are open — as the tabs along the bottom say how many notes
  * and papers are.
  */
-export function SessionsLead(props: { count: number }) {
+export function SessionsLead(props: { count: number; needsLooking?: boolean }) {
   return (
     <span class="phone-tab-icon sessions-lead">
       <PhoneIcon name="sessions" />
+      {/* Something at the foot of the menu wants looking at: sync needs a decision, or failed. */}
+      {props.needsLooking && <span class="dot bad sessions-attention" />}
       {props.count > 0 && (
         <span class="phone-tab-count" aria-hidden="true">
           {props.count}
@@ -245,8 +218,6 @@ export interface PhoneBarProps {
   chat: ChatSign
   /** A tab pressed — the one already on, too. */
   onSelect: (tab: PhoneTab) => void
-  /** The library, laid over the session or taken away again. */
-  onLibrary: () => void
 }
 
 // The first two are named for what they hold: the notes (and summaries) open
@@ -260,15 +231,15 @@ const CHAT_SIGNS: Record<Exclude<ChatSign, null>, string> = {
 
 /**
  * The bar along the bottom, afloat over the pane: the three panes in a capsule
- * with a mark that slides to the one on, and, set apart from them, the library
- * — which is not a fourth pane but what the first two are filled from.
+ * with a mark that slides to the one on. With the library up, none is.
  *
  * A tab with nothing behind it is quieter, and works: its pane says nothing
- * is open and offers the way to open something.
+ * is open and offers the way to open something. The library is reached from
+ * there, and from the list of what is open that a press on the tab already
+ * on lets up — it is what the first two panes are filled from.
  */
 export function PhoneBar(props: PhoneBarProps) {
   const on = PHONE_TABS.indexOf(props.pane as PhoneTab)
-  const inLibrary = props.pane === 'library'
   return (
     <div class="phone-bar">
       <nav class="phone-tabs" aria-label="Panes" data-on={on >= 0 ? PHONE_TABS[on] : 'none'}>
@@ -310,22 +281,6 @@ export function PhoneBar(props: PhoneBarProps) {
           )
         })}
       </nav>
-      <button
-        type="button"
-        class={inLibrary ? 'phone-library on' : 'phone-library'}
-        data-action="library"
-        aria-pressed={inLibrary}
-        aria-label="Library"
-        title={
-          inLibrary
-            ? 'Every paper and note — again to go back to what was open'
-            : 'Every paper and note: open one, or start a note'
-        }
-        onClick={props.onLibrary}
-      >
-        <PhoneIcon name="library" />
-        <span class="phone-tab-name">Library</span>
-      </button>
     </div>
   )
 }
@@ -474,8 +429,6 @@ export interface AboutSheetProps {
   onClose: () => void
   /** The panel itself. */
   children: ComponentChildren
-  /** What was at the end of the top bar on a wide window: sync, signing out, the version. */
-  foot?: ComponentChildren
 }
 
 /**
@@ -513,7 +466,6 @@ export function AboutSheet(props: AboutSheetProps) {
           ✕
         </button>
         {props.children}
-        {props.foot && <footer class="sheet-foot">{props.foot}</footer>}
       </div>
     </div>
   )

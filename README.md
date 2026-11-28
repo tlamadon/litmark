@@ -580,57 +580,61 @@ In a window narrower than 900 pixels there is room for one of them at a time
 whole width. A large tablet is wider than that upright (a 12.9-inch iPad is
 1024), and has the same layout there: held upright and worked by touch, up to
 1100 pixels. Turned on its side, a tablet has the panes side by side again,
-with what was open still in them. One pane fills the screen, and a bar afloat along the bottom goes between the
+with what was open still in them.
+
+One pane fills the screen, and a bar afloat along the bottom goes between the
 three, in the order they sit on a desk: **Notes · Papers · Chat**. A mark
-slides to the one that is on. What is open is named in the pane itself: the
-text's title in its bar, the paper's on a line over its controls.
+slides to the one that is on.
 
-A session can have several notes open, and several papers: whatever you open
-in it stays open until you close it, and comes back with the session, on any
-window. One of each is on show. A small number on **Notes** and on **Papers**
-says how many are open; press the tab you are already on and they are listed
-over the bar — tap one to go to it, **×** to close it (nothing is deleted),
-**Open another…** for the library.
+**Each pane has one line at its top, the same in all three: what is in it.**
+The title of the note, the name of the paper, and in the chat the question
+whose answer you are reading. Press the title and its contents are let down
+under it — the headings of the text, the sections of the paper where its PDF
+carries them, the questions asked in the conversation — and one of them is a
+place to go. At the far end of the line, for a note and for a paper, **ⓘ**
+slides up the panel about it: what it is, its tags, what it is tied to, what
+can be done with it. A way back (**←**) is drawn only when there is somewhere
+to go back to.
 
-The top bar is the session's, and is made as the bottom one is: a capsule
-with the session's name, and beside it **ⓘ**. A session is the text, the paper
-and the conversation that go together, so going to another changes all three
-panes. The number on the capsule is how many sessions are open; press it and
-the list is let down — each session with what it holds, **×** to put one away
-(nothing is deleted; it stays in the list, under *Put away*), and **New
-session**. A session comes back on the tab you left it on — or on Chat, if it
-has answered since.
+**A session can have several notes open, and several papers.** Whatever you
+open in it stays open until you close it, and comes back with the session, on
+any window. One of each is on show. A small number on **Notes** and on
+**Papers** says how many are open; press the tab you are already on and they
+are listed over the bar — tap one to go to it, **×** to close it (nothing is
+deleted), **Open another…** for the library. That is the way to the library:
+it is what those two panes are filled from. Choose a note there and you are on
+Notes, a paper and you are on its summary with the PDF behind Papers (or on
+the PDF, where nothing is written about it yet); a tab puts the library away
+again. A pane with nothing in it says so and offers the way: **Open a note**
+or **New note**, **Open a paper**. A new session, with nothing open, starts at
+the library.
 
-**Library**, the round button beside the tabs, is where the first two panes
-are filled from. It lays the library over the session; choose a note and you
-are on Notes, a paper and you are on its summary with the PDF behind Papers
-(or on the PDF, where nothing is written about it yet). A tab puts the library
-away again. A pane with nothing in it says so and offers the way: **Open a
-note** or **New note** on Notes, **Open a paper** on Papers. A new session,
-with nothing open, starts at the library.
+**The top bar is the session's**, and is made as the bottom one is: a capsule
+with the session's name. A session is the text, the paper and the conversation
+that go together, so going to another changes all three panes. The number on
+the capsule is how many sessions are open; press it and the list is let down —
+each session with what it holds, **×** to put one away (nothing is deleted; it
+stays in the list, under *Put away*), and **New session**. A session comes
+back on the tab you left it on — or on Chat, if it has answered since. At the
+foot of the list is what is about the project rather than a session: sync,
+**Sign out**, the version.
 
 What you do takes you where it leads. Tap a citation in the text and you are
 on Papers, at the passage; tap a highlight in the paper and you are on Notes,
-at the citation. A paper, a note or a passage named in a reply opens on its tab.
-**Cite** and **Quote** on a passage of the paper land in the text where the
-reference went in, and once **✦ Ask** is sent you are in the chat, where the
-answer is read.
+at the citation. A paper, a note or a passage named in a reply opens on its
+tab. **Cite** and **Quote** on a passage of the paper land in the text where
+the reference went in, and once **✦ Ask** is sent you are in the chat, where
+the answer is read.
 
 Each pane keeps its place while another is on: where the text was scrolled
 to, the page of the paper and its zoom, the message half typed. A reply that
 comes in while you are reading puts a dot on the Chat icon, and a ring pulses
 there while the agent is at work.
 
-**ⓘ** slides the panel about what is open up over the pane. Tap an entry in
-it and it does what it does and is put away; a tap outside it, or its ✕, puts
-it away too. Sync, **Sign out** and the version are at its foot.
-
-The chat is the conversation and little else. It has no header of its own —
-the session is named in the top bar, and the **Transcript** view is left to a
-wider window — and its message box is folded to one line while you read. Tap
-the box and it opens, with what goes with the message, the model and **Send**;
-tap the conversation, or send, and it folds again. What you had typed stays
-in it.
+The chat's message box is folded to one line while you read. Tap the box and
+it opens, with what goes with the message, the model and **Send**; tap the
+conversation, or send, and it folds again. What you had typed stays in it.
+The **Transcript** view is left to a wider window.
 
 While you type, the bar along the bottom is out of the keyboard's way; it is
 back when you are done. Nothing is left under it: each pane can be scrolled

@@ -40,6 +40,11 @@ export interface LibraryProps {
    * notes, from a pane that wants a note. Left out, the papers.
    */
   show?: 'papers' | 'notes'
+  /**
+   * The way to the tags the papers are narrowed by, where the panel that
+   * holds them is not beside the library: given, a button for it.
+   */
+  onFilters?: () => void
 }
 
 type Order = 'added' | 'author' | 'year' | 'title'
@@ -232,6 +237,17 @@ export function Library(props: LibraryProps) {
             }}
           />
         </label>
+        {props.onFilters && props.tags.length > 0 && (
+          <button
+            type="button"
+            class={props.selectedTags.length > 0 ? 'import filters on' : 'import filters'}
+            data-action="filters"
+            title="Narrow the papers by their tags"
+            onClick={props.onFilters}
+          >
+            Tags{props.selectedTags.length > 0 ? ` · ${props.selectedTags.length}` : ''}
+          </button>
+        )}
       </div>
 
       {showPapers && (

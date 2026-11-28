@@ -24,6 +24,7 @@ import {
   type NoteSummary,
 } from '../api'
 import type { EventStream } from '../events'
+import { ContentsList, PaneHead, PaneTitle } from '../PaneHead'
 import type { AgentChoice } from './AgentMenu'
 import { Composer } from './Composer'
 import { ConversationMenu } from './ConversationMenu'
@@ -54,9 +55,11 @@ export interface ChatProps {
   onCollapse: () => void
   /**
    * The shell names the conversation and goes between them itself, and has no
-   * edge to fold the chat to — a phone, where the top bar holds the menu.
-   * There is then no header here at all: the room is the conversation's. The
-   * message box folds to one line while the conversation is only being read.
+   * edge to fold the chat to — a phone, where the top bar holds the menu. The
+   * header is then the one line every pane has there: what is being read —
+   * the question the answer on screen was given to — and, under it, the
+   * questions asked, to go to one. The message box folds to one line while
+   * the conversation is only being read.
    */
   bare?: boolean
   /** Whether the agent may fetch papers from the web, and the way to change it. */
@@ -83,6 +86,29 @@ export function Chat(props: ChatProps) {
   const [draft, setDraftState] = useState('')
   const scroller = useRef<HTMLDivElement | null>(null)
   const pinned = useRef(true)
+  // The turn being read: the one the top of the view is in — or, at the end of
+  // the conversation, the last, whose answer is the one arriving.
+  const [reading, setReading] = useState<string | null>(null)
+  // Whether the list of what was asked is down from the header.
+  const [listing, setListing] = useState(false)
+  const noteReading = useCallback((): void => {
+    const node = scroller.current
+    if (!node) return
+    const articles = Array.from(node.querySelectorAll<HTMLElement>('.turn'))
+    const atEnd = node.scrollHeight - node.scrollTop - node.clientHeight < NEAR_BOTTOM
+    if (atEnd) {
+      setReading(articles[articles.length - 1]?.dataset.run ?? null)
+      return
+    }
+    const top = node.getBoundingClientRect().top
+    let found: string | null = null
+    for (const article of articles) {
+      // The last one to have begun by the top of the view, a line's worth of slack given.
+      if (found !== null && article.getBoundingClientRect().top > top + 24) break
+      found = article.dataset.run ?? found
+    }
+    setReading(found)
+  }, [])
 
   const setDraft = useCallback(
     (text: string): void => {
@@ -96,6 +122,7 @@ export function Chat(props: ChatProps) {
     setDraftState(props.currentId ? (drafts.current.get(props.currentId) ?? '') : '')
     setProblem(null)
     pinned.current = true
+    setListing(false)
   }, [props.currentId])
 
   const names = useMemo<Names>(() => {
@@ -112,6 +139,7 @@ export function Chat(props: ChatProps) {
   useLayoutEffect(() => {
     const node = scroller.current
     if (node && pinned.current) node.scrollTop = node.scrollHeight
+    if (props.bare) noteReading()
   }, [view.turns, view.loading, mode])
 
   // Where the message box folds and unfolds, the log changes height under the
@@ -178,6 +206,34 @@ export function Chat(props: ChatProps) {
 
   return (
     <section class="chat" aria-label="Chat">
+      {props.bare && (
+        <PaneHead>
+          <PaneTitle
+            title={asked(view.turns.find((turn) => turn.runId === reading) ?? view.turns[view.turns.length - 1])}
+            open={listing}
+            onPress={view.turns.length > 1 ? () => setListing(!listing) : undefined}
+            contents="what was asked"
+          />
+        </PaneHead>
+      )}
+      {props.bare && listing && (
+        <ContentsList
+          label="What was asked in this conversation"
+          items={view.turns.map((turn) => ({
+            key: turn.runId,
+            label: asked(turn),
+            current: turn.runId === reading,
+          }))}
+          onPick={(runId) => {
+            setListing(false)
+            // To where that was asked: the reader is no longer following the end.
+            for (const article of scroller.current?.querySelectorAll<HTMLElement>('.turn') ?? []) {
+              if (article.dataset.run === runId) article.scrollIntoView({ block: 'start' })
+            }
+          }}
+          onDismiss={() => setListing(false)}
+        />
+      )}
       {!props.bare && (
       <header class="chat-head">
         <ConversationMenu
@@ -249,6 +305,7 @@ export function Chat(props: ChatProps) {
         onScroll={(event) => {
           const node = event.currentTarget
           pinned.current = node.scrollHeight - node.scrollTop - node.clientHeight < NEAR_BOTTOM
+          if (props.bare) noteReading()
         }}
       >
         {view.loading && <p class="chat-placeholder">Opening the conversation…</p>}
@@ -341,6 +398,13 @@ export function Chat(props: ChatProps) {
       />
     </section>
   )
+}
+
+/** What a turn was asked, on one line: the head of the chat on a phone, and its list of turns. */
+function asked(turn: Turn | undefined): string {
+  if (!turn) return 'Nothing asked yet'
+  const said = (turn.prompt ?? '').replace(/\s+/g, ' ').trim()
+  return said || turn.label || 'Work the application started itself'
 }
 
 function Transcript({ turns }: { turns: Turn[] }) {

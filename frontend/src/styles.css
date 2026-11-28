@@ -3482,9 +3482,8 @@ button.turn-selection:hover {
 
 /* The top bar is the session's, and is made as the bar along the bottom is:
    the session in a capsule — the mark of sessions with how many are open, its
-   name — which opens downwards into the list of them; and, set apart, the way
-   to the panel about what is open, a circle as the library's is. Nothing in
-   it changes only some of the panes. */
+   name — which opens downwards into the list of them. Nothing else is in it:
+   what is about the note or the paper on show is in that pane's own line. */
 .shell.phone .topbar {
   position: relative; /* the list of sessions hangs off it */
   gap: 0.5rem;
@@ -3497,8 +3496,7 @@ button.turn-selection:hover {
   flex: 1 1 0;
 }
 
-.shell.phone .topbar .conv-button,
-.shell.phone .topbar .about-button {
+.shell.phone .topbar .conv-button {
   height: 3rem;
   border: 1px solid color-mix(in srgb, var(--ink) 11%, transparent);
   background: var(--panel);
@@ -3550,15 +3548,13 @@ button.turn-selection:hover {
   }
 }
 
-.shell.phone .topbar .about-button {
-  width: 3rem;
-  border-radius: 50%;
-  color: var(--muted-strong);
-}
-
-.shell.phone .topbar .about-button.active {
-  background: var(--accent-soft);
-  color: var(--accent);
+/* Something at the foot of the list wants looking at. */
+.sessions-attention {
+  position: absolute;
+  right: -0.3rem;
+  bottom: -0.15rem;
+  width: 0.45rem;
+  height: 0.45rem;
 }
 
 /* The list of sessions, let down from the capsule. */
@@ -3664,9 +3660,10 @@ button.turn-selection:hover {
   white-space: nowrap;
 }
 
-/* The version's number is at the foot of the sheet. Here, only what speaks
-   up: the mark for a later release, and the offer to reload a stale page. */
-.shell.phone .topbar .version-number {
+/* The version's number is at the foot of the list of sessions. In the bar
+   itself, only what speaks up: the mark for a later release, and the offer to
+   reload a stale page. */
+.shell.phone .topbar > .version .version-number {
   display: none;
 }
 
@@ -3680,6 +3677,69 @@ button.turn-selection:hover {
   font-size: 0.82rem;
 }
 
+/* What is about the project and this window, at the foot of the list. */
+.conv-menu .menu-foot {
+  margin-top: 0.4rem;
+  padding: 0.6rem 0.5rem 0.3rem;
+}
+
+/* The line at the top of a pane: what is in it, said the same way in every
+   pane — the same face, the same size, the same place. The title is the
+   handle on its contents; at the far end, the way to the panel about it. */
+.pane-head {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  min-height: 2.9rem;
+  padding: 0.15rem 0.4rem 0.15rem 0.75rem;
+}
+
+.pane-title {
+  flex: 1 1 0;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  min-height: 2.6rem;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--ink);
+  font-family: var(--serif);
+  font-size: 1.05rem;
+  font-weight: 600;
+  line-height: 1.25;
+  text-align: left;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.pane-title-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pane-title-mark {
+  flex: none;
+  font-family: var(--sans);
+  font-size: 0.7rem;
+  color: var(--muted);
+  transition: transform 0.18s ease;
+}
+
+.pane-title.on .pane-title-mark {
+  transform: rotate(180deg);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pane-title-mark {
+    transition: none;
+  }
+}
+
 .about-button {
   position: relative;
   flex: none;
@@ -3688,12 +3748,83 @@ button.turn-selection:hover {
   width: 2.75rem;
   height: 2.75rem;
   padding: 0;
+  border-radius: 50%;
+  color: var(--muted-strong);
 }
 
-.about-button .dot {
+.about-button.active {
+  color: var(--accent);
+}
+
+/* The contents of what is in the pane, let down from its title. */
+.contents-backdrop {
   position: absolute;
-  top: 0.4rem;
-  right: 0.35rem;
+  inset: 0;
+  z-index: 20;
+}
+
+.contents-list {
+  position: absolute;
+  z-index: 21;
+  top: 2.9rem;
+  left: 0.6rem;
+  right: 0.6rem;
+  max-width: 28rem;
+  max-height: min(60%, 26rem);
+  overflow: auto;
+  overscroll-behavior: contain;
+  padding: 0.35rem;
+  border: 1px solid var(--rule);
+  border-radius: 16px;
+  background: var(--panel);
+  box-shadow: 0 10px 34px rgba(20, 16, 10, 0.22);
+  transform-origin: top center;
+  animation: list-down 0.16s ease-out;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .contents-list {
+    animation: none;
+  }
+}
+
+.contents-list ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.contents-list li button {
+  width: 100%;
+  min-height: 2.6rem;
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.35rem 0.6rem 0.35rem calc(0.6rem + var(--depth, 0) * 0.9rem);
+  border: 0;
+  border-radius: 9px;
+  background: none;
+  text-align: left;
+}
+
+.contents-list li.on button {
+  background: var(--accent-soft);
+  font-weight: 600;
+}
+
+/* A heading is a line; a question asked may run to two. */
+.contents-label {
+  flex: 1 1 0;
+  min-width: 0;
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+}
+
+.contents-list .muted {
+  flex: none;
 }
 
 /* The panes, one over another in the same place: the one on show is seen, the
@@ -3730,9 +3861,8 @@ button.turn-selection:hover {
 }
 
 /* The bar along the bottom, afloat over the pane: the three panes in a
-   capsule, and beside it, set apart, the library they are filled from. Inset
-   from the edges of the screen and from the home indicator; what is behind
-   shows through it, blurred, where the browser can do that. */
+   capsule. Inset from the edges of the screen and from the home indicator;
+   what is behind shows through it, blurred, where the browser can do that. */
 .shell.phone {
   --bar-height: 3.5rem;
   --bar-bottom: max(0.6rem, env(safe-area-inset-bottom, 0px));
@@ -3761,8 +3891,7 @@ button.turn-selection:hover {
   pointer-events: none;
 }
 
-.phone-tabs,
-.phone-library {
+.phone-tabs {
   pointer-events: auto;
   height: var(--bar-height);
   border: 1px solid color-mix(in srgb, var(--ink) 11%, transparent);
@@ -3773,8 +3902,7 @@ button.turn-selection:hover {
 }
 
 @supports ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
-  .phone-tabs,
-  .phone-library {
+  .phone-tabs {
     /* Mostly the panel's own colour: what is behind tints it, and the names
        on it stay easy to read whatever that is. */
     background: color-mix(in srgb, var(--panel) 90%, transparent);
@@ -3819,8 +3947,7 @@ button.turn-selection:hover {
   }
 }
 
-.phone-tab,
-.phone-library {
+.phone-tab {
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -3842,8 +3969,7 @@ button.turn-selection:hover {
   transition: color 0.15s ease;
 }
 
-.phone-tab.on,
-.phone-library.on {
+.phone-tab.on {
   color: var(--accent);
 }
 
@@ -4034,20 +4160,6 @@ button.turn-selection:hover {
   background: var(--panel);
   color: var(--accent);
   font-weight: 550;
-}
-
-.phone-library {
-  flex: none;
-  width: var(--bar-height);
-  border-radius: 50%;
-}
-
-.phone-library.on {
-  background: var(--accent-soft);
-}
-
-.phone-library .phone-tab-name {
-  font-size: 0.6rem;
 }
 
 /* Nothing sits hidden under the bar: each pane keeps its foot clear of it.
@@ -4333,11 +4445,22 @@ button.turn-selection:hover {
 .shell.phone .editor-bar {
   flex-wrap: wrap;
   row-gap: 0.3rem;
-  padding: 0.3rem 0.75rem;
+  min-height: 2.9rem;
+  padding: 0.15rem 0.4rem 0.15rem 0.75rem;
 }
 
-.shell.phone .editor-bar .editor-title {
-  flex: 1 1 0;
+/* The way to the panel about the text is at the far end of the first line,
+   as it is in the paper's: while the text is edited, what can be done to it
+   has the line below to itself. */
+.shell.phone .editor:not(.reading) .editor-bar .editor-actions {
+  order: 3;
+  flex-basis: 100%;
+  justify-content: flex-end;
+}
+
+/* The chat's line is ruled off from the conversation under it. */
+.shell.phone .chat .pane-head {
+  border-bottom: 1px solid var(--rule);
 }
 
 .shell.phone .editor-bar .editor-actions {
@@ -4380,20 +4503,6 @@ button.turn-selection:hover {
   flex-wrap: wrap;
   gap: 0.2rem;
   padding: 0.3rem 0.4rem;
-}
-
-/* Which paper this is, on a slim line of its own over the controls: a panel
-   this narrow drops the name from the bar, and on a phone nothing else on the
-   screen says it. */
-@container (max-width: 560px) {
-  .shell.phone .pdf-bar .pdf-title {
-    display: block;
-    order: -1;
-    flex: 1 1 100%;
-    margin: 0;
-    padding: 0 0.15rem;
-    font-size: 0.86rem;
-  }
 }
 
 /* A tablet held upright has the same layout, and more width than some of it
@@ -4474,4 +4583,16 @@ button.turn-selection:hover {
 .shell.phone .library,
 .shell.phone .conv-menu {
   overscroll-behavior: contain;
+}
+
+/* The way to the tags the papers are narrowed by, where the panel that holds
+   them is a sheet: among the library's tools, and marked while any is chosen. */
+button.import.filters {
+  background: none;
+  color: inherit;
+}
+
+button.import.filters.on {
+  border-color: var(--accent);
+  color: var(--accent);
 }

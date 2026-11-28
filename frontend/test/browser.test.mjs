@@ -1177,7 +1177,20 @@ describeOrSkip('the application on a phone, in Firefox', () => {
 
   /** A note from the library: the first one, which is to hold a citation. */
   const openTheNote = async () => {
-    if (!(await where()).library) await press('[data-action="library"]')
+    // To the library by way of the Notes tab: from its empty pane, or from the
+    // list of what is open that a press on the tab already on lets up.
+    if (!(await where()).library) {
+      if ((await where()).tab !== 'text') await press('.phone-tab[data-tab="text"]')
+      if (await inFrame(`return !!one('.main .empty-pane')`)) {
+        await press('.main [data-action="open-from-library"]')
+      } else {
+        // Not at once: the second press of a double tap is not a request for the list.
+        await new Promise((resolve) => setTimeout(resolve, 800))
+        await press('.phone-tab[data-tab="text"]')
+        await waitInFrame(`!!one('.open-list')`, 'the list of what is open')
+        await press('.open-list [data-action="open-another"]')
+      }
+    }
     await waitInFrame(`!!one('.body > .library')`, 'the library')
     await press('.library [data-show="notes"]')
     await waitInFrame(`!!one('.library .card.note')`, 'the notes')
@@ -1196,27 +1209,33 @@ describeOrSkip('the application on a phone, in Firefox', () => {
        return {
          window: [W.innerWidth, W.innerHeight],
          page: [D.documentElement.scrollWidth, D.documentElement.scrollHeight],
-         text: box('.body > .main'), tabs: box('.phone-tabs'), library: box('.phone-library'), top: box('.topbar'),
+         text: box('.body > .main'), tabs: box('.phone-tabs'), top: box('.topbar'), session: box('.topbar .conv-button'),
+         title: one('.main .pane-title-text').textContent, info: box('.main [data-action="about"]'),
          mark: box('.phone-tabs-mark'), on: box('.phone-tab[aria-current="page"]'),
          topbarFits: one('.topbar').scrollWidth <= one('.topbar').clientWidth,
-         inTopBar: all('.topbar h1, .topbar [data-action="library"], .topbar .sessions').length,
+         inTopBar: all('.topbar h1, .topbar [data-action="library"], .topbar [data-action="about"], .topbar .sessions').length,
+         besideTabs: one('.phone-bar').children.length - 1,
          rails: all('.rail, .sidebar').length,
-         targets: all('.phone-tab, .phone-library').map((node) => { const b = node.getBoundingClientRect(); return Math.min(b.width, b.height) }),
+         targets: all('.phone-tab, .topbar .conv-button, .main [data-action="about"]').map((node) => { const b = node.getBoundingClientRect(); return Math.min(b.width, b.height) }),
        }`,
     )
     assert.deepEqual(layout.page, layout.window, 'the page itself scrolls')
     assert.deepEqual(layout.text.slice(0, 2), [0, WIDTH], 'the text does not fill the width')
     assert.equal(layout.text[3], HEIGHT, 'the pane does not run to the foot of the window')
-    // The bar floats: inset from the edges, the library a circle set apart from the tabs.
-    assert.ok(layout.tabs[0] >= 8 && layout.library[1] <= WIDTH - 8, `the bar is not inset: ${JSON.stringify(layout)}`)
+    // The bar floats: a capsule inset from the edges, with the tabs and nothing beside them.
+    assert.ok(layout.tabs[0] >= 8 && layout.tabs[1] <= WIDTH - 8, `the bar is not inset: ${JSON.stringify(layout)}`)
+    assert.equal(layout.besideTabs, 0, 'something is beside the tabs')
     assert.ok(layout.tabs[3] <= HEIGHT - 8 && layout.tabs[2] > HEIGHT - 90, `the bar is not afloat at the bottom: ${layout.tabs}`)
-    assert.ok(layout.library[0] - layout.tabs[1] >= 6, 'the library is not set apart from the tabs')
     assert.ok(layout.targets.every((size) => size >= 44), `a target is under 44px: ${layout.targets}`)
     // The mark is under the tab that is on.
     assert.ok(Math.abs(layout.mark[0] - layout.on[0]) <= 1 && Math.abs(layout.mark[1] - layout.on[1]) <= 1, `the mark is not on the tab: ${layout.mark} | ${layout.on}`)
-    // The top bar is the session's, and fits.
+    // The top bar is the session's alone, a capsule as the bar below is, and fits.
     assert.ok(layout.topbarFits, 'the top bar does not fit')
-    assert.equal(layout.inTopBar, 0, 'the project, the library or the row of sessions is in the top bar')
+    assert.equal(layout.inTopBar, 0, 'the project, the library, the way to the panel or the row of sessions is in the top bar')
+    assert.ok(layout.session[0] >= 8 && layout.session[1] <= WIDTH - 8, `the session's capsule is not inset: ${layout.session}`)
+    // What is open is named in the pane's own line, with the way to the panel about it at the far end.
+    assert.ok(layout.title.length > 0, 'the text is not named in its pane')
+    assert.ok(layout.info[1] <= WIDTH && layout.info[1] >= WIDTH - 16 && layout.info[2] >= layout.top[3] - 1, `the way to the panel is not at the end of the text's line: ${layout.info}`)
     assert.equal(layout.rails, 0, 'the strips and the panel of a wide window are here')
 
     // Nothing of the note is left under the bar: scrolled to its end, the
@@ -1275,7 +1294,7 @@ describeOrSkip('the application on a phone, in Firefox', () => {
     assert.ok(paper.inView, 'the passage is not in view')
     // The pane says which paper it is: the tab no longer does.
     const title = await inFrame(
-      `const name = one('.source .pdf-title'); const box = name.getBoundingClientRect()
+      `const name = one('.source .pane-title-text'); const box = name.getBoundingClientRect()
        return { text: name.textContent, width: Math.round(box.width), right: Math.round(box.right) }`,
     )
     assert.ok(title.text.length > 0 && title.width > 100 && title.right <= WIDTH, `the paper is not named: ${JSON.stringify(title)}`)

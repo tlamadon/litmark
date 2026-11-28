@@ -17,10 +17,12 @@ import {
   rectangularSelection,
   crosshairCursor,
 } from '@codemirror/view'
+import type { ComponentChildren } from 'preact'
 import { useEffect, useRef, useState } from 'preact/hooks'
 
 import { ApiError } from '../api'
 import { headingsOf } from '../outline'
+import { PaneTitle } from '../PaneHead'
 import type { KnownPaper } from '../papers'
 import {
   citationsOf,
@@ -97,6 +99,14 @@ export interface MarkdownEditorProps {
   registerGoto?: (goto: (headingIndex: number) => void) => void
   /** What is open, named in the bar itself rather than on a line of its own. */
   title?: string
+  /**
+   * The bar is the head of a pane that fills the window: the title is then
+   * drawn as every pane's is, and is the handle on the text's contents —
+   * pressed, where there is `onPress`, to let its headings down.
+   */
+  paneTitle?: { open: boolean; onPress?: () => void }
+  /** Drawn at the far end of the bar: there, the way to the panel about the text. */
+  barEnd?: ComponentChildren
 }
 
 /** A step back: what it goes to, and the going. */
@@ -544,11 +554,19 @@ export function MarkdownEditor(props: MarkdownEditorProps) {
             ←
           </button>
         )}
-        {props.title && (
-          <h2 class="editor-title" title={props.title}>
-            {props.title}
-          </h2>
-        )}
+        {props.title &&
+          (props.paneTitle ? (
+            <PaneTitle
+              title={props.title}
+              open={props.paneTitle.open}
+              onPress={props.paneTitle.onPress}
+              contents="its headings"
+            />
+          ) : (
+            <h2 class="editor-title" title={props.title}>
+              {props.title}
+            </h2>
+          ))}
         <SaveIndicator state={state} />
         {plain && (
           <span
@@ -616,6 +634,7 @@ export function MarkdownEditor(props: MarkdownEditorProps) {
           </button>
           )}
         </div>
+        {props.barEnd}
       </div>
 
       {state.kind === 'conflict' && (

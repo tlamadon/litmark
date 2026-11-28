@@ -59,6 +59,11 @@ export interface SidebarProps {
   onGotoPage: (page: number) => void
   related: RelatedToNote | RelatedToPaper | null
 
+  /**
+   * Leave out the two tables of contents: where each pane has them under its
+   * own title, the panel is about the thing itself and what it is tied to.
+   */
+  withoutContents?: boolean
   /** Fold the panel away, to a strip at the edge that brings it back. */
   onCollapse: () => void
   onOpenNote: (noteId: string) => void
@@ -144,7 +149,7 @@ export function Sidebar(props: SidebarProps) {
           {note && <NoteAbout key={note.note_id} note={note} onDelete={props.onDeleteNote} />}
           {paper && <PaperAbout key={paper.document_id} document={paper} {...props} />}
 
-          {props.headings.length > 0 && (
+          {!props.withoutContents && props.headings.length > 0 && (
             <section>
               <h3>Contents</h3>
               <ul class="toc">
@@ -162,7 +167,7 @@ export function Sidebar(props: SidebarProps) {
             </section>
           )}
 
-          {onShow && props.outline.length > 0 && (
+          {!props.withoutContents && onShow && props.outline.length > 0 && (
             <section>
               <h3 title={onShow.display_title}>In the paper</h3>
               <ul class="toc">

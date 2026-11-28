@@ -39,7 +39,9 @@ import type { OpenTarget } from './chat/describe'
 import { MarkdownEditor, type RevealResult } from './editor/MarkdownEditor'
 import { EventStream, type ServerEvent } from './events'
 import { Library } from './Library'
+import { renderMathText } from './markdown'
 import { headingsOf } from './outline'
+import { ContentsList, InfoButton, PaneHead, PaneTitle } from './PaneHead'
 import { nameOf, papersOf } from './papers'
 import {
   AboutSheet,
@@ -293,7 +295,11 @@ export function App() {
   // Which of the two lists is up, on a phone.
   const [openList, setOpenList] = useState<'text' | 'paper' | null>(null)
   // The panel about what is open, as a sheet over the pane.
-  const [aboutOpen, setAboutOpen] = useState(false)
+  // Asked for from a pane, it is about what is in that pane; over the library,
+  // it holds the tags the papers are narrowed by.
+  const [aboutFor, setAboutFor] = useState<'text' | 'paper' | 'library' | null>(null)
+  // The contents of what is in a pane, let down from its title.
+  const [contentsFor, setContentsFor] = useState<'text' | 'paper' | null>(null)
   // The bar along the bottom gets out of the way of the keyboard.
   const typing = useTyping(phone)
   // Conversations with a reply that came in while their chat was not on show.
@@ -1417,11 +1423,16 @@ export function App() {
   // What the panel on the left is about: the note, or the paper — the one
   // whose summary is open, or failing that the one being read.
   const subject = useMemo<Subject>(() => {
+    // On a phone the panel is asked for from the paper's own line, too: it is
+    // then about that paper, whatever the text beside it is.
+    if (phone && aboutFor === 'paper' && openDocument) {
+      return { kind: 'paper', documentId: openDocument.document_id }
+    }
     if (target.kind === 'note') return { kind: 'note', noteId: target.noteId }
     if (target.kind === 'summary') return { kind: 'paper', documentId: target.documentId }
     if (target.kind === 'skill') return { kind: 'skill' }
     return openDocument ? { kind: 'paper', documentId: openDocument.document_id } : null
-  }, [target, openDocument?.document_id])
+  }, [target, openDocument?.document_id, phone, aboutFor])
   const subjectKey = !subject
     ? ''
     : subject.kind === 'note'
@@ -1525,8 +1536,10 @@ export function App() {
   }, [looking])
   useEffect(() => {
     paneSince.current = performance.now()
-    // The list of what is open belongs to the pane it was asked from.
+    // The list of what is open belongs to the pane it was asked from, and so
+    // do the contents let down from its title.
     setOpenList(null)
+    setContentsFor(null)
   }, [pane])
   // A window widened past a phone, but not to where the text and the paper
   // go side by side, shows one of the two: the one that was on show here.
@@ -1535,7 +1548,7 @@ export function App() {
   }, [pane])
   /** The library, on the notes or on the papers: what a pane is filled from. */
   const openLibrary = (kind: LibraryKind | null): void => {
-    setAboutOpen(false)
+    setAboutFor(null)
     setOpenList(null)
     setLibraryKind(kind)
     setLibrary(true)
@@ -1547,7 +1560,7 @@ export function App() {
   }, [phone, pane])
   // The sheet is the phone's; a window grown wide has the panel at its side.
   useEffect(() => {
-    if (!phone) setAboutOpen(false)
+    if (!phone) setAboutFor(null)
   }, [phone])
 
   if (fatal !== null) {
@@ -1689,7 +1702,7 @@ export function App() {
   const fromSheet = <A extends unknown[]>(act: (...args: A) => void): ((...args: A) => void) =>
     phone
       ? (...args) => {
-          setAboutOpen(false)
+          setAboutFor(null)
           act(...args)
         }
       : act
@@ -1726,7 +1739,8 @@ export function App() {
 
   const sidebar = (
     <Sidebar
-      onCollapse={() => (phone ? setAboutOpen(false) : setShowSidebar(false))}
+      onCollapse={() => (phone ? setAboutFor(null) : setShowSidebar(false))}
+      withoutContents={phone}
       library={inLibrary}
       documents={state.documents}
       notes={state.notes}
@@ -1767,7 +1781,7 @@ export function App() {
       onDeleteNote={
         phone
           ? async (noteId) => {
-              setAboutOpen(false)
+              setAboutFor(null)
               await deleteNote(noteId)
             }
           : deleteNote
@@ -1818,22 +1832,33 @@ export function App() {
               project={state.project}
               row={sessionsOpen}
               onPutAway={(id) => void closeSession(id)}
-              lead={<SessionsLead count={sessionsOpen.length} />}
+              lead={
+                <SessionsLead
+                  count={sessionsOpen.length}
+                  needsLooking={
+                    sync !== null &&
+                    (sync.git.state === 'conflict' ||
+                      sync.git.state === 'error' ||
+                      Boolean(sync.storage.error) ||
+                      Boolean(sync.storage.problem))
+                  }
+                />
+              }
+              // What is about the project and this window, not about a session.
+              foot={
+                <>
+                  {syncStatus}
+                  {agentBadge}
+                  {signOut}
+                  <Version connected={connected} />
+                </>
+              }
             />
           }
           reconnecting={!connected}
           // Kept there for as long as the page is: it is what notices that the
           // server has been updated beneath it.
           version={<Version connected={connected} />}
-          aboutOpen={aboutOpen}
-          onAbout={() => setAboutOpen(!aboutOpen)}
-          aboutNeedsLooking={
-            sync !== null &&
-            (sync.git.state === 'conflict' ||
-              sync.git.state === 'error' ||
-              Boolean(sync.storage.error) ||
-              Boolean(sync.storage.problem))
-          }
         />
       ) : (
       <header class="topbar">
@@ -1882,18 +1907,16 @@ export function App() {
 
       <div class="body" style={{ '--chat-width': `${chatWidth}px` }}>
         {phone ? (
-          aboutOpen && (
+          aboutFor !== null && (
             <AboutSheet
-              label={inLibrary ? 'Tags, and this window' : 'About what is open'}
-              onClose={() => setAboutOpen(false)}
-              foot={
-                <>
-                  {syncStatus}
-                  {agentBadge}
-                  {signOut}
-                  <Version connected={connected} />
-                </>
+              label={
+                aboutFor === 'library'
+                  ? 'Tags'
+                  : aboutFor === 'paper'
+                    ? 'About this paper'
+                    : 'About this text'
               }
+              onClose={() => setAboutFor(null)}
             >
               {sidebar}
             </AboutSheet>
@@ -1916,6 +1939,7 @@ export function App() {
         {inLibrary && (
           <Library
             show={phone ? (libraryKind ?? undefined) : undefined}
+            onFilters={phone ? () => setAboutFor('library') : undefined}
             documents={state.documents}
             notes={state.notes}
             tags={state.tags}
@@ -1978,7 +2002,34 @@ export function App() {
                   setTarget({ kind: 'note', noteId })
                   toText()
                 }}
-                back={textBefore ? { to: titleOf(textBefore.target), go: stepBackText } : null}
+                // On a phone the way back is there only when there is somewhere to go back to.
+                back={
+                  textBefore
+                    ? { to: titleOf(textBefore.target), go: stepBackText }
+                    : phone
+                      ? undefined
+                      : null
+                }
+                paneTitle={
+                  phone
+                    ? {
+                        open: contentsFor === 'text',
+                        onPress:
+                          headings.length > 0
+                            ? () => setContentsFor(contentsFor === 'text' ? null : 'text')
+                            : undefined,
+                      }
+                    : undefined
+                }
+                barEnd={
+                  phone ? (
+                    <InfoButton
+                      open={aboutFor === 'text'}
+                      label="About this text"
+                      onPress={() => setAboutFor(aboutFor === 'text' ? null : 'text')}
+                    />
+                  ) : undefined
+                }
                 onPlace={(position) => textPlaces.current.set(docKey, position)}
                 // Where it was left: stepped back to, or put back from under the library.
                 startAt={textPlaces.current.get(docKey)}
@@ -2006,6 +2057,23 @@ export function App() {
               <div class="empty">
                 <p>Opening…</p>
               </div>
+            )}
+            {phone && contentsFor === 'text' && (
+              <ContentsList
+                label="The headings of this text"
+                items={headings.map((heading, index) => ({
+                  key: String(index),
+                  label: heading.text,
+                  // Escaped, and nothing but its mathematics drawn.
+                  html: renderMathText(heading.text),
+                  depth: heading.level - 1,
+                }))}
+                onPick={(key) => {
+                  setContentsFor(null)
+                  gotoHeadingRef.current?.(Number(key))
+                }}
+                onDismiss={() => setContentsFor(null)}
+              />
             )}
           </main>
         )}
@@ -2062,7 +2130,32 @@ export function App() {
                       to: `p. ${paperBefore.page}${paperBeforeName ? ` of ${paperBeforeName}` : ''}`,
                       go: stepBackPaper,
                     }
-                  : null
+                  : phone
+                    ? undefined
+                    : null
+              }
+              // The paper's own line on a phone: which paper, its sections
+              // under that, and the way to the panel about it.
+              head={
+                phone ? (
+                  <PaneHead>
+                    <PaneTitle
+                      title={openDocument.label ?? openDocument.display_title}
+                      open={contentsFor === 'paper'}
+                      onPress={
+                        outline.length > 0
+                          ? () => setContentsFor(contentsFor === 'paper' ? null : 'paper')
+                          : undefined
+                      }
+                      contents="its sections"
+                    />
+                    <InfoButton
+                      open={aboutFor === 'paper'}
+                      label="About this paper"
+                      onPress={() => setAboutFor(aboutFor === 'paper' ? null : 'paper')}
+                    />
+                  </PaneHead>
+                ) : undefined
               }
               onJump={leavePage}
               inkNews={inkNews}
@@ -2081,6 +2174,26 @@ export function App() {
                 setSourceTakesOver(false)
               }}
             />
+            {phone && contentsFor === 'paper' && (
+              <ContentsList
+                label="The sections of this paper"
+                items={outline.map((item, index) => ({
+                  key: String(index),
+                  label: item.title,
+                  depth: item.level - 1,
+                  note: String(item.page),
+                }))}
+                onPick={(key) => {
+                  setContentsFor(null)
+                  const section = outline[Number(key)]
+                  if (!section) return
+                  leavePage()
+                  setGotoPage(section.page)
+                  setGotoNonce((value) => value + 1)
+                }}
+                onDismiss={() => setContentsFor(null)}
+              />
+            )}
           </aside>
         )}
 
@@ -2207,7 +2320,7 @@ export function App() {
           counts={{ text: textsOpen.length, paper: papersOpen.length }}
           chat={chatSign(onScreen, conversationId !== null && waiting.has(conversationId))}
           onSelect={(tab) => {
-            setAboutOpen(false)
+            setAboutFor(null)
             if (tab === pane) {
               // The tab already on: what else is open here, to go to — or the
               // library at its kind, where nothing is.
@@ -2221,12 +2334,6 @@ export function App() {
             // A tab is somewhere to be: the library gives way to it.
             setLibrary(false)
             setPhoneTab(tab)
-          }}
-          onLibrary={() => {
-            setAboutOpen(false)
-            setOpenList(null)
-            setLibraryKind(null)
-            setLibrary(!inLibrary)
           }}
         />
       )}

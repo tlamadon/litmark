@@ -911,8 +911,9 @@ test('on a phone: the session at the top, one pane at a time, and a bar afloat a
   // The shell knows it is a phone, and the stylesheet hangs off that.
   assert.ok(shell.classList.contains('phone'), shell.className)
 
-  // The top bar is the session's: its name with the menu behind it, and the
-  // way to the panel. Not the project, not the library, not a row of tabs.
+  // The top bar is the session's: its name with the list of the others behind
+  // it. Not the project, not the library, not a row of tabs — and not the way
+  // to the panel about what is on show, which is in the pane's own line.
   assert.equal(root.querySelector('.topbar h1'), null, 'the project has a place in the bar')
   assert.equal(root.querySelector('.topbar [data-action="library"]'), null, 'the library is in the top bar')
   assert.equal(root.querySelector('.topbar .sessions'), null, 'the row of sessions does not fit')
@@ -920,7 +921,7 @@ test('on a phone: the session at the top, one pane at a time, and a bar afloat a
     (root.querySelector('.topbar .conv-button')?.textContent ?? '').includes('What does the paper assume?'),
     'the session on screen is not named',
   )
-  assert.ok(root.querySelector('.topbar [data-action="about"]'), 'no way to the panel')
+  assert.equal(root.querySelector('.topbar [data-action="about"]'), null, 'the way to the panel is by the session')
   assert.equal(root.querySelector('.topbar .sync-button'), null)
   assert.equal(root.querySelector('.topbar [data-action="sign-out"]'), null)
   // The version is kept an eye on from there — its number is not drawn — and
@@ -933,7 +934,7 @@ test('on a phone: the session at the top, one pane at a time, and a bar afloat a
   assert.equal(root.querySelector('.chat-splitter, .source-splitter'), null)
 
   // The bar along the bottom: three tabs, each an icon and a short name, and
-  // the library set apart from them.
+  // nothing else — the library is reached from the tabs themselves.
   const bar = root.querySelector('.phone-bar')
   assert.ok(bar, 'no bar along the bottom')
   assert.deepEqual(
@@ -944,15 +945,11 @@ test('on a phone: the session at the top, one pane at a time, and a bar afloat a
     ]),
     [['Notes', 1, 2], ['Papers', 1, 2], ['Chat', 1, 2]],
   )
-  const library = bar.querySelector(':scope > [data-action="library"]')
-  assert.ok(library, 'the library is not beside the tabs')
-  assert.equal(library.closest('.phone-tabs'), null, 'the library is one of the tabs')
-  assert.equal(library.getAttribute('aria-label'), 'Library')
+  assert.equal(bar.children.length, 1, 'something is beside the tabs')
+  assert.equal(root.querySelector('[data-action="library"]'), null, 'there is a Library button')
 
-  // Nothing is open: the library is what is shown, its button is on, and no
-  // tab is. The two with nothing behind them are quieter — and not disabled.
+  // Nothing is open: the library is what is shown, and no tab is on. The two with nothing behind them are quieter — and not disabled.
   assert.ok(inLibrary(), 'the library is not where one starts')
-  assert.equal(library.getAttribute('aria-pressed'), 'true')
   assert.equal(bar.querySelector('.phone-tabs').dataset.on, 'none')
   assert.deepEqual(tabs(), [['text', false, true], ['paper', false, true], ['chat', false, false]])
   assert.equal(bar.querySelector('[aria-disabled="true"], [disabled]'), null, 'a tab cannot be pressed')
@@ -966,7 +963,6 @@ test('on a phone: the session at the top, one pane at a time, and a bar afloat a
   assert.equal(inLibrary(), false, 'a tab did not put the library away')
   assert.deepEqual(panes(), { main: true, source: false, 'chat-drawer': false })
   assert.equal(bar.querySelector('.phone-tabs').dataset.on, 'text')
-  assert.equal(library.getAttribute('aria-pressed'), 'false')
   const noText = root.querySelector('.main .empty-pane')
   assert.equal(noText?.querySelector('p').textContent, 'No note or summary open')
   assert.deepEqual([...noText.querySelectorAll('button')].map((node) => node.textContent), ['Open a note', 'New note'])
@@ -984,24 +980,30 @@ test('on a phone: the session at the top, one pane at a time, and a bar afloat a
   click(noPaper.querySelector('[data-action="open-from-library"]'))
   await settle(30)
   assert.equal(libraryOn(), 'papers', 'the library did not open on the papers')
-  // The button beside the tabs takes the library away again, and brings it back.
-  click(library)
+  // Over the library the panel holds the tags to narrow the papers by: the
+  // way to it is among the library's own tools.
+  click(root.querySelector('.library [data-action="filters"]'))
   await settle(30)
-  assert.equal(inLibrary(), false)
-  click(library)
+  assert.equal(root.querySelector('.sheet')?.getAttribute('aria-label'), 'Tags')
+  assert.ok(root.querySelector('.sheet .tag-filter'), 'the sheet over the library has no tags')
+  click(root.querySelector('[data-action="close-about"]'))
   await settle(30)
-  assert.ok(inLibrary())
+  assert.equal(root.querySelector('.sheet'), null)
 
-  // The chat, with nothing open. It has no header: the session is named in
-  // the top bar, there is no edge to fold it to, and the verbatim view is not
-  // offered here. The room is the conversation's.
+  // The chat, with nothing open. Its header is the one line every pane has:
+  // what is being read — the question the answer was given to. The session
+  // is named in the top bar, there is no edge to fold the chat to, and the
+  // verbatim view is not offered here.
   click(tab('chat'))
   await settle(30)
   assert.equal(inLibrary(), false)
   assert.deepEqual(panes(), { main: false, source: false, 'chat-drawer': true })
   assert.equal(tab('chat').getAttribute('aria-current'), 'page')
   assert.ok(root.querySelector('.chat-drawer .turn'), 'the conversation is not drawn')
-  assert.equal(root.querySelector('.chat-head'), null, 'the chat has a header')
+  assert.equal(root.querySelector('.chat-head'), null, 'the chat has the wide window\'s header')
+  assert.equal(root.querySelector('.chat .pane-head .pane-title-text')?.textContent, 'What does the paper assume?')
+  // One thing was asked: there is no list of them to let down.
+  assert.equal(root.querySelector('.chat .pane-head button'), null)
   assert.equal(root.querySelector('.view-tabs'), null, 'the transcript is offered')
   assert.equal(root.querySelector('[data-action="hide-chat"]'), null)
 
@@ -1050,8 +1052,10 @@ test('on a phone: the session at the top, one pane at a time, and a bar afloat a
   assert.deepEqual(panes(), { main: true, source: false, 'chat-drawer': false })
   assert.deepEqual(tabs(), [['text', true, false], ['paper', false, true], ['chat', false, false]])
   assert.equal(root.querySelector('.main .empty-pane'), null)
-  assert.equal(root.querySelector('.main .editor-title')?.textContent, 'Welcome')
+  assert.equal(root.querySelector('.main .pane-title-text')?.textContent, 'Welcome')
   assert.equal(root.querySelector('.main-head'), null, 'the narrow window\'s "Show the paper" is not the phone\'s')
+  // Nothing was left to get here: there is no way back to draw.
+  assert.equal(root.querySelector('.main [data-action="back"]'), null, 'a way back to nowhere')
   // One note is open in the session, and the tab says so; no paper is.
   assert.deepEqual(counts(), ['1', null, null])
 
@@ -1135,8 +1139,8 @@ test('on a phone: the session at the top, one pane at a time, and a bar afloat a
   assert.equal(sessionsOpen(), '2')
   assert.deepEqual(panes(), { main: true, source: false, 'chat-drawer': false })
   assert.deepEqual(tabs(), [['text', true, false], ['paper', false, false], ['chat', false, false]])
-  assert.equal(root.querySelector('.main .editor-title')?.textContent, 'Summary — A Paper')
-  assert.equal(root.querySelector('.source .pdf-title')?.textContent, 'A Paper', 'the paper is not named on its pane')
+  assert.equal(root.querySelector('.main .pane-title-text')?.textContent, 'Summary — A Paper')
+  assert.equal(root.querySelector('.source .pane-title-text')?.textContent, 'A Paper', 'the paper is not named on its pane')
   assert.equal(root.querySelector('.source .empty-pane'), null)
   assert.equal(root.querySelector('.source > .back'), null, 'the narrow window\'s way back is not the phone\'s')
   click(tab('paper'))
@@ -1146,34 +1150,71 @@ test('on a phone: the session at the top, one pane at a time, and a bar afloat a
   await settle(300)
   assert.deepEqual(panes(), { main: true, source: false, 'chat-drawer': false })
   assert.deepEqual(tabs(), [['text', true, false], ['paper', false, true], ['chat', false, false]])
-  assert.equal(root.querySelector('.main .editor-title')?.textContent, 'Welcome')
+  assert.equal(root.querySelector('.main .pane-title-text')?.textContent, 'Welcome')
   await pick('The other line of work')
   await settle(300)
   assert.deepEqual(panes(), { main: false, source: true, 'chat-drawer': false }, 'not on the tab it was left on')
   await pick('What does the paper assume?')
   await settle(300)
 
-  // The panel is a sheet: what the note is, its contents, what it is tied
-  // to — and, at its foot, what a wide window keeps at the end of the top bar.
-  click(root.querySelector('[data-action="about"]'))
+  // The text's own line: its title, which is the handle on its contents, and
+  // at the far end the way to the panel about it.
+  const title = root.querySelector('.main .editor-bar .pane-title')
+  assert.equal(title?.tagName, 'BUTTON', 'the title does not open the contents')
+  click(title)
+  await settle(30)
+  assert.deepEqual(
+    [...root.querySelectorAll('.main .contents-list li')].map((node) => node.textContent),
+    ['Welcome', 'Further down'],
+  )
+  click(root.querySelectorAll('.main .contents-list button')[1])
+  await settle(30)
+  assert.equal(root.querySelector('.contents-list'), null, 'the contents stayed down')
+
+  // What is about the project and this window is at the foot of the list of
+  // sessions: where it stands with git, signing out, the version.
+  click(root.querySelector('.topbar .conv-button'))
+  await settle(100)
+  const foot = root.querySelector('.topbar .conv-menu .menu-foot')
+  assert.ok((foot?.querySelector('.sync-button')?.textContent ?? '').includes('2 to save'))
+  assert.equal(foot.querySelector('[data-action="sign-out"]')?.textContent, 'Sign out')
+  assert.equal(foot.querySelector('.version-number')?.textContent, 'v0.3.8')
+  click(root.querySelector('.topbar .conv-button'))
+  await settle(30)
+
+  // The panel is a sheet, about the text whose line it was asked for from:
+  // what the note is and what it is tied to. Not its contents, which are
+  // under the title; not what is about the project.
+  click(root.querySelector('.main [data-action="about"]'))
   await settle(50)
   const sheet = root.querySelector('.sheet')
   assert.ok(sheet, 'no sheet')
+  assert.equal(sheet.getAttribute('aria-label'), 'About this text')
   assert.equal(sheet.querySelector('.about strong')?.textContent, 'Welcome')
-  assert.deepEqual(
-    [...sheet.querySelectorAll('.toc button')].map((node) => node.textContent),
-    ['Welcome', 'Further down'],
-  )
-  assert.ok((sheet.querySelector('.sheet-foot .sync-button')?.textContent ?? '').includes('2 to save'))
-  assert.equal(sheet.querySelector('.sheet-foot [data-action="sign-out"]')?.textContent, 'Sign out')
-  assert.equal(sheet.querySelector('.sheet-foot .version-number')?.textContent, 'v0.3.8')
+  assert.equal(sheet.querySelector('.toc'), null, 'the contents are in the panel too')
+  assert.equal(sheet.querySelector('.sheet-foot'), null)
   // An entry does what it does, and the sheet is put away.
   click([...sheet.querySelectorAll('.related button')][0])
   await settle()
   assert.equal(root.querySelector('.sheet'), null, 'the sheet stayed up')
-  // A paper: its summary on Text, the PDF behind the Paper tab.
+  // A paper: its summary on Notes, the PDF behind the Papers tab.
   assert.deepEqual(panes(), { main: true, source: false, 'chat-drawer': false })
   assert.deepEqual(tabs(), [['text', true, false], ['paper', false, false], ['chat', false, false]])
+  // The note was left for the summary: the way back is there now, where it
+  // always was, before the title.
+  const back = root.querySelector('.main .editor-bar [data-action="back"]')
+  assert.ok(back && !back.disabled, 'no way back to the note')
+  assert.equal(back.nextElementSibling, root.querySelector('.main .editor-bar .pane-title'))
+  // The paper is named in its own line the same way, and the panel asked for
+  // from there is about the paper.
+  assert.equal(root.querySelector('.source .pane-head .pane-title-text')?.textContent, 'A Paper')
+  assert.equal(root.querySelector('.source .pdf-bar .pdf-title'), null, 'the paper is named twice')
+  click(root.querySelector('.source .pane-head [data-action="about"]'))
+  await settle(50)
+  assert.equal(root.querySelector('.sheet')?.getAttribute('aria-label'), 'About this paper')
+  assert.equal(root.querySelector('.sheet .about strong')?.textContent, 'A Paper')
+  click(root.querySelector('[data-action="close-about"]'))
+  await settle(30)
 
   // Two texts are open in the session now, and a paper. The list has them in
   // the order they were opened, goes to either, and closes them.
@@ -1185,7 +1226,7 @@ test('on a phone: the session at the top, one pane at a time, and a bar afloat a
   click(root.querySelector('.open-list li:first-child .open-item'))
   await settle()
   assert.equal(root.querySelector('.open-list'), null, 'the list stayed up')
-  assert.equal(root.querySelector('.main .editor-title')?.textContent, 'Welcome')
+  assert.equal(root.querySelector('.main .pane-title-text')?.textContent, 'Welcome')
   assert.deepEqual(counts(), ['2', '1', null], 'going to one closed another')
   // Closing the one on show goes to the one beside it; nothing is deleted.
   await settle(750)
@@ -1194,7 +1235,7 @@ test('on a phone: the session at the top, one pane at a time, and a bar afloat a
   assert.deepEqual(listed(), [['Welcome', true], ['Summary — A Paper', false]])
   click(root.querySelector('.open-list li.on .open-close'))
   await settle()
-  assert.equal(root.querySelector('.main .editor-title')?.textContent, 'Summary — A Paper')
+  assert.equal(root.querySelector('.main .pane-title-text')?.textContent, 'Summary — A Paper')
   assert.deepEqual(listed(), [['Summary — A Paper', true]])
   assert.deepEqual(counts(), ['1', '1', null])
   assert.ok(!window.requests.some((request) => request.startsWith('DELETE')), 'closing deleted something')
