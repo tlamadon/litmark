@@ -41,6 +41,19 @@ def stroke(suffix: str = "1", **changes) -> dict:
     }
 
 
+def mark(suffix: str = "9", **changes) -> dict:
+    """Text marked with the text highlighter: two lines of it, and what they say."""
+    return {
+        "id": f"ink-0000000{suffix}",
+        "page": 1,
+        "tool": "text",
+        "color": "#ffd60a",
+        "rects": [[0.1, 0.2, 0.9, 0.22], [0.1, 0.23, 0.4, 0.25]],
+        "text": "what the two lines say",
+        **changes,
+    }
+
+
 def import_paper(client, data: bytes) -> str:
     document_id = upload(client, "paper.pdf", data)["imported"][0]["document"]["document_id"]
     wait_for_extraction(client, document_id)
@@ -81,6 +94,57 @@ def test_ink_is_saved_and_read_back(services, client, paper_one):
     assert stored["coordinate_space"] == COORDINATE_SPACE
     assert stored["document_sha256"] == services.documents.get(document_id).sha256
     assert sum(line.lstrip().startswith('{"id"') for line in path.read_text().splitlines()) == 2
+
+
+def test_marked_text_is_kept_with_the_strokes_and_says_what_it_marks(services, client, paper_one):
+    document_id = import_paper(client, paper_one)
+    # As a hand leaves it: a line given right to left, one past the edge of
+    # the page, a colour in capitals.
+    drawn = mark(color="#FFD60A", rects=[[0.9, 0.22, 0.1, 0.2], [0.1, 0.23, 1.4, 0.2512345]])
+    saved = save(client, document_id, [stroke(), drawn], None)
+    assert saved.status_code == 200, saved.text
+
+    pen, kept = client.get(f"/api/documents/{document_id}/ink").json()["strokes"]
+    assert pen == stroke()
+    assert kept == mark(rects=[[0.1, 0.2, 0.9, 0.22], [0.1, 0.23, 1.0, 0.2512]])
+    # A mark is its rectangles and its words: it has no width, and no points.
+    assert set(kept) == {"id", "page", "tool", "color", "rects", "text"}
+    # The words are in the file, where a diff of it shows them.
+    path = services.documents.dir_for(document_id) / "ink.json"
+    assert '"text":"what the two lines say"' in path.read_text("utf-8")
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [
+        {"rects": []},
+        {"rects": None},
+        {"rects": [[0.1, 0.2, 0.3]]},
+        {"rects": [[0.1, 0.2, 0.3, "a"]]},
+        {"rects": "0.1,0.2,0.3,0.4"},
+        # On the page it has no size: it marks nothing.
+        {"rects": [[0.3, 0.2, 0.3, 0.4]]},
+        {"rects": [[1.2, 0.2, 1.6, 0.4]]},
+        {"text": 7},
+        {"text": "x" * 10_001},
+        {"color": "yellow"},
+        {"page": 3},
+    ],
+)
+def test_what_is_not_marked_text_is_refused(client, paper_one, bad):
+    document_id = import_paper(client, paper_one)
+    response = save(client, document_id, [mark(**bad)], None)
+    assert response.status_code == 422, response.text
+    assert client.get(f"/api/documents/{document_id}/ink").json()["strokes"] == []
+
+
+def test_a_line_of_no_size_is_left_out_of_a_mark_that_has_others():
+    (kept,) = validate_strokes([mark(rects=[[0.1, 0.2, 0.9, 0.22], [0.5, 0.3, 0.5, 0.3]])], 2)
+    assert kept["rects"] == [[0.1, 0.2, 0.9, 0.22]]
+    # What it says may be left unsaid; it is then nothing, not missing.
+    unsaid = mark()
+    del unsaid["text"]
+    assert validate_strokes([unsaid], 2)[0]["text"] == ""
 
 
 def test_saving_ink_floods_neither_the_history_nor_the_record_of_edits(services, client, paper_one):
@@ -269,6 +333,37 @@ def test_each_stroke_is_an_annotation_another_reader_can_draw(paper_one):
     assert float(pen["/BS"]["/W"]) == pytest.approx(1.53, abs=0.01)
 
 
+def test_marked_text_is_a_highlight_another_reader_knows_as_one(paper_one):
+    exported = annotated_pdf(paper_one, [stroke(), mark()])
+    # Under the pen's lines, as on screen.
+    highlight, pen = _annotations(exported)
+    assert pen["/Subtype"] == "/Ink"
+    assert highlight["/Subtype"] == "/Highlight"
+    assert str(highlight["/NM"]) == "ink-00000009"
+    assert str(highlight["/Contents"]) == "what the two lines say"
+    assert [round(float(v), 2) for v in highlight["/C"]] == [1.0, 0.84, 0.04]
+    assert float(highlight["/CA"]) == pytest.approx(HIGHLIGHTER_OPACITY)
+
+    # Eight numbers to a line: its corners, top-left, top-right, bottom-left,
+    # bottom-right. The page is 612 by 792 points, and its top is at 792.
+    quads = [float(v) for v in highlight["/QuadPoints"]]
+    assert len(quads) == 16
+    assert quads[:8] == pytest.approx(
+        [61.2, 633.6, 550.8, 633.6, 61.2, 617.76, 550.8, 617.76], abs=0.01
+    )
+    rect = [float(v) for v in highlight["/Rect"]]
+    assert rect == pytest.approx([61.2, 594.0, 550.8, 633.6], abs=0.01)
+
+    # An appearance of its own, filled and let through as a highlighter's is.
+    form = highlight["/AP"]["/N"].get_object()
+    assert [float(v) for v in form["/BBox"]] == rect
+    drawn = form.get_data()
+    assert drawn.count(b" h\n") == 2 and drawn.rstrip().endswith(b"f\nQ")
+    state = form["/Resources"]["/ExtGState"]["/Marker"]
+    assert state["/BM"] == "/Multiply"
+    assert float(state["/ca"]) == pytest.approx(HIGHLIGHTER_OPACITY)
+
+
 def test_a_stroke_on_a_page_the_file_does_not_have_is_left_out(paper_one):
     exported = annotated_pdf(paper_one, [stroke(page=9)])
     from pypdf import PdfReader
@@ -329,6 +424,45 @@ def test_a_stroke_over_a_word_is_exported_over_that_word(tmp_path, placing):
     ink = [float(value) for value in annotation["/InkList"][0]]
     assert sorted([ink[0], ink[2]]) == pytest.approx([rect[0] + 2, rect[2] - 2], abs=1.5)
     assert sorted([ink[1], ink[3]]) == pytest.approx([rect[1] + 2, rect[3] - 2], abs=1.5)
+
+
+@pytest.mark.parametrize("placing", PLACINGS)
+def test_text_marked_on_a_word_is_exported_on_that_word(tmp_path, placing):
+    """Rotated or cropped, the word is where it was set, and so is its mark."""
+    pdfium = pytest.importorskip("pypdfium2")
+    from reportlab.pdfbase.pdfmetrics import stringWidth
+
+    data = _marker_pdf(**placing)
+    word = _marker_rect(tmp_path, data)
+    exported = annotated_pdf(data, [mark(color="#00c000", rects=[word], text=MARKER)])
+    (annotation,) = _annotations(exported)
+    rect = [float(value) for value in annotation["/Rect"]]
+
+    left, baseline = MARKER_AT
+    right = left + stringWidth(MARKER, "Helvetica", 11)
+    assert rect[0] == pytest.approx(left, abs=2), rect
+    assert rect[2] == pytest.approx(right, abs=2), rect
+    assert baseline - 5 < rect[1] < baseline + 1, rect
+    assert baseline + 6 < rect[3] < baseline + 13, rect
+
+    # And the picture: green over the word as it is displayed, and nowhere else.
+    page = pdfium.PdfDocument(exported)[0]
+    image = page.render(scale=2, may_draw_forms=False).to_pil().convert("RGB")
+    pixels = image.load()
+    found = [
+        (x, y)
+        for y in range(image.height)
+        for x in range(image.width)
+        if pixels[x, y][1] > pixels[x, y][0] + 40 and pixels[x, y][1] > pixels[x, y][2] + 40
+    ]
+    assert found, "no mark was drawn at all"
+    shown = [
+        min(x for x, _ in found) / image.width,
+        min(y for _, y in found) / image.height,
+        (max(x for x, _ in found) + 1) / image.width,
+        (max(y for _, y in found) + 1) / image.height,
+    ]
+    assert shown == pytest.approx(word, abs=0.012)
 
 
 @pytest.mark.parametrize("placing", PLACINGS)

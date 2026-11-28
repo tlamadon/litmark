@@ -11,6 +11,11 @@
  * the pen is written straight to its path, and becomes one of the paper's
  * strokes when the pen lifts.
  *
+ * The text highlighter is held the same way and marks something else: not
+ * where the pen went but the words it went over, from where it came down to
+ * where it is, as a selection would run — a band on each line of them, drawn
+ * with the highlighter's strokes and kept as one mark (see `textMark.ts`).
+ *
  * A finger's scrolling is done here rather than left to the browser, which
  * would scroll for the pen as well; see `stylusGuard`.
  */
@@ -20,19 +25,26 @@ import { useEffect, useMemo, useRef, useState } from 'preact/hooks'
 import {
   erasedBy,
   HIGHLIGHTER_OPACITY,
+  joinText,
+  lineRects,
   newStrokeId,
+  rectsPath,
   strokePath,
   tidy,
+  tidyRects,
   type InkTool,
+  type LineTool,
   type Point,
+  type Rect,
   type Stroke,
 } from './ink'
+import { between, placeAt, runsOf, type TextPlace, type TextRun } from './textMark'
 
 /** What is in hand: something that draws, or the eraser. */
 export type InkMode = InkTool | 'eraser'
 
-/** A stroke's width for each tool, as a fraction of the page's width. */
-export const TOOL_WIDTH: Record<InkTool, number> = { pen: 0.0025, highlighter: 0.022 }
+/** A stroke's width for each tool that draws a line, as a fraction of the page's width. */
+export const TOOL_WIDTH: Record<LineTool, number> = { pen: 0.0025, highlighter: 0.022 }
 
 /** How far from its centre the eraser rubs out, in pixels on the screen. */
 const ERASER_RADIUS_PX = 9
@@ -101,6 +113,8 @@ interface Gesture {
   mode: InkMode
   /** Where the pointer has been, as fractions of the page. */
   points: Point[]
+  /** With the text highlighter: the page's text, and where in it the pen came down. */
+  text?: { runs: TextRun[]; from: TextPlace | null; rects: Rect[]; words: string }
 }
 
 const NOTHING_ERASED: ReadonlySet<string> = new Set()
@@ -110,6 +124,7 @@ export function InkLayer(props: InkLayerProps) {
   const layer = useRef<HTMLDivElement | null>(null)
   const livePen = useRef<SVGPathElement | null>(null)
   const liveMarker = useRef<SVGPathElement | null>(null)
+  const liveText = useRef<SVGPathElement | null>(null)
   const gesture = useRef<Gesture | null>(null)
   /** A finger moving the paper, where the browser has been told not to: its last place. */
   const panning = useRef<{ pointer: number; x: number; y: number } | null>(null)
@@ -125,7 +140,10 @@ export function InkLayer(props: InkLayerProps) {
     () =>
       props.strokes.map((stroke) => ({
         stroke,
-        d: strokePath(stroke.points, width, height),
+        d:
+          stroke.tool === 'text'
+            ? rectsPath(stroke.rects, width, height)
+            : strokePath(stroke.points, width, height),
       })),
     [props.strokes, width, height],
   )
@@ -160,6 +178,7 @@ export function InkLayer(props: InkLayerProps) {
       gesture.current = null
       livePen.current?.removeAttribute('d')
       liveMarker.current?.removeAttribute('d')
+      liveText.current?.removeAttribute('d')
       rubbed.current = new Set()
       setErased(NOTHING_ERASED)
     }
@@ -178,6 +197,32 @@ export function InkLayer(props: InkLayerProps) {
 
   const liveOf = (tool: InkMode): SVGPathElement | null =>
     tool === 'highlighter' ? liveMarker.current : tool === 'pen' ? livePen.current : null
+
+  /**
+   * The words between where the pen came down and where it is: marked, as
+   * they will be kept, and drawn under the pen.
+   */
+  const markTo = (current: Gesture, event: PointerEvent): void => {
+    const held = current.text
+    if (!held || !held.from) return
+    const to = placeAt(held.runs, [event.clientX, event.clientY])
+    if (!to) return
+    const { boxes, pieces } = between(held.runs, held.from, to)
+    const box = layer.current!.getBoundingClientRect()
+    held.rects = tidyRects(
+      lineRects(
+        boxes.map(([x0, y0, x1, y1]): Rect => [
+          (x0 - box.left) / box.width,
+          (y0 - box.top) / box.height,
+          (x1 - box.left) / box.width,
+          (y1 - box.top) / box.height,
+        ]),
+        box.height / box.width,
+      ),
+    )
+    held.words = joinText(pieces)
+    liveText.current?.setAttribute('d', rectsPath(held.rects, width, height))
+  }
 
   const rub = (from: Point, to: Point): void => {
     const { strokes } = latest.current
@@ -210,7 +255,16 @@ export function InkLayer(props: InkLayerProps) {
     const at = place(event)
     gesture.current = { pointer: event.pointerId, mode, points: [at] }
     if (mode === 'eraser') rub(at, at)
-    else liveOf(mode)?.setAttribute('d', strokePath([at], width, height))
+    else if (mode === 'text') {
+      // The text of the page under the ink, read as the pen comes down.
+      const runs = runsOf(layer.current?.parentElement?.querySelector('.pdf-text-layer') ?? null)
+      gesture.current.text = {
+        runs,
+        from: placeAt(runs, [event.clientX, event.clientY]),
+        rects: [],
+        words: '',
+      }
+    } else liveOf(mode)?.setAttribute('d', strokePath([at], width, height))
   }
 
   const onPointerMove = (event: PointerEvent): void => {
@@ -225,6 +279,12 @@ export function InkLayer(props: InkLayerProps) {
     const current = gesture.current
     if (!current || current.pointer !== event.pointerId) return
     event.preventDefault()
+    if (current.mode === 'text') {
+      // Only where the pen is now matters: what is marked runs from where it
+      // came down to here, however it got here.
+      markTo(current, event)
+      return
+    }
     // Every place the pen was since the last frame, not only the latest.
     const reports = event.getCoalescedEvents?.() ?? []
     const steps = reports.length > 0 ? reports : [event]
@@ -248,6 +308,21 @@ export function InkLayer(props: InkLayerProps) {
       if (rubbed.current.size > 0) latest.current.onErase([...rubbed.current])
       rubbed.current = new Set()
       setErased(NOTHING_ERASED)
+      return
+    }
+    if (current.mode === 'text') {
+      liveText.current?.removeAttribute('d')
+      const held = current.text
+      // A pen put down and lifted where it was marks nothing.
+      if (!keep || !held || held.rects.length === 0) return
+      latest.current.onDraw({
+        id: newStrokeId(),
+        page: latest.current.pageNumber,
+        tool: 'text',
+        color: latest.current.color,
+        rects: held.rects,
+        text: held.words,
+      })
       return
     }
     liveOf(current.mode)?.removeAttribute('d')
@@ -288,6 +363,23 @@ export function InkLayer(props: InkLayerProps) {
           viewBox={`0 0 ${width} ${height}`}
           aria-hidden="true"
         >
+          {/* Text that was marked, with the highlighter's strokes: it darkens the
+              paper as they do. Filled, where a stroke is a line. */}
+          {tool === 'highlighter' &&
+            paths.map(
+              ({ stroke, d }) =>
+                stroke.tool === 'text' &&
+                !erased.has(stroke.id) && (
+                  <path
+                    key={stroke.id}
+                    class="text-mark"
+                    data-stroke={stroke.id}
+                    d={d}
+                    style={{ fill: stroke.color }}
+                    fill-opacity={HIGHLIGHTER_OPACITY}
+                  />
+                ),
+            )}
           {paths.map(
             ({ stroke, d }) =>
               stroke.tool === tool &&
@@ -301,6 +393,15 @@ export function InkLayer(props: InkLayerProps) {
                   stroke-opacity={tool === 'highlighter' ? HIGHLIGHTER_OPACITY : undefined}
                 />
               ),
+          )}
+          {/* The text under the text highlighter. Written by hand as it moves. */}
+          {tool === 'highlighter' && (
+            <path
+              ref={liveText}
+              class="text-mark live"
+              style={{ fill: props.color }}
+              fill-opacity={HIGHLIGHTER_OPACITY}
+            />
           )}
           {/* The stroke under the pen. Its path is written by hand as the pen moves. */}
           <path

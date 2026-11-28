@@ -12,24 +12,53 @@
  * measured here, y is first multiplied by `aspect`, the page's height over
  * its width, which puts both in units of the page's width.
  *
+ * Not everything put on a page is a line. Text marked with the text
+ * highlighter is the words themselves picked out: the rectangle of each line
+ * of them, in the same fractions of the page, and the words. It is kept with
+ * the strokes and is one of them in every way that matters here — it has an
+ * id, it is rubbed out whole, undone, saved and exported — so it is a kind of
+ * stroke, told apart by its tool.
+ *
  * Kept free of the DOM and of the API, so it is tested as it is.
  */
 
-export type InkTool = 'pen' | 'highlighter'
+/** What draws a line. */
+export type LineTool = 'pen' | 'highlighter'
+
+/** What puts something on a page: a line, or — `text` — a mark over words. */
+export type InkTool = LineTool | 'text'
 
 export type Point = [number, number]
 
-export interface Stroke {
+/** `[x0, y0, x1, y1]`, as fractions of the page: its left, top, right and bottom. */
+export type Rect = [number, number, number, number]
+
+interface OnPage {
   id: string
   /** The page it is on, from 1. */
   page: number
-  tool: InkTool
   /** `#rrggbb`. */
   color: string
+}
+
+/** A line drawn by hand. */
+export interface LineStroke extends OnPage {
+  tool: LineTool
   /** A fraction of the page's width. */
   width: number
   points: Point[]
 }
+
+/** Words marked: where each line of them is, and what they say. */
+export interface TextMark extends OnPage {
+  tool: 'text'
+  /** One rectangle to a line of the text, in reading order. */
+  rects: Rect[]
+  /** The words, as the PDF gives them: what was marked, said in the file itself. */
+  text: string
+}
+
+export type Stroke = LineStroke | TextMark
 
 /** How much of what is under a highlighter stroke shows through. As in the export. */
 export const HIGHLIGHTER_OPACITY = 0.4
@@ -168,10 +197,128 @@ export function strokePath(points: Point[], width: number, height: number): stri
   return `${path}L${at(last)}`
 }
 
+// --------------------------------------------------------------- text marks
+
+/** The server takes no mark of more rectangles than this (`MAX_RECTS` in `ink.py`). */
+export const MAX_MARK_RECTS = 1500
+/** Nor one that says more than this (`MAX_TEXT` in `ink.py`); a longer one is cut short. */
+export const MAX_MARK_TEXT = 8000
+
+/**
+ * Which piece of text a place on the page belongs to: the index of its box.
+ *
+ * The one the place is in. Outside all of them, the piece on the line the
+ * place is level with that is nearest across — a pen in the margin, or between
+ * two columns, means the line beside it — and level with no line, the piece
+ * nearest up or down, then across: a pen in the gap between two lines, or
+ * past the end of a paragraph. In any units, as long as they are the same.
+ */
+export function nearestBox(boxes: readonly Rect[], at: Point): number {
+  const [x, y] = at
+  let best = -1
+  let bestDown = Infinity
+  let bestAcross = Infinity
+  boxes.forEach(([x0, y0, x1, y1], index) => {
+    const down = Math.max(y0 - y, 0, y - y1)
+    const across = Math.max(x0 - x, 0, x - x1)
+    if (down < bestDown || (down === bestDown && across < bestAcross)) {
+      best = index
+      bestDown = down
+      bestAcross = across
+    }
+  })
+  return best
+}
+
+/**
+ * The pieces of text marked, as one rectangle to a line.
+ *
+ * A PDF gives a line in pieces — a word here, the rest there, each with a box
+ * of its own. Pieces that follow one another on the same line are joined into
+ * one rectangle, so a mark is a band across the line and not a row of tiles.
+ * Two pieces are on the same line when they overlap by half the height of
+ * the shorter, and are joined when the gap between them is no wider than the
+ * line is tall: a space between words is, the gutter between two columns is
+ * not. `aspect` is the page's height over its width.
+ */
+export function lineRects(boxes: readonly Rect[], aspect = 1): Rect[] {
+  const lines: Rect[] = []
+  for (const box of boxes) {
+    const last = lines[lines.length - 1]
+    if (last) {
+      const overlap = Math.min(last[3], box[3]) - Math.max(last[1], box[1])
+      const shorter = Math.min(last[3] - last[1], box[3] - box[1])
+      const tall = Math.max(last[3] - last[1], box[3] - box[1]) * aspect
+      const gap = Math.max(box[0] - last[2], last[0] - box[2])
+      if (shorter > 0 && overlap >= shorter / 2 && gap <= tall) {
+        lines[lines.length - 1] = [
+          Math.min(last[0], box[0]),
+          Math.min(last[1], box[1]),
+          Math.max(last[2], box[2]),
+          Math.max(last[3], box[3]),
+        ]
+        continue
+      }
+    }
+    lines.push([box[0], box[1], box[2], box[3]])
+  }
+  return lines
+}
+
+/**
+ * A mark's rectangles as they are stored: on the page, to four places, and
+ * none of no size — as `ink.py` would have them, so that what is drawn is
+ * what is saved.
+ */
+export function tidyRects(rects: readonly Rect[]): Rect[] {
+  const out: Rect[] = []
+  for (const [x0, y0, x1, y1] of rects) {
+    const rect: Rect = [
+      round4(clamp01(Math.min(x0, x1))),
+      round4(clamp01(Math.min(y0, y1))),
+      round4(clamp01(Math.max(x0, x1))),
+      round4(clamp01(Math.max(y0, y1))),
+    ]
+    if (rect[2] > rect[0] && rect[3] > rect[1]) out.push(rect)
+  }
+  return out.slice(0, MAX_MARK_RECTS)
+}
+
+/** The SVG path of a mark's rectangles on a page `width` by `height` pixels. */
+export function rectsPath(rects: readonly Rect[], width: number, height: number): string {
+  return rects
+    .map(
+      ([x0, y0, x1, y1]) =>
+        `M${px(x0 * width)} ${px(y0 * height)}H${px(x1 * width)}V${px(y1 * height)}H${px(x0 * width)}Z`,
+    )
+    .join('')
+}
+
+/**
+ * The words of the pieces marked, as one run of text: a space between two
+ * pieces that have none, and never two together.
+ */
+export function joinText(pieces: readonly string[]): string {
+  let out = ''
+  for (const piece of pieces) {
+    if (out && piece && !/\s$/.test(out) && !/^\s/.test(piece)) out += ' '
+    out += piece
+  }
+  return out.replace(/\s+/g, ' ').trim().slice(0, MAX_MARK_TEXT)
+}
+
 // ------------------------------------------------------------------ eraser
 
 /** Whether an eraser of `radius` at `at` touches a stroke. All in page widths. */
 export function touches(stroke: Stroke, at: Point, radius: number, aspect = 1): boolean {
+  if (stroke.tool === 'text') {
+    // On the mark, or within the eraser's reach of its edge.
+    return stroke.rects.some(([x0, y0, x1, y1]) => {
+      const dx = Math.max(x0 - at[0], 0, at[0] - x1)
+      const dy = Math.max(y0 - at[1], 0, at[1] - y1) * aspect
+      return Math.hypot(dx, dy) <= radius
+    })
+  }
   const reach = radius + stroke.width / 2
   const { points } = stroke
   if (points.length === 1) return distanceToSegment(at, points[0]!, points[0]!, aspect) <= reach

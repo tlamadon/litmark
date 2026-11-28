@@ -41,7 +41,7 @@ import workerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url'
 
 import { api, type DocumentRecord } from '../api'
 import { SELECTION_SETTLES_MS, touchFirst } from '../touch'
-import type { Stroke } from './ink'
+import type { InkTool, Stroke } from './ink'
 import { InkLayer, type InkMode } from './InkLayer'
 import { useInk, type InkNews } from './useInk'
 
@@ -194,8 +194,11 @@ export function PdfViewer(props: PdfViewerProps) {
   const [tool, setTool] = useState<InkMode>('pen')
   const [penColor, setPenColor] = useState(PEN_COLORS[0]!)
   const [highlighterColor, setHighlighterColor] = useState(HIGHLIGHTER_COLORS[0]!)
+  // The text highlighter has a colour of its own, from the highlighter's: one
+  // can be kept for what is drawn over and another for what is marked.
+  const [textColor, setTextColor] = useState(HIGHLIGHTER_COLORS[0]!)
   // The eraser has no colour: the swatches go on showing the last tool that has.
-  const [drawingTool, setDrawingTool] = useState<'pen' | 'highlighter'>('pen')
+  const [drawingTool, setDrawingTool] = useState<InkTool>('pen')
   const ink = useInk(props.document.document_id, props.inkNews ?? null)
 
   const scroller = useRef<HTMLDivElement | null>(null)
@@ -550,7 +553,12 @@ export function PdfViewer(props: PdfViewerProps) {
   const inkReady = ink.status === 'ready'
   const mode: InkMode | null = inking && inkReady ? tool : null
   const palette = drawingTool === 'pen' ? PEN_COLORS : HIGHLIGHTER_COLORS
-  const inkColor = drawingTool === 'pen' ? penColor : highlighterColor
+  const colorOf: Record<InkTool, string> = {
+    pen: penColor,
+    highlighter: highlighterColor,
+    text: textColor,
+  }
+  const inkColor = colorOf[drawingTool]
 
   const pick = (next: InkMode): void => {
     setTool(next)
@@ -558,6 +566,7 @@ export function PdfViewer(props: PdfViewerProps) {
   }
   const dip = (color: string): void => {
     if (drawingTool === 'pen') setPenColor(color)
+    else if (drawingTool === 'text') setTextColor(color)
     else setHighlighterColor(color)
     // A colour is chosen to draw with: the eraser is put down.
     setTool(drawingTool)
@@ -823,7 +832,7 @@ export function PdfViewer(props: PdfViewerProps) {
           no room for it in a narrow panel, and must not lose its way out. */}
       {inking && (
         <div class="pdf-bar pdf-controls ink-bar" role="toolbar" aria-label="Ink">
-          {(['pen', 'highlighter', 'eraser'] as const).map((name) => (
+          {(['pen', 'highlighter', 'text', 'eraser'] as const).map((name) => (
             <button
               key={name}
               type="button"
@@ -834,11 +843,7 @@ export function PdfViewer(props: PdfViewerProps) {
               onClick={() => pick(name)}
               title={TOOL_TITLES[name]}
               aria-label={TOOL_TITLES[name]}
-              style={
-                name === 'eraser'
-                  ? undefined
-                  : { '--ink': name === 'pen' ? penColor : highlighterColor }
-              }
+              style={name === 'eraser' ? undefined : { '--ink': colorOf[name] }}
             >
               <InkIcon name={name} />
             </button>
@@ -852,7 +857,11 @@ export function PdfViewer(props: PdfViewerProps) {
                 data-color={color}
                 aria-pressed={tool !== 'eraser' && inkColor === color}
                 onClick={() => dip(color)}
-                title={`Draw in this colour with the ${drawingTool}`}
+                title={
+                  drawingTool === 'text'
+                    ? 'Mark text in this colour'
+                    : `Draw in this colour with the ${drawingTool}`
+                }
                 aria-label={`Colour ${color}`}
                 style={{ '--ink': color }}
               />
@@ -1136,13 +1145,16 @@ function PdfPage(props: PdfPageProps) {
 const TOOL_TITLES: Record<InkMode, string> = {
   pen: 'Pen',
   highlighter: 'Highlighter',
-  eraser: 'Eraser: rub out whole strokes',
+  text: 'Text highlighter: drag over words to mark them',
+  eraser: 'Eraser: rub out whole strokes and marks',
 }
 
 const INK_ICONS: Record<InkMode, string> = {
   pen: 'M2.6 13.4l.8-3.1 7.3-7.3a1.2 1.2 0 0 1 1.7 0l.6.6a1.2 1.2 0 0 1 0 1.7l-7.3 7.3-3.1.8zM9.6 4.1l2.3 2.3',
   highlighter:
     'M5.2 9.2l4.9-6 3 2.5-4.9 6-2.2.3-.8-2.8zM5.9 11.9l-1.5 1.6H2.6l2.1-2.5M9 13.6h4.6',
+  // A letter, and the band of a highlighter under its line.
+  text: 'M4.3 2.8h7.4M8 2.8v6.9M6.6 9.7h2.8M2.6 12.3h10.8v1.5H2.6z',
   eraser:
     'M6.3 13.2L2.7 9.6a1.1 1.1 0 0 1 0-1.6l5.3-5.3a1.1 1.1 0 0 1 1.6 0l3.7 3.7a1.1 1.1 0 0 1 0 1.6l-5.2 5.2H6.3zM5.4 5.3l5.3 5.3M8.1 13.2h5.4',
 }

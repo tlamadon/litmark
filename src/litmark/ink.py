@@ -5,10 +5,14 @@ A stroke is a line through points in the same coordinates as a reference's
 rectangles — fractions of the page as it is displayed, origin top-left — so
 it sits where it was drawn at any zoom, and on any machine.
 
+Text marked with the text highlighter is kept with the strokes, as one of
+them: where each line of the words is, in those same coordinates, and the
+words themselves — so the file says what was marked, and not only where.
+
 The stored PDF is never written to: it is addressed by its hash, and every
 reference pins that hash. A copy with the ink on it is built when asked for,
-as ``/Ink`` annotations, which other PDF applications show, and can move or
-remove.
+as ``/Ink`` annotations — and ``/Highlight`` ones for marked text — which
+other PDF applications show, and can move or remove.
 """
 
 from __future__ import annotations
@@ -32,7 +36,9 @@ FILENAME = "ink.json"
 
 PEN = "pen"
 HIGHLIGHTER = "highlighter"
-TOOLS = (PEN, HIGHLIGHTER)
+# Not a line but words marked: a rectangle to each line of them.
+TEXT = "text"
+TOOLS = (PEN, HIGHLIGHTER, TEXT)
 
 # Far more than a hand puts on a paper; what they stop is a request that is
 # not ink at all from being written into the project.
@@ -40,6 +46,9 @@ MAX_STROKES = 20_000
 MAX_POINTS = 5_000
 # A stroke's width, as a fraction of the page's width.
 MAX_WIDTH = 0.1
+# The lines of one mark over text — a page has some sixty — and what it says.
+MAX_RECTS = 2_000
+MAX_TEXT = 10_000
 
 # How a highlighter stroke lets the text under it show: here and in the viewer.
 HIGHLIGHTER_OPACITY = 0.4
@@ -171,6 +180,18 @@ def _validate_stroke(item: Any, index: int, page_count: int | None) -> dict[str,
     color = item.get("color")
     if not isinstance(color, str) or not _COLOR_RE.match(color.lower()):
         raise InvalidInput(f"{where} has a colour that is not #rrggbb.")
+    if tool == TEXT:
+        text = item.get("text", "")
+        if not isinstance(text, str) or len(text) > MAX_TEXT:
+            raise InvalidInput(f"{where} does not say what text it marks.")
+        return {
+            "id": stroke_id,
+            "page": page,
+            "tool": tool,
+            "color": color.lower(),
+            "rects": _validate_rects(item.get("rects"), where),
+            "text": text,
+        }
     width = _number(item.get("width"))
     if width is None or not 0 < width <= MAX_WIDTH:
         raise InvalidInput(f"{where} has no usable width.")
@@ -195,6 +216,30 @@ def _validate_stroke(item: Any, index: int, page_count: int | None) -> dict[str,
         "width": round(width, 5),
         "points": clean,
     }
+
+
+def _validate_rects(raw: Any, where: str) -> list[list[float]]:
+    """The lines of a mark over text: on the page, left before right, top before bottom."""
+    if not isinstance(raw, list) or not raw:
+        raise InvalidInput(f"{where} marks no text.")
+    if len(raw) > MAX_RECTS:
+        raise InvalidInput(f"{where} has more than {MAX_RECTS} lines.")
+    rects: list[list[float]] = []
+    for rect in raw:
+        if not isinstance(rect, (list, tuple)) or len(rect) != 4:
+            raise InvalidInput(f"{where} has a line that is not [x0, y0, x1, y1].")
+        values = [_number(value) for value in rect]
+        if any(value is None for value in values):
+            raise InvalidInput(f"{where} has a line that is not [x0, y0, x1, y1].")
+        x0, y0, x1, y1 = (_unit(value) for value in values if value is not None)
+        x0, x1 = min(x0, x1), max(x0, x1)
+        y0, y1 = min(y0, y1), max(y0, y1)
+        # A line of no size, once it is on the page, marks nothing.
+        if x1 > x0 and y1 > y0:
+            rects.append([x0, y0, x1, y1])
+    if not rects:
+        raise InvalidInput(f"{where} marks no text.")
+    return rects
 
 
 def _number(value: Any) -> float | None:
@@ -235,6 +280,9 @@ def annotated_pdf(data: bytes, strokes: Sequence[dict[str, Any]]) -> bytes:
     Annotations rather than marks drawn into the page: another application
     shows them, and can still move or delete them. Each carries an appearance
     stream, without which several readers — Preview among them — show nothing.
+
+    Marked text is a ``/Highlight`` annotation: what another application makes
+    when text is highlighted in it, and treats as that.
     """
     from pypdf import PdfReader, PdfWriter
     from pypdf.errors import PyPdfError
@@ -249,9 +297,11 @@ def annotated_pdf(data: bytes, strokes: Sequence[dict[str, Any]]) -> bytes:
                 continue  # Drawn on a page this file does not have: nowhere to put it.
             page = writer.pages[number - 1]
             placing = _Placing.of(page)
-            # Highlighter first, so that pen lines lie over it as they do on screen.
-            for stroke in sorted(on_page, key=lambda item: item["tool"] != HIGHLIGHTER):
-                writer.add_annotation(number - 1, _ink_annotation(writer, stroke, placing))
+            # Pen lines last, so that they lie over the highlighter's strokes
+            # and over marked text, as they do on screen.
+            for stroke in sorted(on_page, key=lambda item: item["tool"] == PEN):
+                make = _highlight_annotation if stroke["tool"] == TEXT else _ink_annotation
+                writer.add_annotation(number - 1, make(writer, stroke, placing))
         out = io.BytesIO()
         writer.write(out)
     except PyPdfError as exc:
@@ -393,6 +443,100 @@ def _ink_annotation(writer: Any, stroke: dict[str, Any], placing: _Placing) -> A
         annotation[NameObject("/CA")] = FloatObject(HIGHLIGHTER_OPACITY)
         annotation[NameObject("/BM")] = NameObject("/Multiply")
     return annotation
+
+
+def _highlight_annotation(writer: Any, stroke: dict[str, Any], placing: _Placing) -> Any:
+    """Marked text, as the annotation a PDF application makes of highlighted text."""
+    from pypdf.generic import (
+        ArrayObject,
+        DecodedStreamObject,
+        DictionaryObject,
+        FloatObject,
+        NameObject,
+        NumberObject,
+        TextStringObject,
+    )
+
+    def numbers(values: Sequence[float]) -> ArrayObject:
+        return ArrayObject(FloatObject(round(value, 2)) for value in values)
+
+    # Each line by its four corners as the page is displayed — top-left,
+    # top-right, bottom-left, bottom-right, the order readers expect — so that
+    # on a rotated page the mark still runs along the text.
+    quads = [
+        [
+            placing.to_user_space(x0, y0),
+            placing.to_user_space(x1, y0),
+            placing.to_user_space(x0, y1),
+            placing.to_user_space(x1, y1),
+        ]
+        for x0, y0, x1, y1 in stroke["rects"]
+    ]
+    corners = [corner for quad in quads for corner in quad]
+    rect = [
+        min(x for x, _ in corners),
+        min(y for _, y in corners),
+        max(x for x, _ in corners),
+        max(y for _, y in corners),
+    ]
+    red, green, blue = (int(stroke["color"][i : i + 2], 16) / 255 for i in (1, 3, 5))
+
+    content = ["/Marker gs", f"{red:.3f} {green:.3f} {blue:.3f} rg"]
+    for top_left, top_right, bottom_left, bottom_right in quads:
+        content.append(
+            " ".join(
+                f"{x:.2f} {y:.2f} {operator}"
+                for (x, y), operator in (
+                    (top_left, "m"),
+                    (top_right, "l"),
+                    (bottom_right, "l"),
+                    (bottom_left, "l"),
+                )
+            )
+            + " h"
+        )
+    content.append("f")
+    form = DecodedStreamObject()
+    form.set_data(("q\n" + "\n".join(content) + "\nQ\n").encode("ascii"))
+    state = DictionaryObject(
+        {
+            NameObject("/Type"): NameObject("/ExtGState"),
+            NameObject("/CA"): FloatObject(HIGHLIGHTER_OPACITY),
+            NameObject("/ca"): FloatObject(HIGHLIGHTER_OPACITY),
+            # Darkens the paper and leaves the letters black, as ink on paper does.
+            NameObject("/BM"): NameObject("/Multiply"),
+        }
+    )
+    form.update(
+        {
+            NameObject("/Type"): NameObject("/XObject"),
+            NameObject("/Subtype"): NameObject("/Form"),
+            NameObject("/BBox"): numbers(rect),
+            NameObject("/Resources"): DictionaryObject(
+                {NameObject("/ExtGState"): DictionaryObject({NameObject("/Marker"): state})}
+            ),
+        }
+    )
+    return DictionaryObject(
+        {
+            NameObject("/Type"): NameObject("/Annot"),
+            NameObject("/Subtype"): NameObject("/Highlight"),
+            NameObject("/NM"): TextStringObject(stroke["id"]),
+            NameObject("/Rect"): numbers(rect),
+            NameObject("/QuadPoints"): numbers(
+                [value for quad in quads for corner in quad for value in corner]
+            ),
+            NameObject("/C"): numbers([red, green, blue]),
+            # For an application that draws the mark itself instead of using
+            # the appearance given.
+            NameObject("/CA"): FloatObject(HIGHLIGHTER_OPACITY),
+            # What it marks: shown by a reader beside the mark, and found by a search.
+            NameObject("/Contents"): TextStringObject(stroke.get("text", "")),
+            # Printed with the page.
+            NameObject("/F"): NumberObject(4),
+            NameObject("/AP"): DictionaryObject({NameObject("/N"): writer._add_object(form)}),
+        }
+    )
 
 
 def _path_operators(points: Sequence[tuple[float, float]], reach: float) -> str:

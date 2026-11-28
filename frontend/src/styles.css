@@ -1863,6 +1863,11 @@ button.tag:hover {
   cursor: crosshair;
 }
 
+/* The text highlighter is held over words, as the cursor that selects them is. */
+.pdf-ink.drawing.text {
+  cursor: text;
+}
+
 .pdf-ink.drawing.eraser {
   cursor:
     url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='20' height='20'%3E%3Ccircle cx='10' cy='10' r='8.5' fill='rgba(255,255,255,0.6)' stroke='%23555' stroke-width='1'/%3E%3C/svg%3E")

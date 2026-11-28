@@ -10,16 +10,23 @@ import { test } from 'node:test'
 import {
   applyChange,
   erasedBy,
+  joinText,
+  lineRects,
+  MAX_MARK_RECTS,
+  MAX_MARK_TEXT,
   MAX_STROKE_POINTS,
+  nearestBox,
   newStrokeId,
   NO_HISTORY,
   rebase,
   record,
+  rectsPath,
   redo,
   sameStrokes,
   simplify,
   strokePath,
   tidy,
+  tidyRects,
   touches,
   undo,
 } from './bundle/pdf/ink.mjs'
@@ -106,6 +113,133 @@ test('a corner between two long sides stays a corner', () => {
   // width of the corner, and only there rounded.
   const path = strokePath([[0.1, 0.1], [0.5, 0.1], [0.5, 0.5]], 1000, 1000)
   assert.equal(path, 'M100 100L497 100Q500 100 500 103L500 500')
+})
+
+// ------------------------------------------------------------ text marks
+
+const mark = (id, rects = [[0.1, 0.2, 0.9, 0.22], [0.1, 0.23, 0.4, 0.25]]) => ({
+  id,
+  page: 1,
+  tool: 'text',
+  color: '#ffd60a',
+  rects,
+  text: 'what the two lines say',
+})
+
+test('a pen on a piece of text means that piece', () => {
+  // Two lines of one column, and a line of the column beside it.
+  const boxes = [
+    [100, 100, 300, 112],
+    [100, 116, 300, 128],
+    [340, 100, 540, 112],
+  ]
+  assert.equal(nearestBox(boxes, [150, 105]), 0)
+  assert.equal(nearestBox(boxes, [150, 120]), 1)
+  assert.equal(nearestBox(boxes, [400, 105]), 2)
+})
+
+test('a pen beside a line means that line, and between two lines the nearer', () => {
+  const boxes = [
+    [100, 100, 300, 112],
+    [100, 116, 300, 128],
+    [340, 100, 540, 112],
+  ]
+  // In the margin, level with the second line.
+  assert.equal(nearestBox(boxes, [40, 120]), 1)
+  // In the gutter, level with the first line of both columns: the nearer across.
+  assert.equal(nearestBox(boxes, [310, 105]), 0)
+  assert.equal(nearestBox(boxes, [332, 105]), 2)
+  // In the gap between the lines, nearer the second.
+  assert.equal(nearestBox(boxes, [150, 115]), 1)
+  // Past the end of the column: its last line.
+  assert.equal(nearestBox(boxes, [150, 400]), 1)
+  assert.equal(nearestBox([], [150, 400]), -1)
+})
+
+test('the pieces of one line are one band, and the next line another', () => {
+  const lines = lineRects([
+    [0.1, 0.2, 0.3, 0.22],
+    [0.305, 0.201, 0.5, 0.221],
+    [0.1, 0.23, 0.4, 0.25],
+  ])
+  assert.deepEqual(lines, [
+    [0.1, 0.2, 0.5, 0.221],
+    [0.1, 0.23, 0.4, 0.25],
+  ])
+})
+
+test('two columns on the same line are not joined across the gutter', () => {
+  const lines = lineRects([
+    [0.1, 0.2, 0.45, 0.22],
+    [0.55, 0.2, 0.9, 0.22],
+  ])
+  assert.equal(lines.length, 2)
+  // How tall a line is is measured in page widths: on a tall page the same
+  // gap is no wider than the line is tall, and is a space between words.
+  assert.equal(lineRects([[0.1, 0.2, 0.45, 0.22], [0.475, 0.2, 0.9, 0.22]], 1).length, 2)
+  assert.equal(lineRects([[0.1, 0.2, 0.45, 0.22], [0.475, 0.2, 0.9, 0.22]], 1.4).length, 1)
+})
+
+test('a small raised piece is of its line; the line below is not', () => {
+  // A footnote mark: short, and set high, but mostly within the line.
+  assert.equal(lineRects([[0.1, 0.2, 0.3, 0.22], [0.3, 0.196, 0.31, 0.208]]).length, 1)
+  assert.equal(lineRects([[0.1, 0.2, 0.3, 0.22], [0.3, 0.215, 0.5, 0.235]]).length, 2)
+})
+
+test('what is stored of a mark is on the page, to four places, and has a size', () => {
+  assert.deepEqual(
+    tidyRects([
+      [0.9, 0.22, 0.1, 0.2],
+      [-0.2, 0.123456, 1.7, 0.2],
+      [0.3, 0.2, 0.3, 0.4],
+      [0.30001, 0.2, 0.30004, 0.4],
+    ]),
+    [
+      [0.1, 0.2, 0.9, 0.22],
+      [0, 0.1235, 1, 0.2],
+    ],
+  )
+  const many = Array.from({ length: MAX_MARK_RECTS + 5 }, (_, i) => [0.1, i / 4000, 0.2, (i + 1) / 4000])
+  assert.equal(tidyRects(many).length, MAX_MARK_RECTS)
+})
+
+test('a mark is drawn as its rectangles times the size of the page', () => {
+  assert.equal(rectsPath(mark('ink-m').rects.slice(0, 1), 1000, 1000), 'M100 200H900V220H100Z')
+  assert.equal(
+    rectsPath([[0.1, 0.2, 0.9, 0.22]], 500, 1000),
+    'M50 200H450V220H50Z',
+  )
+  assert.equal(rectsPath([], 500, 1000), '')
+})
+
+test('the words of the pieces are one run of text', () => {
+  assert.equal(joinText(['Job value is', 'unobserved, so ', 'the authors']), 'Job value is unobserved, so the authors')
+  assert.equal(joinText(['  spaced\n', '  out  ']), 'spaced out')
+  assert.equal(joinText([]), '')
+  assert.equal(joinText(['x'.repeat(MAX_MARK_TEXT + 50)]).length, MAX_MARK_TEXT)
+})
+
+test('the eraser rubs out a mark it is on or at the edge of, whole', () => {
+  const marked = mark('ink-m')
+  assert.ok(touches(marked, [0.5, 0.21], 0.01))
+  assert.ok(touches(marked, [0.2, 0.24], 0.01), 'on its second line')
+  assert.ok(touches(marked, [0.905, 0.21], 0.01), 'within reach of its edge')
+  // Beside the short second line, and between the two.
+  assert.ok(!touches(marked, [0.6, 0.24], 0.01))
+  assert.ok(!touches(marked, [0.5, 0.26], 0.005))
+  // Down the page counts for more than across it.
+  assert.ok(touches(marked, [0.5, 0.228], 0.01, 1))
+  assert.ok(!touches(marked, [0.5, 0.228], 0.01, 1.4))
+  assert.deepEqual(erasedBy([marked, stroke('ink-a')], [0.5, 0.5], [0.5, 0.21], 0.01), ['ink-m'])
+})
+
+test('a mark is undone, redone and merged as any stroke is', () => {
+  const marked = mark('ink-m')
+  const done = record(NO_HISTORY, { add: [marked], remove: [] })
+  const back = undo([marked], done)
+  assert.deepEqual(back.strokes, [])
+  assert.deepEqual(ids(redo(back.strokes, back.history).strokes), ['ink-m'])
+  assert.deepEqual(ids(rebase([], [marked], [stroke('ink-theirs')])), ['ink-theirs', 'ink-m'])
 })
 
 // ---------------------------------------------------------------- eraser
