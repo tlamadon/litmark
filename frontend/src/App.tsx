@@ -48,6 +48,7 @@ import {
   PhoneBar,
   PhoneTop,
   SessionHolds,
+  SessionsLead,
   useWidths,
   useTyping,
 } from './Phone'
@@ -1611,6 +1612,10 @@ export function App() {
           : 'Nothing open'
   const currentTitle = titleOf(target)
 
+  // The sessions that are open: the row of tabs on a wide window, and on a
+  // phone the ones listed first under the session's name.
+  const sessionsOpen = openSessions(conversations, conversationId)
+
   // What is open in the session, less what has since left the project.
   const textsOpen = openTexts.filter((text) => stillThere(state, text))
   const papersOpen = openPapers.filter((id) => state.documents.some((d) => d.document_id === id))
@@ -1811,6 +1816,9 @@ export function App() {
               sessions
               holds={(conversation) => <SessionHolds held={heldBy(conversation)} />}
               project={state.project}
+              row={sessionsOpen}
+              onPutAway={(id) => void closeSession(id)}
+              lead={<SessionsLead count={sessionsOpen.length} />}
             />
           }
           reconnecting={!connected}

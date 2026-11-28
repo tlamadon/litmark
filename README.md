@@ -592,11 +592,14 @@ says how many are open; press the tab you are already on and they are listed
 over the bar — tap one to go to it, **×** to close it (nothing is deleted),
 **Open another…** for the library.
 
-The top bar is the session's, and nothing else: its name, with a menu of the
-others and **New session** behind it, and **ⓘ**. A session is the text, the
-paper and the conversation that go together, so each one in the menu says what
-it holds, and going to another changes all three panes. A session comes back
-on the tab you left it on — or on Chat, if it has answered since.
+The top bar is the session's, and is made as the bottom one is: a capsule
+with the session's name, and beside it **ⓘ**. A session is the text, the paper
+and the conversation that go together, so going to another changes all three
+panes. The number on the capsule is how many sessions are open; press it and
+the list is let down — each session with what it holds, **×** to put one away
+(nothing is deleted; it stays in the list, under *Put away*), and **New
+session**. A session comes back on the tab you left it on — or on Chat, if it
+has answered since.
 
 **Library**, the round button beside the tabs, is where the first two panes
 are filled from. It lays the library over the session; choose a note and you

@@ -144,7 +144,11 @@ export interface PhoneTopProps {
   version: ComponentChildren
 }
 
-/** The bar along the top: the session, and the way to the panel about what is open. */
+/**
+ * The bar along the top, made as the one along the bottom is: the session in
+ * a capsule, which opens downwards into the list of sessions, and set apart
+ * from it the way to the panel about what is open.
+ */
 export function PhoneTop(props: PhoneTopProps) {
   return (
     <header class="topbar phone-top">
@@ -192,7 +196,27 @@ const ICONS = {
   chat: 'M2.6 3.1h10.8v7.6H8.2L5.2 13.4v-2.7H2.6z',
   // Everything there is, as the library lays it out.
   library: 'M2.6 2.6h4.3v4.3H2.6zM9.1 2.6h4.3v4.3H9.1zM2.6 9.1h4.3v4.3H2.6zM9.1 9.1h4.3v4.3H9.1z',
+  // Sessions: several sets of work, one over another.
+  sessions: 'M8 2.3 13.5 5 8 7.7 2.5 5zM2.7 8 8 10.6 13.3 8M2.7 10.9 8 13.5l5.3-2.6',
 } as const
+
+/**
+ * The head of the session's capsule in the top bar: the mark of sessions, and
+ * on it how many are open — as the tabs along the bottom say how many notes
+ * and papers are.
+ */
+export function SessionsLead(props: { count: number }) {
+  return (
+    <span class="phone-tab-icon sessions-lead">
+      <PhoneIcon name="sessions" />
+      {props.count > 0 && (
+        <span class="phone-tab-count" aria-hidden="true">
+          {props.count}
+        </span>
+      )}
+    </span>
+  )
+}
 
 export function PhoneIcon(props: { name: keyof typeof ICONS; size?: number }) {
   const size = props.size ?? 20

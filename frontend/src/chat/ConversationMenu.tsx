@@ -67,6 +67,16 @@ export interface ConversationMenuProps {
   holds?: (conversation: ConversationSummary) => ComponentChildren
   /** The project these belong to, said at the head of the menu. */
   project?: { name: string; root: string }
+  /**
+   * The sessions that are open, in the order of their row — the one on screen
+   * among them. Given, the menu lists those first, each with a way to put it
+   * away, and the ones put away after them.
+   */
+  row?: ConversationSummary[]
+  /** Put a session away. Nothing is deleted; it stays in the menu, further down. */
+  onPutAway?: (id: string) => void
+  /** Drawn at the head of the button: on a phone, the mark of sessions and how many are open. */
+  lead?: ComponentChildren
 }
 
 export function ConversationMenu(props: ConversationMenuProps) {
@@ -87,6 +97,11 @@ export function ConversationMenu(props: ConversationMenuProps) {
       : conversation.title
   const others = props.conversations.filter((c) => c.conversation_id !== props.currentId)
   const chats = others.filter((c) => c.kind === 'chat')
+  // With the row given: the sessions open besides this one, as the row has
+  // them, and then the rest, most recently used first.
+  const inRow = new Set((props.row ?? []).map((c) => c.conversation_id))
+  const openOnes = (props.row ?? []).filter((c) => c.conversation_id !== props.currentId)
+  const earlier = props.row ? chats.filter((c) => !inRow.has(c.conversation_id)) : chats
   const background = others.filter((c) => c.kind !== 'chat')
   // What is going on elsewhere, said on the button so the menu need not be open.
   const working = others.filter((c) => c.status !== 'idle').length
@@ -144,6 +159,24 @@ export function ConversationMenu(props: ConversationMenuProps) {
     </button>
   )
 
+  /** A session that is open: the way to it, and beside it the way to put it away. */
+  const openItem = (conversation: ConversationSummary) => (
+    <div key={conversation.conversation_id} class="menu-row">
+      {item(conversation)}
+      {props.onPutAway && (
+        <button
+          type="button"
+          class="menu-put-away"
+          aria-label={`Put away ${nameOf(conversation)}`}
+          title="Put this session away. Nothing is deleted; it stays in this menu."
+          onClick={() => props.onPutAway?.(conversation.conversation_id)}
+        >
+          ×
+        </button>
+      )}
+    </div>
+  )
+
   return (
     <div class="conv-wrap" ref={wrap}>
       <button
@@ -158,6 +191,7 @@ export function ConversationMenu(props: ConversationMenuProps) {
         }
         onClick={() => (open ? close() : setOpen(true))}
       >
+        {props.lead}
         {current && <StatusDot conversation={current} unread={props.unread} />}
         <span class="conv-label">{current ? nameOf(current) : 'Conversations'}</span>
         {(working > 0 || answered > 0) && (
@@ -248,6 +282,20 @@ export function ConversationMenu(props: ConversationMenuProps) {
                   <a class="link" href={api.exportUrl(current.conversation_id, 'markdown')} download>
                     Export
                   </a>
+                  {current.kind === 'chat' && props.onPutAway && (
+                    <button
+                      type="button"
+                      class="link"
+                      data-action="put-away"
+                      title="Put this session away. Nothing is deleted; it stays in this menu."
+                      onClick={() => {
+                        props.onPutAway?.(current.conversation_id)
+                        close()
+                      }}
+                    >
+                      Put away
+                    </button>
+                  )}
                   {current.kind === 'chat' && (
                     <button
                       type="button"
@@ -288,10 +336,18 @@ export function ConversationMenu(props: ConversationMenuProps) {
             </span>
           </button>
 
-          {chats.length > 0 && (
-            <div class="menu-section">{props.sessions ? 'Other sessions' : 'Earlier conversations'}</div>
+          {openOnes.length > 0 && (
+            <>
+              <div class="menu-section">Open sessions</div>
+              <div class="conv-list">{openOnes.map(openItem)}</div>
+            </>
           )}
-          <div class="conv-list">{chats.map(item)}</div>
+          {earlier.length > 0 && (
+            <div class="menu-section">
+              {props.row ? 'Put away' : props.sessions ? 'Other sessions' : 'Earlier conversations'}
+            </div>
+          )}
+          <div class="conv-list">{earlier.map(item)}</div>
 
           {background.length > 0 && (
             <>

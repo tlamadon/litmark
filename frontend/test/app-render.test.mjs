@@ -194,6 +194,17 @@ function buildDom({ serverToken = 'test-token', routes = ROUTES, width = null, h
     }
     // A session renamed: its conversation goes by the name given.
     const named = /^\/api\/conversations\/([^/]+)$/.exec(path)
+    // A session put away, or brought back: its conversation is marked so.
+    if (init.method === 'PATCH' && named && typeof JSON.parse(init.body).closed === 'boolean') {
+      const list = routes.get('/api/conversations')
+      const closed = JSON.parse(init.body).closed
+      routes.set('/api/conversations', {
+        conversations: list.conversations.map((c) =>
+          c.conversation_id === named[1] ? { ...c, closed } : c,
+        ),
+      })
+      return { ok: true, status: 200, text: async () => JSON.stringify({ conversation_id: named[1], closed }) }
+    }
     if (init.method === 'PATCH' && named && JSON.parse(init.body).title) {
       const list = routes.get('/api/conversations')
       const title = JSON.parse(init.body).title
@@ -1088,6 +1099,30 @@ test('on a phone: the session at the top, one pane at a time, and a bar afloat a
   )
   assert.ok((menu.textContent ?? '').includes('New session'), menu.textContent)
   assert.ok([...menu.querySelectorAll('.conv-actions .link')].some((node) => node.textContent === 'Rename'))
+
+  // The capsule in the top bar carries the mark of sessions and how many are
+  // open, as the tabs along the bottom do for notes and papers. The other
+  // one is listed as open, with a way to put it away.
+  const capsule = root.querySelector('.topbar .conv-button')
+  const sessionsOpen = () => capsule.querySelector('.sessions-lead .phone-tab-count')?.textContent ?? null
+  const sections = () => [...root.querySelectorAll('.topbar .conv-menu .menu-section')].map((node) => node.textContent)
+  assert.ok(capsule.querySelector('.sessions-lead svg'), 'no mark of sessions on the capsule')
+  assert.equal(sessionsOpen(), '2')
+  assert.deepEqual(sections(), ['Open sessions'])
+  const putAway = menu.querySelector('.menu-row .menu-put-away')
+  assert.equal(putAway?.getAttribute('aria-label'), 'Put away The other line of work')
+  // Put away, it is not counted as open, and is still there to come back to.
+  click(putAway)
+  await settle(300)
+  assert.ok(window.requests.includes('PATCH /api/conversations/conv-2'), window.requests.join('\n'))
+  assert.equal(sessionsOpen(), '1')
+  assert.deepEqual(sections(), ['Put away'])
+  assert.equal(root.querySelector('.topbar .conv-menu .menu-row'), null)
+  assert.ok(
+    [...root.querySelectorAll('.topbar .conv-menu .menu-item')].some((item) => item.textContent.includes('The other line of work')),
+    'the session put away is gone from the list',
+  )
+  assert.ok(!window.requests.some((request) => request.startsWith('DELETE')), 'putting away deleted something')
   click(root.querySelector('.topbar .conv-button'))
   await settle(30)
 
@@ -1096,6 +1131,8 @@ test('on a phone: the session at the top, one pane at a time, and a bar afloat a
   await pick('The other line of work')
   await settle(300)
   assert.ok((root.querySelector('.topbar .conv-button')?.textContent ?? '').includes('The other line of work'))
+  // Gone to, a session that was put away is open again.
+  assert.equal(sessionsOpen(), '2')
   assert.deepEqual(panes(), { main: true, source: false, 'chat-drawer': false })
   assert.deepEqual(tabs(), [['text', true, false], ['paper', false, false], ['chat', false, false]])
   assert.equal(root.querySelector('.main .editor-title')?.textContent, 'Summary — A Paper')

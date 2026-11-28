@@ -3480,32 +3480,139 @@ button.turn-selection:hover {
   font-size: 16px;
 }
 
-/* The top bar is the session's: its name, with the menu of the others behind
-   it, and the way to the panel about what is open. Nothing in it changes only
-   some of the panes. */
+/* The top bar is the session's, and is made as the bar along the bottom is:
+   the session in a capsule — the mark of sessions with how many are open, its
+   name — which opens downwards into the list of them; and, set apart, the way
+   to the panel about what is open, a circle as the library's is. Nothing in
+   it changes only some of the panes. */
 .shell.phone .topbar {
-  position: relative; /* the session menu hangs off it, full width */
-  gap: 0.3rem;
-  padding: 0.25rem 0.4rem;
+  position: relative; /* the list of sessions hangs off it */
+  gap: 0.5rem;
+  padding: 0.5rem 0.6rem 0.4rem;
+  border-bottom: 0;
+  background: none;
 }
 
 .shell.phone .topbar .conv-wrap {
   flex: 1 1 0;
 }
 
-.shell.phone .topbar .conv-button {
-  min-height: 2.75rem;
-  font-size: 1.02rem;
+.shell.phone .topbar .conv-button,
+.shell.phone .topbar .about-button {
+  height: 3rem;
+  border: 1px solid color-mix(in srgb, var(--ink) 11%, transparent);
+  background: var(--panel);
+  box-shadow:
+    0 4px 16px rgba(20, 16, 10, 0.1),
+    0 1px 2px rgba(20, 16, 10, 0.08);
+  -webkit-tap-highlight-color: transparent;
 }
 
+.shell.phone .topbar .conv-button {
+  min-height: 0;
+  gap: 0.6rem;
+  padding: 0 0.95rem 0 0.85rem;
+  border-radius: 999px;
+  font-size: 1rem;
+}
+
+.shell.phone .topbar .sessions-lead {
+  flex: none;
+  margin-right: 0.2rem;
+  color: var(--muted-strong);
+}
+
+.shell.phone .topbar .conv-button.on .sessions-lead {
+  color: var(--accent);
+}
+
+.shell.phone .topbar .conv-button.on .phone-tab-count {
+  background: var(--accent);
+  color: var(--panel);
+}
+
+/* The name takes the room, and the mark that it opens is at the far end. */
+.shell.phone .topbar .conv-label {
+  flex: 1 1 auto;
+}
+
+.shell.phone .topbar .conv-caret {
+  transition: transform 0.18s ease;
+}
+
+.shell.phone .topbar .conv-button.on .conv-caret {
+  transform: rotate(180deg);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .shell.phone .topbar .conv-caret {
+    transition: none;
+  }
+}
+
+.shell.phone .topbar .about-button {
+  width: 3rem;
+  border-radius: 50%;
+  color: var(--muted-strong);
+}
+
+.shell.phone .topbar .about-button.active {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+/* The list of sessions, let down from the capsule. */
 .shell.phone .topbar .conv-menu {
   z-index: 60;
+  top: calc(100% - 0.1rem);
   max-height: min(74vh, 36rem);
+  padding: 0.5rem 0.4rem 0.4rem;
+  border-radius: 18px;
+  box-shadow: 0 10px 34px rgba(20, 16, 10, 0.22);
+  overscroll-behavior: contain;
+  transform-origin: top center;
+  animation: list-down 0.16s ease-out;
+}
+
+@keyframes list-down {
+  from {
+    transform: translateY(-0.5rem) scaleY(0.96);
+    opacity: 0.4;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .shell.phone .topbar .conv-menu {
+    animation: none;
+  }
 }
 
 .shell.phone .topbar .menu-item {
   padding-top: 0.55rem;
   padding-bottom: 0.55rem;
+}
+
+/* A session that is open: the way to it, and beside it the way to put it away. */
+.menu-row {
+  display: flex;
+  align-items: stretch;
+  border-radius: 7px;
+}
+
+.menu-row .menu-item {
+  flex: 1 1 0;
+  min-width: 0;
+}
+
+.menu-put-away {
+  flex: none;
+  width: 2.75rem;
+  border: 0;
+  border-radius: 7px;
+  background: none;
+  color: var(--muted-strong);
+  font-size: 1.2rem;
+  line-height: 1;
 }
 
 .shell.phone .topbar .badge {
@@ -4192,7 +4299,7 @@ button.turn-selection:hover {
 
 /* The request is typed at the top of the window: the keyboard has the bottom. */
 .ask-box.docked {
-  top: calc(3.4rem + env(safe-area-inset-top, 0px));
+  top: calc(4.1rem + env(safe-area-inset-top, 0px));
   left: 8px;
   right: 8px;
 }
@@ -4301,9 +4408,21 @@ button.turn-selection:hover {
   max-width: 24rem;
 }
 
+/* The top bar keeps to the same measure as the bottom one, so the two sit
+   over each other; the list of sessions is let down in the middle, under it. */
+.shell.phone .topbar {
+  justify-content: center;
+}
+
+.shell.phone .topbar .conv-wrap {
+  max-width: 24rem;
+}
+
 .shell.phone .topbar .conv-menu {
-  right: auto;
-  width: min(calc(100% - 0.8rem), 30rem);
+  left: 0;
+  right: 0;
+  width: min(calc(100% - 1.2rem), 28rem);
+  margin: 0 auto;
 }
 
 .sheet {
