@@ -2881,6 +2881,17 @@ button.tag:hover {
   color: var(--muted-strong);
 }
 
+/* A displayed equation wider than the drawer scrolls within itself. KaTeX
+   lays one out on a single line that cannot wrap, and left to overflow it
+   widened the whole chat log, which then slid sideways under a finger
+   scrolling up or down. */
+.prose .katex-display {
+  max-width: 100%;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding: 0.15em 0;
+}
+
 /* A table wider than the drawer scrolls within itself. */
 .prose .table-wrap {
   overflow-x: auto;
