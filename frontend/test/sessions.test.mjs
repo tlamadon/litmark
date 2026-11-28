@@ -11,11 +11,16 @@ import { test } from 'node:test'
 
 import {
   addressOf,
+  besideClosed,
+  closed,
   EMPTY_VIEW,
   isUntouched,
+  MAX_OPEN,
+  opened,
   openSessions,
   readView,
   sessionInAddress,
+  targetKey,
 } from './bundle/sessionView.mjs'
 
 const chat = (id, fields = {}) => ({
@@ -40,8 +45,13 @@ test('a saved view is read back as it was kept', () => {
     page: 14,
     attached: ['doc-002', 'doc-005'],
     library: true,
+    texts: [{ kind: 'note', noteId: 'plan' }, { kind: 'summary', documentId: 'doc-002' }, { kind: 'skill' }],
+    papers: ['doc-005', 'doc-002'],
   }
   assert.deepEqual(readView(JSON.parse(JSON.stringify(view))), view)
+  // A view kept before there was a list of what is open has none, and is read all the same.
+  const { texts: _texts, papers: _papers, ...before } = view
+  assert.deepEqual(readView(before), { ...view, texts: [], papers: [] })
   assert.deepEqual(readView({ target: { kind: 'note', noteId: 'plan' } }).target, { kind: 'note', noteId: 'plan' })
   assert.deepEqual(readView({ target: { kind: 'skill' } }).target, { kind: 'skill' })
 })
@@ -107,4 +117,59 @@ test('a session nothing has been done in is as good as a new one', () => {
     isUntouched(chat('x', { turn_count: 0, view: { target: { kind: 'note', noteId: 'plan' } } })),
     false,
   )
+})
+
+test('what is open in a session is read back trusting none of it', () => {
+  const read = readView({
+    texts: [{ kind: 'note', noteId: 'plan' }, { kind: 'note' }, 'x', { kind: 'empty' }, { kind: 'skill' }],
+    papers: ['doc-001', 7, null, 'doc-002'],
+  })
+  assert.deepEqual(read.texts, [{ kind: 'note', noteId: 'plan' }, { kind: 'skill' }])
+  assert.deepEqual(read.papers, ['doc-001', 'doc-002'])
+  assert.deepEqual(readView({ texts: 'all of them', papers: {} }), EMPTY_VIEW)
+  // No more than can be kept open are kept: the latest opened.
+  const many = Array.from({ length: MAX_OPEN + 5 }, (_unused, index) => `doc-${index}`)
+  assert.deepEqual(readView({ papers: many }).papers, many.slice(-MAX_OPEN))
+})
+
+test('a text is told from another by what it is of', () => {
+  assert.equal(targetKey({ kind: 'note', noteId: 'plan' }), 'note:plan')
+  assert.equal(targetKey({ kind: 'summary', documentId: 'doc-002' }), 'summary:doc-002')
+  assert.equal(targetKey({ kind: 'skill' }), 'skill:summary')
+  assert.notEqual(targetKey({ kind: 'note', noteId: 'doc-002' }), targetKey({ kind: 'summary', documentId: 'doc-002' }))
+})
+
+test('opening adds to what is open, at the end, and only once', () => {
+  const same = (id) => id
+  const one = opened([], 'a', same)
+  assert.deepEqual(one, ['a'])
+  const two = opened(one, 'b', same)
+  assert.deepEqual(two, ['a', 'b'])
+  // Going back to one already open is not opening it again: the list does
+  // not shuffle, and is the very same list.
+  assert.equal(opened(two, 'a', same), two)
+  // Texts are told apart by what they are of, not by being the same object.
+  const texts = opened([{ kind: 'note', noteId: 'plan' }], { kind: 'note', noteId: 'plan' }, targetKey)
+  assert.equal(texts.length, 1)
+  // The one opened longest ago gives way when there are too many.
+  let full = []
+  for (let index = 0; index < MAX_OPEN + 2; index += 1) full = opened(full, `doc-${index}`, same)
+  assert.equal(full.length, MAX_OPEN)
+  assert.equal(full[0], 'doc-2')
+  assert.equal(full.at(-1), `doc-${MAX_OPEN + 1}`)
+})
+
+test('closing takes one away, and says where to go from the one on show', () => {
+  const same = (id) => id
+  const open = ['a', 'b', 'c']
+  assert.deepEqual(closed(open, 'b', same), ['a', 'c'])
+  assert.equal(closed(open, 'z', same), open, 'closing what is not open changed the list')
+  assert.deepEqual(open, ['a', 'b', 'c'], 'the list given was changed in place')
+  // The one opened after it takes its place; the last one hands over to the one before.
+  assert.equal(besideClosed(open, 'a', same), 'b')
+  assert.equal(besideClosed(open, 'b', same), 'c')
+  assert.equal(besideClosed(open, 'c', same), 'b')
+  // The only one open leaves nothing; so does one that was not open.
+  assert.equal(besideClosed(['a'], 'a', same), null)
+  assert.equal(besideClosed(open, 'z', same), null)
 })

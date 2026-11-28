@@ -3787,6 +3787,148 @@ button.turn-selection:hover {
   }
 }
 
+/* On the icon of Notes and of Papers: how many are open in the session. */
+.phone-tab-count {
+  position: absolute;
+  top: -0.4rem;
+  left: calc(100% - 0.3rem);
+  min-width: 1rem;
+  height: 1rem;
+  padding: 0 0.28rem;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--ink) 14%, var(--panel));
+  color: var(--muted-strong);
+  font-size: 0.62rem;
+  font-weight: 700;
+  line-height: 1rem;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+
+.phone-tab.on .phone-tab-count {
+  background: var(--accent);
+  color: var(--panel);
+}
+
+/* What is open in the session, listed over the bar: pressed for on the tab
+   that is already on. The tabs under it still work. */
+.open-list-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 29;
+}
+
+.open-list {
+  position: fixed;
+  z-index: 31;
+  left: calc(0.6rem + env(safe-area-inset-left, 0px));
+  right: calc(0.6rem + env(safe-area-inset-right, 0px));
+  bottom: calc(var(--bar-room) + 0.1rem);
+  max-width: 24rem;
+  max-height: min(60vh, 28rem);
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  padding: 0.5rem 0.4rem 0.4rem;
+  border: 1px solid var(--rule);
+  border-radius: 16px;
+  background: var(--panel);
+  box-shadow: 0 10px 34px rgba(20, 16, 10, 0.22);
+  animation: sheet-up 0.16s ease-out;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .open-list {
+    animation: none;
+  }
+}
+
+.open-list .menu-kicker {
+  padding: 0.1rem 0.5rem 0.3rem;
+}
+
+.open-list ul {
+  flex: 1 1 auto;
+  min-height: 0;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  overflow: auto;
+  overscroll-behavior: contain;
+}
+
+.open-list li {
+  display: flex;
+  align-items: center;
+  border-radius: 10px;
+}
+
+.open-list li.on {
+  background: var(--accent-soft);
+}
+
+.open-list .open-item {
+  flex: 1 1 0;
+  min-width: 0;
+  min-height: 2.75rem;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0 0.3rem 0 0.6rem;
+  border: 0;
+  background: none;
+  text-align: left;
+}
+
+.open-list .open-item svg {
+  flex: none;
+  color: var(--muted);
+}
+
+.open-list li.on .open-item {
+  font-weight: 600;
+}
+
+.open-list li.on .open-item svg {
+  color: var(--accent);
+}
+
+.open-list .open-item span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.open-list .open-close {
+  flex: none;
+  width: 2.75rem;
+  height: 2.75rem;
+  border: 0;
+  background: none;
+  color: var(--muted-strong);
+  font-size: 1.2rem;
+  line-height: 1;
+}
+
+.open-list-foot {
+  flex: none;
+  display: flex;
+  gap: 0.4rem;
+  margin-top: 0.35rem;
+  padding-top: 0.4rem;
+  border-top: 1px solid var(--rule);
+}
+
+.open-list-foot button {
+  flex: 1 1 0;
+  min-height: 2.75rem;
+  border: 1px solid var(--rule);
+  border-radius: 999px;
+  background: var(--panel);
+  color: var(--accent);
+  font-weight: 550;
+}
+
 .phone-library {
   flex: none;
   width: var(--bar-height);

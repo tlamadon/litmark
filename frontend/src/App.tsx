@@ -44,6 +44,7 @@ import { nameOf, papersOf } from './papers'
 import {
   AboutSheet,
   EmptyPane,
+  OpenList,
   PhoneBar,
   PhoneTop,
   SessionHolds,
@@ -71,11 +72,15 @@ import {
 import type { InkNews } from './pdf/useInk'
 import {
   addressOf,
+  besideClosed,
+  closed,
   isUntouched,
+  opened,
   openSessions,
   readView,
   sessionInAddress,
   Sessions,
+  targetKey,
   type SessionView,
 } from './Sessions'
 import { Sidebar, type Subject } from './Sidebar'
@@ -279,6 +284,13 @@ export function App() {
   const [libraryKind, setLibraryKind] = useState<LibraryKind | null>(null)
   // When the pane on show came to be the one on show.
   const paneSince = useRef(0)
+  // The texts and the papers opened in the session on screen and not closed
+  // since: one of each is on show, the rest a press away. Kept with the
+  // session, so they are there on any window it is opened in.
+  const [openTexts, setOpenTexts] = useState<readonly MainTarget[]>([])
+  const [openPapers, setOpenPapers] = useState<readonly string[]>([])
+  // Which of the two lists is up, on a phone.
+  const [openList, setOpenList] = useState<'text' | 'paper' | null>(null)
   // The panel about what is open, as a sheet over the pane.
   const [aboutOpen, setAboutOpen] = useState(false)
   // The bar along the bottom gets out of the way of the keyboard.
@@ -530,6 +542,8 @@ export function App() {
       // Going somewhere takes the library away; coming back to a session that
       // had it up is the one case where it is put back.
       pendingLibrary.current = view.library
+      setOpenTexts(view.texts.filter((text) => stillThere(project, text)))
+      setOpenPapers(view.papers.filter(has))
       setTarget({ ...next })
       setOpenDocument(paper)
       setHighlight(null)
@@ -1334,9 +1348,20 @@ export function App() {
       page: openDocument ? pdfPage : null,
       attached: context.document_ids ?? [],
       library,
+      texts: openTexts,
+      papers: openPapers,
     }),
-    [target, openDocument?.document_id, pdfPage, context.document_ids, library],
+    [target, openDocument?.document_id, pdfPage, context.document_ids, library, openTexts, openPapers],
   )
+
+  // What is put on show is open from then on, until it is closed.
+  useEffect(() => {
+    if (target.kind !== 'empty') setOpenTexts((open) => opened(open, target, targetKey))
+  }, [docKey, conversationId])
+  const paperOnShow = openDocument?.document_id ?? null
+  useEffect(() => {
+    if (paperOnShow) setOpenPapers((open) => opened(open, paperOnShow, (id) => id))
+  }, [paperOnShow, conversationId])
   const viewJson = JSON.stringify(view)
   useEffect(() => {
     const id = conversationId
@@ -1499,6 +1524,8 @@ export function App() {
   }, [looking])
   useEffect(() => {
     paneSince.current = performance.now()
+    // The list of what is open belongs to the pane it was asked from.
+    setOpenList(null)
   }, [pane])
   // A window widened past a phone, but not to where the text and the paper
   // go side by side, shows one of the two: the one that was on show here.
@@ -1508,6 +1535,7 @@ export function App() {
   /** The library, on the notes or on the papers: what a pane is filled from. */
   const openLibrary = (kind: LibraryKind | null): void => {
     setAboutOpen(false)
+    setOpenList(null)
     setLibraryKind(kind)
     setLibrary(true)
   }
@@ -1582,6 +1610,37 @@ export function App() {
           ? 'How papers are summarized'
           : 'Nothing open'
   const currentTitle = titleOf(target)
+
+  // What is open in the session, less what has since left the project.
+  const textsOpen = openTexts.filter((text) => stillThere(state, text))
+  const papersOpen = openPapers.filter((id) => state.documents.some((d) => d.document_id === id))
+  /** The page a paper was last left on in this session, to go back to it there. */
+  const lastPageOf = (documentId: string): number => {
+    const been = conversationId ? (trails.current.get(conversationId)?.paper ?? []) : []
+    return [...been].reverse().find((place) => place.documentId === documentId)?.page ?? 1
+  }
+  /** Close a text that is open: if it is the one on show, the one beside it takes its place. */
+  const closeText = (key: string): void => {
+    const beside = besideClosed(textsOpen, key, targetKey)
+    setOpenTexts((open) => closed(open, key, targetKey))
+    if (key !== docKey) return
+    setTarget(beside ? { ...beside } : { kind: 'empty' })
+  }
+  /** The same for a paper. Says whether another took its place. */
+  const closePaper = (documentId: string): boolean => {
+    const beside = besideClosed(papersOpen, documentId, (id) => id)
+    setOpenPapers((open) => closed(open, documentId, (id) => id))
+    if (documentId !== openDocument?.document_id) return true
+    if (beside) {
+      showDocument(beside, lastPageOf(beside))
+      return true
+    }
+    setOpenDocument(null)
+    // No passage is on show any more, here or in the note.
+    setHighlight(null)
+    setSourceTakesOver(false)
+    return false
+  }
 
   // Where a step back would go, in the text and in the paper: the last place
   // on each trail that is still there and is not where the reader already is.
@@ -2000,12 +2059,18 @@ export function App() {
               onJump={leavePage}
               inkNews={inkNews}
               onClose={() => {
+                const closing = openDocument.document_id
+                if (phone) {
+                  // On a phone another paper that is open takes its place; with
+                  // none, to the text if there is one, else to the library.
+                  if (!closePaper(closing)) setPhoneTab(target.kind === 'empty' ? null : 'text')
+                  return
+                }
+                setOpenPapers((open) => closed(open, closing, (id) => id))
                 setOpenDocument(null)
                 // No passage is on show any more, here or in the note.
                 setHighlight(null)
                 setSourceTakesOver(false)
-                // On a phone: to the text if there is one, else to the library.
-                setPhoneTab(target.kind === 'empty' ? null : 'text')
               }}
             />
           </aside>
@@ -2089,17 +2154,60 @@ export function App() {
         )}
       </div>
 
+      {phone && openList && pane === openList && (
+        <OpenList
+          kind={openList}
+          items={
+            openList === 'text'
+              ? textsOpen.map((text) => ({
+                  key: targetKey(text),
+                  label: titleOf(text),
+                  current: targetKey(text) === docKey,
+                }))
+              : papersOpen.map((id) => {
+                  const paper = state.documents.find((d) => d.document_id === id)
+                  return {
+                    key: id,
+                    label: nameOf(paper) ?? paper?.display_title ?? id,
+                    current: id === openDocument?.document_id,
+                  }
+                })
+          }
+          onPick={(key) => {
+            setOpenList(null)
+            if (openList === 'text') {
+              const text = textsOpen.find((own) => targetKey(own) === key)
+              if (text && key !== docKey) setTarget({ ...text })
+            } else if (key !== openDocument?.document_id) {
+              showDocument(key, lastPageOf(key))
+            }
+          }}
+          onClose={(key) => {
+            if (openList === 'text') closeText(key)
+            else if (!closePaper(key)) setPhoneTab(target.kind === 'empty' ? null : 'text')
+          }}
+          onOpenAnother={() => openLibrary(openList === 'text' ? 'notes' : 'papers')}
+          onNew={openList === 'text' ? () => void createNote() : undefined}
+          onDismiss={() => setOpenList(null)}
+        />
+      )}
+
       {phone && pane && (
         <PhoneBar
           pane={pane}
           behind={{ text: target.kind !== 'empty', paper: openDocument !== null }}
+          counts={{ text: textsOpen.length, paper: papersOpen.length }}
           chat={chatSign(onScreen, conversationId !== null && waiting.has(conversationId))}
           onSelect={(tab) => {
             setAboutOpen(false)
             if (tab === pane) {
-              // The tab already on: to the library, for something else to fill it.
+              // The tab already on: what else is open here, to go to — or the
+              // library at its kind, where nothing is.
               const kind = retapOpens(tab, performance.now() - paneSince.current)
-              if (kind) openLibrary(kind)
+              if (!kind) return
+              const list = tab === 'text' ? textsOpen : papersOpen
+              if (tab !== 'chat' && list.length > 0) setOpenList(openList === tab ? null : tab)
+              else openLibrary(kind)
               return
             }
             // A tab is somewhere to be: the library gives way to it.
@@ -2108,6 +2216,7 @@ export function App() {
           }}
           onLibrary={() => {
             setAboutOpen(false)
+            setOpenList(null)
             setLibraryKind(null)
             setLibrary(!inLibrary)
           }}

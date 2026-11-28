@@ -581,9 +581,16 @@ whole width. A large tablet is wider than that upright (a 12.9-inch iPad is
 1024), and has the same layout there: held upright and worked by touch, up to
 1100 pixels. Turned on its side, a tablet has the panes side by side again,
 with what was open still in them. One pane fills the screen, and a bar afloat along the bottom goes between the
-three, in the order they sit on a desk: **Text · Paper · Chat**. A mark slides
-to the one that is on. What is open is named in the pane itself: the text's
-title in its bar, the paper's on a line over its controls.
+three, in the order they sit on a desk: **Notes · Papers · Chat**. A mark
+slides to the one that is on. What is open is named in the pane itself: the
+text's title in its bar, the paper's on a line over its controls.
+
+A session can have several notes open, and several papers: whatever you open
+in it stays open until you close it, and comes back with the session, on any
+window. One of each is on show. A small number on **Notes** and on **Papers**
+says how many are open; press the tab you are already on and they are listed
+over the bar — tap one to go to it, **×** to close it (nothing is deleted),
+**Open another…** for the library.
 
 The top bar is the session's, and nothing else: its name, with a menu of the
 others and **New session** behind it, and **ⓘ**. A session is the text, the
@@ -593,16 +600,15 @@ on the tab you left it on — or on Chat, if it has answered since.
 
 **Library**, the round button beside the tabs, is where the first two panes
 are filled from. It lays the library over the session; choose a note and you
-are on Text, a paper and you are on its summary with the PDF behind Paper (or
-on the PDF, where nothing is written about it yet). A tab puts the library
+are on Notes, a paper and you are on its summary with the PDF behind Papers
+(or on the PDF, where nothing is written about it yet). A tab puts the library
 away again. A pane with nothing in it says so and offers the way: **Open a
-note** or **New note** on Text, **Open a paper** on Paper. Pressing the tab
-you are already on opens the library at its kind — the notes from Text, the
-papers from Paper. A new session, with nothing open, starts at the library.
+note** or **New note** on Notes, **Open a paper** on Papers. A new session,
+with nothing open, starts at the library.
 
 What you do takes you where it leads. Tap a citation in the text and you are
-on Paper, at the passage; tap a highlight in the paper and you are on Text, at
-the citation. A paper, a note or a passage named in a reply opens on its tab.
+on Papers, at the passage; tap a highlight in the paper and you are on Notes,
+at the citation. A paper, a note or a passage named in a reply opens on its tab.
 **Cite** and **Quote** on a passage of the paper land in the text where the
 reference went in, and once **✦ Ask** is sent you are in the chat, where the
 answer is read.

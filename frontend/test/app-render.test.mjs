@@ -728,12 +728,16 @@ test('the library, what is open, and the panel about it', async (t) => {
   const kept = routes.get('/api/conversations').conversations.find((c) => c.conversation_id === 'conv-1').view
   // (No page: nothing lays a paper out here, so none is ever in view. A paper
   // opened from a link in the text is shown, not attached to what is asked.)
+  // With it, what was opened in the session and not closed: the skill and the
+  // note, in the order they were opened, and the paper.
   assert.deepEqual(kept, {
     target: { kind: 'note', noteId: 'welcome' },
     documentId: 'doc-002',
     page: null,
     attached: [],
     library: false,
+    texts: [{ kind: 'skill' }, { kind: 'note', noteId: 'welcome' }],
+    papers: ['doc-002'],
   })
 
   // A new session starts with nothing open: its own conversation, the library.
@@ -870,6 +874,17 @@ test('on a phone: the session at the top, one pane at a time, and a bar afloat a
       node.getAttribute('aria-current') === 'page',
       node.classList.contains('empty'),
     ])
+  /** The number on each tab: how many of its kind are open in the session. */
+  const counts = () =>
+    [...root.querySelectorAll('.phone-tab')].map(
+      (node) => node.querySelector('.phone-tab-count')?.textContent ?? null,
+    )
+  /** The list of what is open, when it is up: each one's name, and whether it is the one on show. */
+  const listed = () =>
+    [...root.querySelectorAll('.open-list li')].map((item) => [
+      item.querySelector('.open-item').textContent,
+      item.classList.contains('on'),
+    ])
   const inLibrary = () => root.querySelector('.body > .library') !== null
   const libraryOn = () => root.querySelector('.library .mode-tabs button.on')?.dataset.show
   /** Go to a session, or start one, from the menu in the top bar. */
@@ -916,7 +931,7 @@ test('on a phone: the session at the top, one pane at a time, and a bar afloat a
       node.querySelectorAll('svg').length,
       node.children.length,
     ]),
-    [['Text', 1, 2], ['Paper', 1, 2], ['Chat', 1, 2]],
+    [['Notes', 1, 2], ['Papers', 1, 2], ['Chat', 1, 2]],
   )
   const library = bar.querySelector(':scope > [data-action="library"]')
   assert.ok(library, 'the library is not beside the tabs')
@@ -1026,9 +1041,11 @@ test('on a phone: the session at the top, one pane at a time, and a bar afloat a
   assert.equal(root.querySelector('.main .empty-pane'), null)
   assert.equal(root.querySelector('.main .editor-title')?.textContent, 'Welcome')
   assert.equal(root.querySelector('.main-head'), null, 'the narrow window\'s "Show the paper" is not the phone\'s')
+  // One note is open in the session, and the tab says so; no paper is.
+  assert.deepEqual(counts(), ['1', null, null])
 
-  // A press on the tab already on is the library at its kind — once the tab
-  // has been on a moment. The second press of a double tap is not that.
+  // A press on the tab already on lists what is open there — once the tab has
+  // been on a moment. The second press of a double tap is not that.
   click(tab('chat'))
   await settle(10)
   click(tab('text'))
@@ -1036,11 +1053,20 @@ test('on a phone: the session at the top, one pane at a time, and a bar afloat a
   click(tab('text'))
   await settle(30)
   assert.deepEqual(panes(), { main: true, source: false, 'chat-drawer': false })
-  assert.equal(inLibrary(), false, 'a double tap opened the library')
+  assert.equal(root.querySelector('.open-list'), null, 'a double tap opened the list')
   await settle(750)
   click(tab('text'))
   await settle(30)
-  assert.ok(inLibrary(), 'the tab already on did not open the library')
+  assert.deepEqual(listed(), [['Welcome', true]], 'the tab already on did not list what is open')
+  assert.deepEqual(
+    [...root.querySelectorAll('.open-list-foot button')].map((node) => node.textContent),
+    ['Open another…', 'New note'],
+  )
+  // From there, the library on its notes for one that is not open yet.
+  click(root.querySelector('.open-list [data-action="open-another"]'))
+  await settle(30)
+  assert.equal(root.querySelector('.open-list'), null)
+  assert.ok(inLibrary())
   assert.equal(libraryOn(), 'notes')
   click(tab('text'))
   await settle(30)
@@ -1111,8 +1137,47 @@ test('on a phone: the session at the top, one pane at a time, and a bar afloat a
   // A paper: its summary on Text, the PDF behind the Paper tab.
   assert.deepEqual(panes(), { main: true, source: false, 'chat-drawer': false })
   assert.deepEqual(tabs(), [['text', true, false], ['paper', false, false], ['chat', false, false]])
+
+  // Two texts are open in the session now, and a paper. The list has them in
+  // the order they were opened, goes to either, and closes them.
+  assert.deepEqual(counts(), ['2', '1', null])
+  await settle(750)
+  click(tab('text'))
+  await settle(30)
+  assert.deepEqual(listed(), [['Welcome', false], ['Summary — A Paper', true]])
+  click(root.querySelector('.open-list li:first-child .open-item'))
+  await settle()
+  assert.equal(root.querySelector('.open-list'), null, 'the list stayed up')
+  assert.equal(root.querySelector('.main .editor-title')?.textContent, 'Welcome')
+  assert.deepEqual(counts(), ['2', '1', null], 'going to one closed another')
+  // Closing the one on show goes to the one beside it; nothing is deleted.
+  await settle(750)
+  click(tab('text'))
+  await settle(30)
+  assert.deepEqual(listed(), [['Welcome', true], ['Summary — A Paper', false]])
+  click(root.querySelector('.open-list li.on .open-close'))
+  await settle()
+  assert.equal(root.querySelector('.main .editor-title')?.textContent, 'Summary — A Paper')
+  assert.deepEqual(listed(), [['Summary — A Paper', true]])
+  assert.deepEqual(counts(), ['1', '1', null])
+  assert.ok(!window.requests.some((request) => request.startsWith('DELETE')), 'closing deleted something')
+  // The paper's own list; closing the only paper leaves the tab with nothing behind it.
+  click(tab('paper'))
+  await settle(800)
   click(tab('paper'))
   await settle(30)
+  assert.deepEqual(listed(), [['A Paper', true]])
+  click(root.querySelector('.open-list .open-close'))
+  await settle()
+  assert.deepEqual(counts(), ['1', null, null])
+  assert.deepEqual(tabs(), [['text', true, false], ['paper', false, true], ['chat', false, false]])
+  // Opened again from the panel, it is open again.
+  click(root.querySelector('[data-action="about"]'))
+  await settle(50)
+  click([...root.querySelectorAll('.sheet .entry-actions .link')].find((node) => node.textContent === 'Read PDF'))
+  await settle()
+  assert.equal(root.querySelector('.sheet'), null)
+  assert.deepEqual(counts(), ['1', '1', null])
   assert.deepEqual(panes(), { main: false, source: true, 'chat-drawer': false })
   // The sheet is put away by its own button, and by a press outside it.
   click(root.querySelector('[data-action="about"]'))
@@ -1161,7 +1226,10 @@ test('on a phone: the session at the top, one pane at a time, and a bar afloat a
   // Which tab was on is this window's business: it is no part of the saved view.
   await settle(900)
   const saved = routes.get('/api/conversations').conversations.find((c) => c.conversation_id === 'conv-1')
-  assert.deepEqual(Object.keys(saved.view ?? {}).sort(), ['attached', 'documentId', 'library', 'page', 'target'])
+  // What is open in the session is.
+  assert.deepEqual(Object.keys(saved.view ?? {}).sort(), ['attached', 'documentId', 'library', 'page', 'papers', 'target', 'texts'])
+  assert.deepEqual(saved.view.texts, [{ kind: 'summary', documentId: 'doc-001' }])
+  assert.deepEqual(saved.view.papers, ['doc-001'])
 
   assert.deepEqual(errors, [], `runtime errors: ${errors.map((e) => e?.stack ?? e).join('\n')}`)
 })

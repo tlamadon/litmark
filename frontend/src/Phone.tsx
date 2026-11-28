@@ -213,8 +213,10 @@ export function PhoneIcon(props: { name: keyof typeof ICONS; size?: number }) {
 export interface PhoneBarProps {
   /** What fills the screen now. With the library up, no tab is the one on. */
   pane: PhonePane
-  /** Whether there is anything behind Text and behind Paper. */
+  /** Whether there is anything on show behind the first two tabs. */
   behind: Behind
+  /** How many notes, and how many papers, are open in the session. */
+  counts: { text: number; paper: number }
   /** What the Chat tab says of the conversation: at work, or answered. */
   chat: ChatSign
   /** A tab pressed — the one already on, too. */
@@ -223,7 +225,9 @@ export interface PhoneBarProps {
   onLibrary: () => void
 }
 
-const TAB_NAMES: Record<PhoneTab, string> = { text: 'Text', paper: 'Paper', chat: 'Chat' }
+// The first two are named for what they hold: the notes (and summaries) open
+// in the session, and its papers.
+const TAB_NAMES: Record<PhoneTab, string> = { text: 'Notes', paper: 'Papers', chat: 'Chat' }
 const CHAT_SIGNS: Record<Exclude<ChatSign, null>, string> = {
   working: 'the agent is working',
   answered: 'a new reply',
@@ -250,6 +254,7 @@ export function PhoneBar(props: PhoneBarProps) {
           const current = props.pane === tab
           const empty = tab !== 'chat' && !props.behind[tab]
           const sign = tab === 'chat' ? props.chat : null
+          const count = tab === 'chat' ? 0 : props.counts[tab]
           return (
             <button
               key={tab}
@@ -261,15 +266,20 @@ export function PhoneBar(props: PhoneBarProps) {
               aria-label={
                 sign
                   ? `${TAB_NAMES[tab]} — ${CHAT_SIGNS[sign]}`
-                  : empty
-                    ? `${TAB_NAMES[tab]} — nothing open`
-                    : undefined
+                  : tab === 'chat'
+                    ? undefined
+                    : `${TAB_NAMES[tab]} — ${count === 0 ? 'none' : count} open`
               }
               onClick={() => props.onSelect(tab)}
             >
               <span class="phone-tab-icon">
                 <PhoneIcon name={tab} />
                 {sign && <span class={`phone-tab-sign ${sign}`} />}
+                {count > 0 && (
+                  <span class="phone-tab-count" aria-hidden="true">
+                    {count}
+                  </span>
+                )}
               </span>
               <span class="phone-tab-name">{TAB_NAMES[tab]}</span>
             </button>
@@ -325,6 +335,88 @@ export function EmptyPane(props: {
         )}
       </div>
     </div>
+  )
+}
+
+export interface OpenListProps {
+  kind: 'text' | 'paper'
+  /** What is open, in the order it was opened; one of them is the one on show. */
+  items: { key: string; label: string; current: boolean }[]
+  onPick: (key: string) => void
+  onClose: (key: string) => void
+  /** To the library, on this kind, for something that is not open yet. */
+  onOpenAnother: () => void
+  onNew?: () => void
+  onDismiss: () => void
+}
+
+/**
+ * What is open in the session, of the kind the tab holds: a list over the bar
+ * to go to another of them, close one, or open one more. The number on the
+ * tab is how many are here.
+ */
+export function OpenList(props: OpenListProps) {
+  const dismiss = useRef(props.onDismiss)
+  dismiss.current = props.onDismiss
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent): void => {
+      if (event.key === 'Escape') dismiss.current()
+    }
+    document.addEventListener('keydown', onKey)
+    return () => document.removeEventListener('keydown', onKey)
+  }, [])
+  const notes = props.kind === 'text'
+  return (
+    <>
+      <div class="open-list-backdrop" onClick={props.onDismiss} />
+      <div
+        class="open-list"
+        role="dialog"
+        data-kind={props.kind}
+        aria-label={notes ? 'Notes open in this session' : 'Papers open in this session'}
+      >
+        <div class="menu-kicker">Open in this session</div>
+        <ul>
+          {props.items.map((item) => (
+            <li key={item.key} class={item.current ? 'on' : ''}>
+              <button
+                type="button"
+                class="open-item"
+                aria-current={item.current ? 'true' : undefined}
+                onClick={() => props.onPick(item.key)}
+              >
+                <PhoneIcon name={props.kind} size={15} />
+                <span>{item.label}</span>
+              </button>
+              <button
+                type="button"
+                class="open-close"
+                aria-label={`Close ${item.label}`}
+                title="Close it here. Nothing is deleted."
+                onClick={() => props.onClose(item.key)}
+              >
+                ×
+              </button>
+            </li>
+          ))}
+        </ul>
+        <div class="open-list-foot">
+          <button
+            type="button"
+            data-action="open-another"
+            title={notes ? 'To the library, on its notes' : 'To the library, on its papers'}
+            onClick={props.onOpenAnother}
+          >
+            Open another…
+          </button>
+          {props.onNew && (
+            <button type="button" data-action="new-note" onClick={props.onNew}>
+              New note
+            </button>
+          )}
+        </div>
+      </div>
+    </>
   )
 }
 

@@ -22,6 +22,13 @@ export interface SessionView {
   attached: string[]
   /** Whether the library was laid over it. */
   library: boolean
+  /**
+   * The texts and the papers opened in the session and not closed since, in
+   * the order they were opened: what is on show is one of each, and the rest
+   * are a press away. See `opened`.
+   */
+  texts: readonly SessionTarget[]
+  papers: readonly string[]
 }
 
 export const EMPTY_VIEW: SessionView = {
@@ -30,21 +37,74 @@ export const EMPTY_VIEW: SessionView = {
   page: null,
   attached: [],
   library: false,
+  texts: [],
+  papers: [],
+}
+
+/** No more than this many of a kind are kept open; the one opened longest ago gives way. */
+export const MAX_OPEN = 12
+
+/** What tells one text from another: the note, the paper summarized, or the skill. */
+export function targetKey(target: SessionTarget): string {
+  return target.kind === 'note'
+    ? `note:${target.noteId}`
+    : target.kind === 'summary'
+      ? `summary:${target.documentId}`
+      : target.kind === 'skill'
+        ? 'skill:summary'
+        : 'empty'
+}
+
+/**
+ * The list of what is open, after something is opened. One already there
+ * stays where it is — going back to it is not opening it again, and the list
+ * does not shuffle under the reader. A new one goes at the end.
+ */
+export function opened<T>(open: readonly T[], item: T, keyOf: (item: T) => string): readonly T[] {
+  const key = keyOf(item)
+  if (open.some((own) => keyOf(own) === key)) return open
+  return [...open, item].slice(-MAX_OPEN)
+}
+
+/** The same list, with one of them closed. */
+export function closed<T>(open: readonly T[], key: string, keyOf: (item: T) => string): readonly T[] {
+  return open.some((own) => keyOf(own) === key) ? open.filter((own) => keyOf(own) !== key) : open
+}
+
+/**
+ * Where to go when the one on show is closed: the one opened after it, or
+ * failing that the one before — its neighbour in the list, as with tabs.
+ */
+export function besideClosed<T>(open: readonly T[], key: string, keyOf: (item: T) => string): T | null {
+  const at = open.findIndex((own) => keyOf(own) === key)
+  if (at < 0) return null
+  return open[at + 1] ?? open[at - 1] ?? null
+}
+
+function readTarget(raw: unknown): SessionTarget {
+  const from = (raw ?? {}) as Record<string, unknown>
+  if (from.kind === 'note' && typeof from.noteId === 'string') {
+    return { kind: 'note', noteId: from.noteId }
+  }
+  if (from.kind === 'summary' && typeof from.documentId === 'string') {
+    return { kind: 'summary', documentId: from.documentId }
+  }
+  if (from.kind === 'skill') return { kind: 'skill' }
+  return { kind: 'empty' }
 }
 
 /** A saved view read back, trusting none of it: it came through storage. */
 export function readView(saved: unknown): SessionView {
   if (!saved || typeof saved !== 'object') return EMPTY_VIEW
   const raw = saved as Record<string, unknown>
-  const from = (raw.target ?? {}) as Record<string, unknown>
-  let target: SessionTarget = { kind: 'empty' }
-  if (from.kind === 'note' && typeof from.noteId === 'string') {
-    target = { kind: 'note', noteId: from.noteId }
-  } else if (from.kind === 'summary' && typeof from.documentId === 'string') {
-    target = { kind: 'summary', documentId: from.documentId }
-  } else if (from.kind === 'skill') {
-    target = { kind: 'skill' }
-  }
+  const target = readTarget(raw.target)
+  // A view kept before there was a list of what is open has what was on show.
+  const texts = Array.isArray(raw.texts)
+    ? raw.texts.map(readTarget).filter((text) => text.kind !== 'empty')
+    : []
+  const papers = Array.isArray(raw.papers)
+    ? raw.papers.filter((id): id is string => typeof id === 'string')
+    : []
   return {
     target,
     documentId: typeof raw.documentId === 'string' ? raw.documentId : null,
@@ -53,6 +113,8 @@ export function readView(saved: unknown): SessionView {
       ? raw.attached.filter((id): id is string => typeof id === 'string')
       : [],
     library: raw.library === true,
+    texts: texts.slice(-MAX_OPEN),
+    papers: papers.slice(-MAX_OPEN),
   }
 }
 
