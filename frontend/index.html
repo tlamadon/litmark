@@ -5,6 +5,9 @@
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <meta name="litmark-token" content="">
     <link rel="icon" type="image/svg+xml" href="/src/favicon.svg" />
+    <!-- A phone's home screen takes no SVG: the server keeps a PNG for it, at
+         an address that asks for no password (see TOUCH_ICON in login.py). -->
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" vite-ignore />
     <title>Litmark</title>
     <script type="module" src="/src/main.tsx"></script>
   </head>

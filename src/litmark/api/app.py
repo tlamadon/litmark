@@ -22,7 +22,13 @@ from importlib import resources
 from pathlib import Path
 
 from fastapi import FastAPI, Request
-from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse
+from fastapi.responses import (
+    HTMLResponse,
+    JSONResponse,
+    PlainTextResponse,
+    RedirectResponse,
+    Response,
+)
 from fastapi.staticfiles import StaticFiles
 
 from .. import __version__
@@ -180,8 +186,10 @@ def create_app(
         # An upload address is its own credential, checked where it is used.
         # The sign-in page is where the password is given, so it is not asked
         # for the password itself.
-        signing_in = path in (login.LOGIN_PATH, login.LOGOUT_PATH)
-        if password and not outside and not signing_in and not _signed_in(request, password):
+        # Nor is the home-screen icon, which a phone fetches without the cookie
+        # and which says nothing a visitor to the sign-in page is not shown.
+        unasked = path in (login.LOGIN_PATH, login.LOGOUT_PATH, *login.TOUCH_ICON_PATHS)
+        if password and not outside and not unasked and not _signed_in(request, password):
             if _is_navigation(request, path):
                 # Someone opening the application: to the form, and back after.
                 return RedirectResponse(
@@ -251,6 +259,16 @@ def create_app(
 
     if password:
         _add_sign_in(app, password)
+
+    icon = login.touch_icon()
+
+    async def touch_icon() -> Response:
+        return Response(
+            icon, media_type="image/png", headers={"cache-control": "public, max-age=86400"}
+        )
+
+    for icon_path in login.TOUCH_ICON_PATHS:
+        app.add_api_route(icon_path, touch_icon, methods=["GET"], include_in_schema=False)
 
     assets = static_root()
     if assets is not None:

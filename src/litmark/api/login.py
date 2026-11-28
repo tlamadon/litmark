@@ -22,6 +22,7 @@ import html
 import threading
 import time
 from collections import deque
+from importlib import resources
 from urllib.parse import quote
 
 COOKIE = "litmark_session"
@@ -38,6 +39,21 @@ FAVICON_SVG = (
     '<rect x="5" y="17" width="22" height="10.5" rx="2.5" fill="#f2b84f"/>'
     '<path d="M8.5 6h10v2.6h-3V21.8h5.4v-4h3.1V25H8.5v-2.6h3V8.6h-3z" fill="#23201c"/></svg>'
 )
+
+# The icon a phone puts on its home screen. A phone takes no SVG for that, and
+# asks for the picture on its own, without the cookie of whoever is signed in
+# — so it is a PNG, at an address that asks for no password. It is drawn from
+# `frontend/src/apple-touch-icon.svg`; after a change there, draw it again:
+#   chromium --headless --hide-scrollbars --window-size=180,180 \
+#     --screenshot=src/litmark/api/apple-touch-icon.png frontend/src/apple-touch-icon.svg
+TOUCH_ICON_PATH = "/apple-touch-icon.png"
+# Asked for unprompted by older phones, whatever the page names.
+TOUCH_ICON_PATHS = (TOUCH_ICON_PATH, "/apple-touch-icon-precomposed.png")
+
+
+def touch_icon() -> bytes:
+    return (resources.files("litmark.api") / "apple-touch-icon.png").read_bytes()
+
 
 # A password is one person's, typed or filled: a handful of wrong ones in a
 # few minutes is somebody guessing.
@@ -139,6 +155,7 @@ def login_page(*, next_path: str = "/", problem: str | None = None) -> str:
 <meta name="color-scheme" content="light dark">
 <meta name="robots" content="noindex">
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,{quote(FAVICON_SVG)}">
+<link rel="apple-touch-icon" href="{TOUCH_ICON_PATH}">
 <title>Sign in — Litmark</title>
 <style>
   :root {{

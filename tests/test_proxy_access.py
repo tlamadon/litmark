@@ -278,3 +278,20 @@ def test_the_sign_in_page_carries_the_same_icon_as_the_application() -> None:
     source = Path(__file__).resolve().parents[1] / "frontend" / "src" / "favicon.svg"
     assert login.FAVICON_SVG == source.read_text("utf-8").strip()
     assert f'href="data:image/svg+xml,{quote(login.FAVICON_SVG)}"' in login.login_page()
+
+
+def test_a_phone_is_given_an_icon_for_its_home_screen(guarded) -> None:
+    """A PNG, since a phone takes no SVG, and without the password it never sends."""
+    from litmark.api import login
+
+    for path in login.TOUCH_ICON_PATHS:
+        response = guarded.get(path)
+        assert response.status_code == 200
+        assert response.headers["content-type"] == "image/png"
+        # 180 pixels square, and opaque: a phone paints transparency black.
+        assert response.content[:8] == b"\x89PNG\r\n\x1a\n"
+        assert response.content[16:24] == (180).to_bytes(4, "big") * 2
+        assert response.content[25] == 2
+    assert f'<link rel="apple-touch-icon" href="{login.TOUCH_ICON_PATH}">' in login.login_page()
+    page = Path(__file__).resolve().parents[1] / "frontend" / "index.html"
+    assert f'rel="apple-touch-icon" href="{login.TOUCH_ICON_PATH}"' in page.read_text("utf-8")

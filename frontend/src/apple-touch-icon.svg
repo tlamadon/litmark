@@ -1,0 +1,6 @@
+<!-- The icon a phone puts on its home screen, drawn from favicon.svg. The phone
+     rounds the corners itself and paints anything transparent black, so the
+     paper runs to the edges and has no outline of its own. What is served is
+     the picture of this at src/litmark/api/apple-touch-icon.png: see TOUCH_ICON
+     in src/litmark/api/login.py for how to draw it again after a change here. -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" width="180" height="180"><rect width="32" height="32" fill="#fbfaf8"/><rect x="5" y="17" width="22" height="10.5" rx="2.5" fill="#f2b84f"/><path d="M8.5 6h10v2.6h-3V21.8h5.4v-4h3.1V25H8.5v-2.6h3V8.6h-3z" fill="#23201c"/></svg>
