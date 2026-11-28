@@ -492,7 +492,8 @@ function ChangeRow({
   )
 }
 
-function Prose({
+/** Markdown, drawn to be read: its citations and its links to papers and notes are pressed. */
+export function Prose({
   text,
   streaming = false,
   unfinished = false,

@@ -138,6 +138,11 @@ export interface PhoneTopProps {
    * is drawn of it here is only what speaks up — a later release, a page to reload.
    */
   version: ComponentChildren
+  /**
+   * Focus — a link opens over what is being read, not in its place — and the
+   * way to turn it on and off. An experiment: see `peeks.ts`.
+   */
+  focus: { on: boolean; toggle: () => void }
 }
 
 /**
@@ -155,7 +160,44 @@ export function PhoneTop(props: PhoneTopProps) {
         </span>
       )}
       {props.version}
+      <FocusButton {...props.focus} />
     </header>
+  )
+}
+
+/**
+ * The way into focus and out of it. Drawn as a frame around a single thing:
+ * one document, and nothing beside it.
+ */
+export function FocusButton(props: { on: boolean; toggle: () => void; label?: boolean }) {
+  const title = props.on
+    ? 'Focus is on: one thing at a time, and a link opens over it. Press to turn it off.'
+    : 'Focus: one thing at a time, and a link opens over it rather than in its place.'
+  return (
+    <button
+      type="button"
+      class={['ghost', 'focus-toggle', props.label ? '' : 'icon', props.on ? 'active' : '']
+        .filter(Boolean)
+        .join(' ')}
+      data-action="focus"
+      aria-pressed={props.on}
+      aria-label="Focus"
+      title={title}
+      onClick={props.toggle}
+    >
+      <svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true">
+        <path
+          d="M2.2 5.4V2.2h3.2M10.6 2.2h3.2v3.2M13.8 10.6v3.2h-3.2M5.4 13.8H2.2v-3.2"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="1.4"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+        />
+        <rect x="5.6" y="5.2" width="4.8" height="5.6" rx="0.8" fill="currentColor" opacity={props.on ? 1 : 0.45} />
+      </svg>
+      {props.label && <span>Focus</span>}
+    </button>
   )
 }
 

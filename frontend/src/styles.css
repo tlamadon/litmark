@@ -4596,3 +4596,254 @@ button.import.filters.on {
   border-color: var(--accent);
   color: var(--accent);
 }
+
+/* ------------------------------------------------------------------ focus */
+
+/* Focus, an experiment: one thing at a time, and what a link leads to opened
+   over it — a peek — rather than in its place. See `peeks.ts`. */
+
+.focus-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  flex: none;
+  color: var(--muted-strong);
+}
+
+.focus-toggle.active {
+  color: var(--accent);
+}
+
+/* In the phone's top bar: a circle set apart from the session's capsule. */
+.shell.phone .topbar .focus-toggle {
+  justify-content: center;
+  width: 2.5rem;
+  height: 2.5rem;
+  padding: 0;
+  border: 1px solid color-mix(in srgb, var(--ink) 11%, transparent);
+  border-radius: 50%;
+  background: var(--panel);
+}
+
+.shell.phone .topbar .focus-toggle.active {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+/* A peek takes half of the window, so that what is being read stays in sight
+   in the other half, and a press there puts the peek away: at the side of a
+   window wider than it is tall, at the foot of one taller than it is wide.
+   Over everything but what is asked of a passage in it. */
+.shell {
+  --peek-width: clamp(min(100%, 24rem), 50%, 54rem);
+}
+
+/* At the side, what is being read keeps the other half to itself for as long
+   as the peek is up, rather than half of it going under: a line of the text
+   is still a whole line, and the page is drawn to the width it has. At the
+   foot nothing moves: what is above the peek is as it was. */
+@media (orientation: landscape) and (min-width: 760.02px) {
+  .shell.focus.peeking .body > .pane.on {
+    right: var(--peek-width);
+  }
+}
+
+.peek-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 42;
+  display: flex;
+  justify-content: flex-end;
+  /* Dimmed only as much as says which of the two is on top: it is still read. */
+  background: rgba(20, 16, 10, 0.12);
+}
+
+.peek {
+  /* Nothing in it has the bar along the bottom to keep clear of. */
+  --bar-room: 0px;
+  display: flex;
+  flex-direction: column;
+  width: var(--peek-width);
+  padding: env(safe-area-inset-top, 0px) env(safe-area-inset-right, 0px)
+    env(safe-area-inset-bottom, 0px) 0;
+  overflow: hidden;
+  border-left: 1px solid var(--rule);
+  border-radius: 14px 0 0 14px;
+  background: var(--panel);
+  box-shadow: -14px 0 50px rgba(20, 16, 10, 0.26);
+  animation: peek-side 0.16s ease-out;
+}
+
+@keyframes peek-side {
+  from {
+    transform: translateX(8%);
+    opacity: 0.4;
+  }
+}
+
+@keyframes peek-foot {
+  from {
+    transform: translateY(10%);
+    opacity: 0.4;
+  }
+}
+
+@media (orientation: portrait), (max-width: 760px) {
+  .peek-backdrop {
+    flex-direction: column;
+  }
+
+  /* A text is as tall as it is, up to the half; a page and the conversation
+     take the half whatever is in them. */
+  .peek {
+    width: 100%;
+    max-height: 58%;
+    padding: 0 env(safe-area-inset-right, 0px) env(safe-area-inset-bottom, 0px)
+      env(safe-area-inset-left, 0px);
+    border-left: 0;
+    border-top: 1px solid var(--rule);
+    border-radius: 14px 14px 0 0;
+    box-shadow: 0 -14px 50px rgba(20, 16, 10, 0.26);
+    animation-name: peek-foot;
+  }
+
+  .peek-paper,
+  .peek-chat {
+    height: 58%;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .peek {
+    animation: none;
+  }
+}
+
+.peek-head {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  min-height: 2.9rem;
+  padding: 0.3rem 0.45rem 0.3rem 0.9rem;
+  border-bottom: 1px solid var(--rule);
+}
+
+.peek-head .ghost.icon {
+  min-width: 2.1rem;
+  min-height: 2.1rem;
+  font-size: 1rem;
+}
+
+.peek-head [data-action='peek-back'] {
+  margin-left: -0.5rem;
+}
+
+.peek-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
+}
+
+.peek-open {
+  flex: none;
+  min-height: 2.1rem;
+  padding: 0 0.8rem;
+  border: 1px solid var(--rule);
+  border-radius: 999px;
+  background: none;
+  color: var(--accent);
+  font-size: 0.9rem;
+  font-weight: 550;
+}
+
+.peek-open:hover {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.peek-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+/* A note or a summary, read: the face and the measure of the text itself. */
+.peek-prose {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+  padding: 1.1rem 1.4rem 1.8rem;
+  font-family: var(--serif);
+  font-size: 1.05rem;
+  line-height: 1.6;
+}
+
+/* Its headings are those of a text, not of a line in a conversation. */
+.peek-prose .prose h1 {
+  font-size: 1.45rem;
+}
+
+.peek-prose .prose h2 {
+  font-size: 1.25rem;
+}
+
+.peek-prose .prose h3,
+.peek-prose .prose h4 {
+  font-size: 1.08rem;
+}
+
+.peek-prose .prose h1,
+.peek-prose .prose h2,
+.peek-prose .prose h3,
+.peek-prose .prose h4 {
+  margin: 1.2rem 0 0.25rem;
+  line-height: 1.3;
+}
+
+.peek-prose .peek-cited {
+  border-radius: 3px;
+  background: var(--mark-active);
+  box-shadow: 0 0 0 2px var(--mark-active);
+}
+
+/* The dialog names the paper, and the pen stays with the paper's own pane:
+   two hands on the same ink would not know of each other. */
+.peek .pdf-title,
+.peek .ink-toggle {
+  display: none;
+}
+
+/* The dialog's own line says which conversation this is. */
+.peek .chat .pane-head {
+  display: none;
+}
+
+/* In a wide window a page that took the whole width would be too large to
+   read: the paper keeps to a measure, in the middle, as the text does. A
+   tablet held upright, which has this layout without being in focus, is
+   narrower than the measure and is left as it was. */
+.shell.focus .body > .source.pane > .pdf {
+  align-self: center;
+  width: 100%;
+  max-width: 64rem;
+}
+
+/* The conversation runs the width of the dialog, which is a measure already. */
+.shell.phone .peek .chat-log,
+.shell.phone .peek .composer {
+  padding-left: 0.9rem;
+  padding-right: 0.9rem;
+}
+
+@media (max-width: 640px) {
+  .peek-prose {
+    padding: 0.9rem 1rem 1.6rem;
+  }
+}

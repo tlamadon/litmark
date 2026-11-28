@@ -98,6 +98,12 @@ export interface PdfViewerProps {
   gotoPage: number | null
   /** Changing this re-scrolls, even to the page already shown. */
   gotoNonce?: number
+  /**
+   * How far down that page to go, from 0 at its top to 1 at its foot: where a
+   * passage is. It is brought to the middle of the view rather than the page
+   * to its top — for a view too short to show the whole of a page.
+   */
+  gotoAt?: number | null
   onSelection: (selection: PdfSelection | null) => void
   onActivateMark?: (referenceId: string) => void
   onClose?: () => void
@@ -466,17 +472,27 @@ export function PdfViewer(props: PdfViewerProps) {
 
   // ------------------------------------------------------------- scrolling
 
-  const scrollToPage = useCallback((page: number) => {
-    pageNodes.current.get(page)?.scrollIntoView({ block: 'start', behavior: 'auto' })
+  const scrollToPage = useCallback((page: number, at: number | null = null) => {
+    const node = pageNodes.current.get(page)
+    const root = scroller.current
+    if (!node) return
+    if (at === null || !root) {
+      node.scrollIntoView({ block: 'start', behavior: 'auto' })
+      return
+    }
+    const box = node.getBoundingClientRect()
+    const view = root.getBoundingClientRect()
+    root.scrollTop += box.top + at * box.height - (view.top + view.height / 2)
   }, [])
 
   useEffect(() => {
     const target = props.gotoPage
     if (!target || sizes.length === 0) return
     // A frame's grace so the placeholder exists at its final height.
-    const timer = window.setTimeout(() => scrollToPage(target), 60)
+    const at = props.gotoAt ?? null
+    const timer = window.setTimeout(() => scrollToPage(target, at), 60)
     return () => window.clearTimeout(timer)
-  }, [props.gotoPage, props.gotoNonce, sizes.length, scrollToPage])
+  }, [props.gotoPage, props.gotoNonce, props.gotoAt, sizes.length, scrollToPage])
 
   const go = (next: number): void => {
     const clamped = Math.min(Math.max(1, next), total)

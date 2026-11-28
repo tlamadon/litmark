@@ -42,10 +42,13 @@ import { Library } from './Library'
 import { renderMathText } from './markdown'
 import { headingsOf } from './outline'
 import { ContentsList, InfoButton, PaneHead, PaneTitle } from './PaneHead'
+import { PeekDialog, PeekText } from './Peek'
+import { peeked, rememberFocus, steppedBack, storedFocus, type Peek } from './peeks'
 import { nameOf, papersOf } from './papers'
 import {
   AboutSheet,
   EmptyPane,
+  FocusButton,
   OpenList,
   PhoneBar,
   PhoneTop,
@@ -201,6 +204,27 @@ function storedSourceShare(): number {
   return SOURCE_DEFAULT_SHARE
 }
 
+/** This window's own storage, where it is let have any. */
+function localStore(): Storage | null {
+  try {
+    return window.localStorage
+  } catch {
+    return null
+  }
+}
+
+/** How far down its page a passage is, from 0 to 1: the middle of what marks it. */
+function middleOf(reference: ReferenceRecord | null): number | null {
+  const rects = (reference?.rects ?? []).filter((rect) => rect.length >= 4)
+  if (rects.length === 0) return null
+  const top = Math.min(...rects.map((rect) => rect[1]!))
+  const bottom = Math.max(...rects.map((rect) => rect[3]!))
+  return Math.min(1, Math.max(0, (top + bottom) / 2))
+}
+
+/** A paper peeked at without a passage to show in it has no marks. */
+const NO_MARKS: PdfMark[] = []
+
 /** Which conversation was open, so a reload comes back to it. */
 function rememberedConversation(root: string): string | null {
   try {
@@ -274,7 +298,33 @@ export function App() {
 
   // A phone shows one pane at a time. Which one is this window's own business:
   // the same session is open on a wide window too, where there are no tabs.
-  const { phone, narrow } = useWidths(NARROW_QUERY)
+  const widths = useWidths(NARROW_QUERY)
+  // Focus, an experiment (see `peeks.ts`): one pane at a time whatever the
+  // width of the window, and a link opened over what is being read — a peek —
+  // rather than in its place. This window's own business, like its widths.
+  const [focus, setFocus] = useState(() => storedFocus(localStore()))
+  const focusRef = useRef(focus)
+  focusRef.current = focus
+  const toggleFocus = useCallback((): void => {
+    const next = !focusRef.current
+    rememberFocus(localStore(), next)
+    setFocus(next)
+  }, [])
+  // The peeks, in the order they were come to: the last is the one on show.
+  const [peeks, setPeeks] = useState<readonly Peek[]>([])
+  // Bumped with each peek, so a paper already peeked at goes to the new page.
+  const [peekTick, setPeekTick] = useState(0)
+  // The page the paper peeked at has been read to: where "Open" takes it up.
+  const peekPage = useRef<number | null>(null)
+  const peekAt = useCallback((next: Peek): void => {
+    if (next.kind === 'paper') peekPage.current = next.page
+    setPeeks((stack) => peeked(stack, next))
+    setPeekTick((tick) => tick + 1)
+  }, [])
+  // In focus a wide window is laid out as a phone is: one pane, and the bar
+  // along the bottom to go between them.
+  const phone = widths.phone || focus
+  const narrow = widths.narrow
   // The tab the reader chose; null until one is, when whichever pane has
   // something in it is shown (see `shownPane`).
   const [phoneTab, setPhoneTab] = useState<PhoneTab | null>(null)
@@ -807,9 +857,11 @@ export function App() {
     }
     // The answer is read in the chat: brought out if it was put away.
     setShowChat(true)
-    if (AFTER_ASK === 'chat') setPhoneTab('chat')
+    // In focus the answer is read over the passage, which stays where it is.
+    if (focusRef.current) peekAt({ kind: 'chat' })
+    else if (AFTER_ASK === 'chat') setPhoneTab('chat')
     return true
-  }, [])
+  }, [peekAt])
 
   const reloadReferences = useCallback(async (): Promise<void> => {
     if (!openDocument) {
@@ -964,10 +1016,30 @@ export function App() {
     [target, refreshState, placeBuffer],
   )
 
+  /**
+   * Open the passage a citation names. In focus it is peeked at, over what is
+   * being read; `go` is for going there all the same — from the peek itself.
+   */
   const openSource = useCallback(
-    async (referenceId: string): Promise<void> => {
+    async (referenceId: string, go = false): Promise<void> => {
       try {
         const reference = await api.getReference(referenceId)
+        if (focusRef.current && !go) {
+          if (reference.missing_source) {
+            setInsertNotice(
+              reference.message ??
+                'The cited document is no longer in this project. The reference was kept.',
+            )
+            return
+          }
+          peekAt({
+            kind: 'paper',
+            documentId: reference.document_id,
+            page: reference.page_number,
+            reference,
+          })
+          return
+        }
         leavePage()
         setHighlight(reference)
         setGotoPage(reference.page_number)
@@ -998,7 +1070,33 @@ export function App() {
         )
       }
     },
-    [state?.documents, toPaper, leavePage],
+    [state?.documents, toPaper, leavePage, peekAt],
+  )
+
+  /**
+   * Open a note, a summary or the skill. In focus it is peeked at; `go` is
+   * for going there all the same — from the library, from the peek itself.
+   * `referenceId` is a citation to show in it.
+   */
+  const openText = useCallback(
+    (next: MainTarget, go = false, referenceId: string | null = null): void => {
+      if (next.kind === 'empty') return
+      if (focusRef.current && !go) {
+        peekAt({ kind: 'text', target: next, referenceId })
+        return
+      }
+      if (referenceId && keyOf(next) === docKeyRef.current) {
+        // Already the text that is open: only the place in it changes.
+        revealRef.current?.(referenceId)
+        setLibrary(false)
+        toText()
+        return
+      }
+      if (referenceId) pendingReveal.current = referenceId
+      setTarget({ ...next })
+      toText()
+    },
+    [peekAt, toText],
   )
 
   const insertReference = useCallback(
@@ -1016,10 +1114,14 @@ export function App() {
           ? `\n\n> ${reference.quote ?? pdfSelection.quote}\n>\n> ${reference.markdown_link}\n`
           : ` ${reference.markdown_link}`
         insertRef.current?.(snippet)
-        // On a phone the text is another tab: to it, where the reference went in.
-        setPhoneTab('text')
+        // On a phone the text is another tab: to it, where the reference went
+        // in. In focus the paper stays, and it is said instead.
+        if (!focusRef.current) setPhoneTab('text')
         setHighlight(reference)
-        setInsertNotice(reference.message ?? null)
+        setInsertNotice(
+          reference.message ??
+            (focusRef.current ? 'The reference was put into the text that is open.' : null),
+        )
         setPdfSelection(null)
       } catch (error) {
         // An ambiguous or absent passage is reported, never guessed at.
@@ -1213,6 +1315,19 @@ export function App() {
       const keyOfPlace = (place: (typeof places)[number]): string =>
         place.kind === 'note' ? `note:${place.id}` : `summary:${place.id}`
 
+      if (focusRef.current) {
+        // Where it is cited is peeked at — in the text that is open, if there.
+        const place = places.find((own) => keyOfPlace(own) === docKeyRef.current) ?? places[0]!
+        openText(
+          place.kind === 'note'
+            ? { kind: 'note', noteId: place.id }
+            : { kind: 'summary', documentId: place.id },
+          false,
+          reference.reference_id,
+        )
+        return
+      }
+
       const here = places.findIndex((place) => keyOfPlace(place) === docKeyRef.current)
       let next = places[0]!
       if (here >= 0) {
@@ -1233,15 +1348,22 @@ export function App() {
       )
       toText()
     },
-    [toText],
+    [toText, openText],
   )
 
-  /** Show a paper at a page, as a step in the chat names it. Attaches nothing. */
+  /**
+   * Show a paper at a page, as a step in the chat names it. Attaches nothing.
+   * In focus it is peeked at, unless it is to be gone to all the same.
+   */
   const showDocument = useCallback(
-    (documentId: string, page: number): void => {
+    (documentId: string, page: number, go = false): void => {
       const document = state?.documents.find((item) => item.document_id === documentId)
       if (!document) {
         setInsertNotice('That paper is no longer in this project.')
+        return
+      }
+      if (focusRef.current && !go) {
+        peekAt({ kind: 'paper', documentId, page, reference: null })
         return
       }
       leavePage()
@@ -1252,7 +1374,7 @@ export function App() {
       setShowSourcePanel(true)
       toPaper()
     },
-    [state?.documents, toPaper, leavePage],
+    [state?.documents, toPaper, leavePage, peekAt],
   )
 
   /** Open whatever a line of the conversation refers to. */
@@ -1260,18 +1382,11 @@ export function App() {
     (target: OpenTarget): void => {
       if (target.kind === 'document') showDocument(target.documentId, target.page)
       else if (target.kind === 'reference') void openSource(target.referenceId)
-      else if (target.kind === 'note') {
-        setTarget({ kind: 'note', noteId: target.noteId })
-        toText()
-      } else if (target.kind === 'skill') {
-        setTarget({ kind: 'skill' })
-        toText()
-      } else {
-        setTarget({ kind: 'summary', documentId: target.documentId })
-        toText()
-      }
+      else if (target.kind === 'note') openText({ kind: 'note', noteId: target.noteId })
+      else if (target.kind === 'skill') openText({ kind: 'skill' })
+      else openText({ kind: 'summary', documentId: target.documentId })
     },
-    [showDocument, openSource, toText],
+    [showDocument, openSource, openText],
   )
 
   const jumpToHit = useCallback(
@@ -1529,7 +1644,11 @@ export function App() {
   const pane = phone
     ? shownPane(phoneTab, { text: target.kind !== 'empty', paper: openDocument !== null }, library)
     : null
-  const looking = (phone ? pane === 'chat' : showChat) ? conversationId : null
+  // What is peeked at, if anything is: the last of the peeks come to.
+  const peek = focus ? (peeks[peeks.length - 1] ?? null) : null
+  const looking = (phone ? pane === 'chat' || peek?.kind === 'chat' : showChat)
+    ? conversationId
+    : null
   lookingAt.current = looking
   useEffect(() => {
     setWaiting((current) => afterLooking(current, looking))
@@ -1558,6 +1677,25 @@ export function App() {
   useEffect(() => {
     if (phone) window.getSelection()?.removeAllRanges()
   }, [phone, pane])
+  // A peek is over what was being read when it was asked for: another
+  // session, or the end of focus, leaves nothing for it to be over.
+  useEffect(() => {
+    setPeeks([])
+  }, [conversationId, focus])
+  // The passage a peek was come to by, marked in the paper peeked at.
+  const peekMarks = useMemo<PdfMark[]>(() => {
+    const reference = peek?.kind === 'paper' ? peek.reference : null
+    if (!reference || (reference.rects?.length ?? 0) === 0) return NO_MARKS
+    return [
+      {
+        referenceId: reference.reference_id,
+        pageNumber: reference.page_number,
+        rects: reference.rects ?? [],
+        tone: 'active',
+        label: reference.quote ? `“${reference.quote.slice(0, 90)}”` : reference.reference_id,
+      },
+    ]
+  }, [peek])
   // The sheet is the phone's; a window grown wide has the panel at its side.
   useEffect(() => {
     if (!phone) setAboutFor(null)
@@ -1611,6 +1749,9 @@ export function App() {
         nameOf(state.documents.find((d) => d.document_id === documentId)) ?? null,
     })
   }
+
+  const paperOf = (documentId: string): DocumentRecord | undefined =>
+    state.documents.find((document) => document.document_id === documentId)
 
   const titleOf = (shown: MainTarget): string =>
     shown.kind === 'note'
@@ -1737,6 +1878,57 @@ export function App() {
     </button>
   )
 
+  // The conversation: in its pane, and — in focus — peeked at over another.
+  // Drawn afresh for each place: the two are separate views of the same one.
+  const chatView = () => (
+    <Chat
+      bare={phone}
+      conversations={conversations}
+      currentId={conversationId}
+      unread={unread}
+      stream={stream}
+      agent={state.agent}
+      documents={state.documents}
+      notes={state.notes}
+      changes={changes}
+      context={context}
+      onContextChange={setContext}
+      onSelect={selectConversation}
+      onNew={() => void newConversation()}
+      onRename={renameConversation}
+      onDelete={deleteConversation}
+      onOpen={openTarget}
+      onOpenSource={(id) => void openSource(id)}
+      onUndo={(changeId) => void undo({ change_id: changeId })}
+      onCollapse={() => setShowChat(false)}
+      downloads={state.settings?.downloads ?? 'ask'}
+      onDownloads={(mode) => {
+        // The server announces the change, and the state is read again.
+        void api.setDownloads(mode).catch((error: unknown) => {
+          setInsertNotice(error instanceof Error ? error.message : String(error))
+        })
+      }}
+    />
+  )
+
+  /** Go to what is peeked at: it takes the place of what was being read. */
+  const openPeek = (shown: Peek): void => {
+    setPeeks([])
+    setAboutFor(null)
+    if (shown.kind === 'chat') {
+      setLibrary(false)
+      setPhoneTab('chat')
+    } else if (shown.kind === 'text') {
+      openText(shown.target, true, shown.referenceId)
+    } else if (shown.reference && (peekPage.current ?? shown.page) === shown.page) {
+      void openSource(shown.reference.reference_id, true)
+    } else {
+      // Read on from the passage: taken up at the page it was read to.
+      showDocument(shown.documentId, peekPage.current ?? shown.page, true)
+    }
+  }
+  const peekPaper = peek?.kind === 'paper' ? paperOf(peek.documentId) : undefined
+
   const sidebar = (
     <Sidebar
       onCollapse={() => (phone ? setAboutFor(null) : setShowSidebar(false))}
@@ -1764,20 +1956,20 @@ export function App() {
         toPaper()
       })}
       related={related && related.key === subjectKey ? related.value : null}
-      onOpenNote={fromSheet((noteId) => {
-        setTarget({ kind: 'note', noteId })
-        toText()
+      // What a text or a paper is tied to is, in focus, peeked at like any
+      // other link out of it.
+      onOpenNote={fromSheet((noteId) => openText({ kind: 'note', noteId }))}
+      onOpenPaper={fromSheet((documentId) => {
+        if (!focus) openPaper(documentId)
+        else if (tabForPaper(paperOf(documentId)?.summary.status) === 'text') {
+          openText({ kind: 'summary', documentId })
+        } else showDocument(documentId, 1)
       })}
-      onOpenPaper={fromSheet(openPaper)}
-      onOpenSummary={fromSheet((documentId) => {
-        setTarget({ kind: 'summary', documentId })
-        toText()
-      })}
-      onOpenDocument={fromSheet(openDocumentById)}
-      onOpenSkill={fromSheet(() => {
-        setTarget({ kind: 'skill' })
-        toText()
-      })}
+      onOpenSummary={fromSheet((documentId) => openText({ kind: 'summary', documentId }))}
+      onOpenDocument={fromSheet((documentId) =>
+        focus ? showDocument(documentId, 1) : openDocumentById(documentId),
+      )}
+      onOpenSkill={fromSheet(() => openText({ kind: 'skill' }))}
       onDeleteNote={
         phone
           ? async (noteId) => {
@@ -1806,6 +1998,8 @@ export function App() {
       class={[
         'shell',
         phone ? 'phone' : '',
+        focus ? 'focus' : '',
+        peek ? 'peeking' : '',
         phone && typing ? 'typing' : '',
         !phone && !showChat ? 'chat-collapsed' : '',
         !phone && !showSourceRegion ? 'source-hidden' : '',
@@ -1859,6 +2053,7 @@ export function App() {
           // Kept there for as long as the page is: it is what notices that the
           // server has been updated beneath it.
           version={<Version connected={connected} />}
+          focus={{ on: focus, toggle: toggleFocus }}
         />
       ) : (
       <header class="topbar">
@@ -1888,6 +2083,7 @@ export function App() {
           onRename={renameConversation}
         />
         <span class="spacer" />
+        <FocusButton on={focus} toggle={toggleFocus} label />
         {!connected && <span class="badge warn">Reconnecting…</span>}
         {syncStatus}
         {agentBadge}
@@ -1947,15 +2143,10 @@ export function App() {
             onToggleTag={toggleTag}
             onClearTags={() => setSelectedTags([])}
             onOpenPaper={openPaper}
-            onOpenNote={(noteId) => {
-              setTarget({ kind: 'note', noteId })
-              toText()
-            }}
+            // The library is where what is read is chosen: gone to, not peeked at.
+            onOpenNote={(noteId) => openText({ kind: 'note', noteId }, true)}
             onNewNote={() => void createNote()}
-            onOpenSkill={() => {
-              setTarget({ kind: 'skill' })
-              toText()
-            }}
+            onOpenSkill={() => openText({ kind: 'skill' }, true)}
             onDeleteNote={deleteNote}
             onImport={(files, tags) => void importFiles(files, tags)}
             onTagDocuments={(ids, add) => void changeTags(() => api.tagDocuments(ids, add))}
@@ -1998,10 +2189,7 @@ export function App() {
                 papers={papers}
                 onOpenPaper={(id) => showDocument(id, 1)}
                 notes={state.notes}
-                onOpenNote={(noteId) => {
-                  setTarget({ kind: 'note', noteId })
-                  toText()
-                }}
+                onOpenNote={(noteId) => openText({ kind: 'note', noteId })}
                 // On a phone the way back is there only when there is somewhere to go back to.
                 back={
                   textBefore
@@ -2232,34 +2420,7 @@ export function App() {
               }}
             />
             )}
-            <Chat
-              bare={phone}
-              conversations={conversations}
-              currentId={conversationId}
-              unread={unread}
-              stream={stream}
-              agent={state.agent}
-              documents={state.documents}
-              notes={state.notes}
-              changes={changes}
-              context={context}
-              onContextChange={setContext}
-              onSelect={selectConversation}
-              onNew={() => void newConversation()}
-              onRename={renameConversation}
-              onDelete={deleteConversation}
-              onOpen={openTarget}
-              onOpenSource={(id) => void openSource(id)}
-              onUndo={(changeId) => void undo({ change_id: changeId })}
-              onCollapse={() => setShowChat(false)}
-              downloads={state.settings?.downloads ?? 'ask'}
-              onDownloads={(mode) => {
-                // The server announces the change, and the state is read again.
-                void api.setDownloads(mode).catch((error: unknown) => {
-                  setInsertNotice(error instanceof Error ? error.message : String(error))
-                })
-              }}
-            />
+            {chatView()}
           </aside>
         ) : (
           <button
@@ -2274,6 +2435,56 @@ export function App() {
           </button>
         )}
       </div>
+
+      {peek && (
+        <PeekDialog
+          kind={peek.kind}
+          title={
+            peek.kind === 'chat'
+              ? (sessionTitle ?? 'Chat')
+              : peek.kind === 'text'
+                ? titleOf(peek.target)
+                : `${nameOf(peekPaper) ?? peekPaper?.display_title ?? 'A paper'} — p. ${peek.page}`
+          }
+          openLabel={peek.kind === 'chat' ? 'Open the chat' : 'Open'}
+          onBack={peeks.length > 1 ? () => setPeeks(steppedBack) : undefined}
+          onOpen={() => openPeek(peek)}
+          onClose={() => setPeeks([])}
+        >
+          {peek.kind === 'chat' ? (
+            chatView()
+          ) : peek.kind === 'text' ? (
+            <PeekText
+              target={peek.target}
+              referenceId={peek.referenceId}
+              fileTick={fileTick}
+              onOpenSource={(id) => void openSource(id)}
+              onOpenPaper={(id) => showDocument(id, 1)}
+              onOpenNote={(noteId) => openText({ kind: 'note', noteId })}
+            />
+          ) : peekPaper ? (
+            <PdfViewer
+              key={peekPaper.document_id}
+              document={peekPaper}
+              marks={peekMarks}
+              gotoPage={peek.page}
+              gotoNonce={peekTick}
+              // Half a window does not show a whole page: to the passage itself.
+              gotoAt={middleOf(peek.reference)}
+              // A passage in it can be asked about, and cited, as in the pane.
+              onSelection={setPdfSelection}
+              onPage={(page) => {
+                peekPage.current = page
+              }}
+              inkNews={inkNews}
+            />
+          ) : (
+            <div class="peek-prose">
+              <p class="muted">That paper is no longer in this project.</p>
+            </div>
+          )}
+        </PeekDialog>
+      )}
 
       {phone && openList && pane === openList && (
         <OpenList
