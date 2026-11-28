@@ -37,6 +37,7 @@ export default defineConfig({
       // `litmark serve --dev-origin http://127.0.0.1:5173`
       '/api': { target: 'http://127.0.0.1:8765', changeOrigin: false },
       '/apple-touch-icon.png': { target: 'http://127.0.0.1:8765', changeOrigin: false },
+      '/manifest.webmanifest': { target: 'http://127.0.0.1:8765', changeOrigin: false },
     },
   },
 })

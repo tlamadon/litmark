@@ -55,6 +55,34 @@ def touch_icon() -> bytes:
     return (resources.files("litmark.api") / "apple-touch-icon.png").read_bytes()
 
 
+# What the application is, for a phone that keeps it on its home screen: above
+# all, how far it reaches. Each session has an address of its own (`/s/<id>`),
+# and a phone told nothing takes the application to be the one address it was
+# added from — going to another session is then leaving it, and is shown as a
+# page opened over the application, with a way to close it. Said here: all of
+# this site is the application, and it opens where it was last left, not on
+# the session the icon happened to be made from. Asked for without the cookie,
+# like the icon, and like it says nothing the sign-in page does not.
+MANIFEST_PATH = "/manifest.webmanifest"
+MANIFEST = {
+    "name": "Litmark",
+    "short_name": "Litmark",
+    "id": "/",
+    "start_url": "/",
+    "scope": "/",
+    "display": "standalone",
+    # The paper of the icon, and of the page behind it while it opens.
+    "background_color": "#fbfaf8",
+    "theme_color": "#fbfaf8",
+    "icons": [
+        {"src": TOUCH_ICON_PATH, "sizes": "180x180", "type": "image/png", "purpose": "any"}
+    ],
+}
+
+# Every address that is answered before the password is given.
+OPEN_PATHS = (LOGIN_PATH, LOGOUT_PATH, MANIFEST_PATH, *TOUCH_ICON_PATHS)
+
+
 # A password is one person's, typed or filled: a handful of wrong ones in a
 # few minutes is somebody guessing.
 MAX_FAILURES = 8
@@ -156,6 +184,7 @@ def login_page(*, next_path: str = "/", problem: str | None = None) -> str:
 <meta name="robots" content="noindex">
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,{quote(FAVICON_SVG)}">
 <link rel="apple-touch-icon" href="{TOUCH_ICON_PATH}">
+<link rel="manifest" href="{MANIFEST_PATH}">
 <title>Sign in — Litmark</title>
 <style>
   :root {{

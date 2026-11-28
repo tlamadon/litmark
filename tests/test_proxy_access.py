@@ -295,3 +295,30 @@ def test_a_phone_is_given_an_icon_for_its_home_screen(guarded) -> None:
     assert f'<link rel="apple-touch-icon" href="{login.TOUCH_ICON_PATH}">' in login.login_page()
     page = Path(__file__).resolve().parents[1] / "frontend" / "index.html"
     assert f'rel="apple-touch-icon" href="{login.TOUCH_ICON_PATH}"' in page.read_text("utf-8")
+
+
+def test_a_phone_is_told_that_every_session_is_part_of_the_application(guarded) -> None:
+    """Or going to another session is leaving it, and is shown as a page opened over it."""
+    from litmark.api import login
+
+    # Without the password, as the icon is: a phone asks for it without the cookie.
+    response = guarded.get(login.MANIFEST_PATH)
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("application/manifest+json")
+    manifest = response.json()
+    # All of the site, opened where it was last left: not the one session's
+    # address the icon happened to be made from.
+    assert manifest["scope"] == "/" and manifest["start_url"] == "/"
+    assert manifest["display"] == "standalone"
+    assert manifest["name"] == "Litmark"
+    # Its icon is the one served, at the size it says.
+    (icon,) = manifest["icons"]
+    assert icon["src"] == login.TOUCH_ICON_PATH and icon["sizes"] == "180x180"
+    assert guarded.get(icon["src"]).status_code == 200
+
+    # Both pages name it: the application's, and the one to sign in at.
+    assert f'<link rel="manifest" href="{login.MANIFEST_PATH}">' in login.login_page()
+    page = Path(__file__).resolve().parents[1] / "frontend" / "index.html"
+    assert f'rel="manifest" href="{login.MANIFEST_PATH}"' in page.read_text("utf-8")
+    # And nothing else is let past the password with it.
+    assert guarded.get("/api/state").status_code == 401

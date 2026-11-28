@@ -186,9 +186,10 @@ def create_app(
         # An upload address is its own credential, checked where it is used.
         # The sign-in page is where the password is given, so it is not asked
         # for the password itself.
-        # Nor is the home-screen icon, which a phone fetches without the cookie
-        # and which says nothing a visitor to the sign-in page is not shown.
-        unasked = path in (login.LOGIN_PATH, login.LOGOUT_PATH, *login.TOUCH_ICON_PATHS)
+        # Nor are the home-screen icon and the manifest, which a phone fetches
+        # without the cookie and which say nothing a visitor to the sign-in
+        # page is not shown.
+        unasked = path in login.OPEN_PATHS
         if password and not outside and not unasked and not _signed_in(request, password):
             if _is_navigation(request, path):
                 # Someone opening the application: to the form, and back after.
@@ -269,6 +270,14 @@ def create_app(
 
     for icon_path in login.TOUCH_ICON_PATHS:
         app.add_api_route(icon_path, touch_icon, methods=["GET"], include_in_schema=False)
+
+    @app.get(login.MANIFEST_PATH, include_in_schema=False)
+    async def manifest() -> JSONResponse:
+        return JSONResponse(
+            login.MANIFEST,
+            media_type="application/manifest+json",
+            headers={"cache-control": "public, max-age=3600"},
+        )
 
     assets = static_root()
     if assets is not None:

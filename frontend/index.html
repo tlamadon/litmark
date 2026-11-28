@@ -8,6 +8,9 @@
     <!-- A phone's home screen takes no SVG: the server keeps a PNG for it, at
          an address that asks for no password (see TOUCH_ICON in login.py). -->
     <link rel="apple-touch-icon" href="/apple-touch-icon.png" vite-ignore />
+    <!-- How far the application reaches, for a phone that keeps it on its home
+         screen: every session's address is part of it (see MANIFEST in login.py). -->
+    <link rel="manifest" href="/manifest.webmanifest" vite-ignore />
     <title>Litmark</title>
     <script type="module" src="/src/main.tsx"></script>
   </head>
